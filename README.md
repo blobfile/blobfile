@@ -1,6 +1,6 @@
 # blobfile
 
-This is a standalone clone of TensorFlow's (`gfile`)[https://www.tensorflow.org/api_docs/python/tf/io/gfile/GFile], supporting both local paths and `gs://` paths.
+This is a standalone clone of TensorFlow's [`gfile`](https://www.tensorflow.org/api_docs/python/tf/io/gfile/GFile), supporting both local paths and `gs://` paths.
 
 Writing to a remote path will not actually perform the write incrementally, so don't write to a log file this way.  By default reads and writes are streamed, set `streaming=False` to `BlobFile` to do a single copy operation per file instead.
 

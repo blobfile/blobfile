@@ -4,6 +4,7 @@ import hashlib
 import tempfile
 import os
 import contextlib
+import json
 
 import pytest
 from tensorflow.io import gfile  # pylint: disable=import-error
@@ -153,39 +154,76 @@ def test_exists():
         assert bf.exists(remote_path)
 
 
-def test_more_read_write():
+@pytest.mark.parametrize("local", [True, False])
+@pytest.mark.parametrize("binary", [True, False])
+@pytest.mark.parametrize("streaming", [True, False])
+def test_more_read_write(local, binary, streaming):
     rng = np.random.RandomState(0)
-    with tempfile.TemporaryDirectory() as local_tmpdir, _get_test_dir() as remote_tmpdir:
-        local_path = os.path.join(local_tmpdir, "file.name")
-        remote_path = remote_tmpdir + "/file.name"
-        for path in [local_path, remote_path]:
-            print("path", path)
-            contents = b"meow!"
-            _write_contents(path, contents)
 
-            with bf.BlobFile(path, "rb") as r:
-                assert r.read() == contents
+    if local:
+        dir_context_manager = tempfile.TemporaryDirectory()
+    else:
+        dir_context_manager = _get_test_dir()
 
-            with bf.BlobFile(path, "rb") as r:
-                for i in range(len(contents)):
-                    assert r.read(1) == contents[i : i + 1]
-                assert r.read() == b""
-                assert r.read() == b""
+    with dir_context_manager as tmpdir:
+        if local:
+            path = os.path.join(tmpdir, "file.name")
+        else:
+            path = tmpdir + "/file.name"
 
-            contents = b"meow!\n\nmew!\n"
-            lines = [b"meow!\n", b"\n", b"mew!\n"]
-            _write_contents(path, contents)
+        print("path", path)
 
-            with bf.BlobFile(path, "rb") as r:
-                assert r.readlines() == lines
+        if binary:
+            read_mode = "rb"
+            write_mode = "wb"
+        else:
+            read_mode = "r"
+            write_mode = "w"
 
-            with bf.BlobFile(path, "rb") as r:
-                assert [line for line in r] == lines
+        with bf.BlobFile(path, write_mode, streaming=streaming) as w:
+            pass
 
+        with bf.BlobFile(path, read_mode, streaming=streaming) as r:
+            assert len(r.read()) == 0
+
+        contents = b"meow!"
+        if not binary:
+            contents = contents.decode("utf8")
+
+        with bf.BlobFile(path, write_mode, streaming=streaming) as w:
+            w.write(contents)
+
+        with bf.BlobFile(path, read_mode, streaming=streaming) as r:
+            assert r.read() == contents
+
+        with bf.BlobFile(path, read_mode, streaming=streaming) as r:
+            for i in range(len(contents)):
+                assert r.read(1) == contents[i : i + 1]
+            assert len(r.read()) == 0
+            assert len(r.read()) == 0
+
+        contents = b"meow!\n\nmew!\n"
+        lines = [b"meow!\n", b"\n", b"mew!\n"]
+        if not binary:
+            contents = contents.decode("utf8")
+            lines = [line.decode("utf8") for line in lines]
+
+        with bf.BlobFile(path, write_mode, streaming=streaming) as w:
+            w.write(contents)
+
+        with bf.BlobFile(path, read_mode, streaming=streaming) as r:
+            assert r.readlines() == lines
+
+        with bf.BlobFile(path, read_mode, streaming=streaming) as r:
+            assert [line for line in r] == lines
+
+        if binary:
             contents = rng.randint(0, 256, size=12_345_678, dtype=np.uint8).tobytes()
-            _write_contents(path, contents)
 
-            with bf.BlobFile(path, "rb") as r:
+            with bf.BlobFile(path, write_mode, streaming=streaming) as w:
+                w.write(contents)
+
+            with bf.BlobFile(path, read_mode, streaming=streaming) as r:
                 size = rng.randint(0, 1_000_000)
                 buf = b""
                 while True:
@@ -194,6 +232,14 @@ def test_more_read_write():
                         break
                     buf += b
                 assert buf == contents
+        else:
+            obj = {"a": 1}
+
+            with bf.BlobFile(path, write_mode, streaming=streaming) as w:
+                json.dump(obj, w)
+
+            with bf.BlobFile(path, read_mode, streaming=streaming) as r:
+                assert json.load(r) == obj
 
 
 def test_video():

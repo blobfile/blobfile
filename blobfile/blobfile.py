@@ -250,7 +250,7 @@ class _GCSWriteFile:
             return
 
         self._f.close()
-        copy(self._local_path, self._remote_path)
+        copy(self._local_path, self._remote_path, overwrite=True)
         os.remove(self._local_path)
         os.rmdir(self._local_dir)
         self._closed = True
@@ -419,6 +419,8 @@ class _GCSStreamingReadFile(_GCSFile):
         if start == end:
             return True
         b = self._blob.download_as_string(start=start, end=end)
+        if self._text_mode:
+            b = b.decode("utf8")
         self._buf += b
         return False
 
@@ -429,8 +431,6 @@ class _GCSStreamingReadFile(_GCSFile):
         result = self._buf[:size]
         self._buf = self._buf[size:]
         self._offset += size
-        if self._text_mode:
-            return result.decode("utf8")
         return result
 
     def _readline(self, size=-1):
@@ -526,12 +526,8 @@ class _GCSStreamingWriteFile(_GCSFile):
         self._remote_path = path
         _bucket, self._blob = _make_gcs(path)
         self._text_mode = "b" not in mode
-        if "b" in mode:
-            self._newline = b"\n"
-            self._empty = b""
-        else:
-            self._newline = "\n"
-            self._empty = ""
+        self._newline = b"\n"
+        self._empty = b""
         # current writing byte offset in the file
         self._offset = 0
         # contents waiting to be uploaded
@@ -545,23 +541,31 @@ class _GCSStreamingWriteFile(_GCSFile):
             assert len(self._buf) > size
         chunk = self._buf[:size]
         self._buf = self._buf[size:]
+
+        start = self._offset
+        end = self._offset + len(chunk) - 1
         total_size = "*"
         if finalize:
             total_size = self._offset + len(chunk)
             assert len(self._buf) == 0
+        content_range = f"bytes {start}-{end}/{total_size}"
+
         req = Request(
             url=self._upload_url,
             data=chunk,
-            headers={
-                "Content-Type": "application/octet-stream",
-                "Content-Range": f"bytes {self._offset}-{self._offset + len(chunk)-1}/{total_size}",
-            },
+            headers={"Content-Type": "application/octet-stream"},
             method="PUT",
         )
+
+        if not (finalize and len(chunk) == 0):
+            # not clear what the correct content-range is for a zero length file, so just don't include the header
+            req.headers["Content-Range"] = content_range
+
         try:
             resp = urlopen(req)
         except urllib.error.HTTPError as e:
             if finalize:
+                print(e.read(), req.headers)
                 raise
             # 308 is the expected response
             if e.getcode() != 308:
@@ -592,6 +596,9 @@ class _GCSStreamingWriteFile(_GCSFile):
 
     @_check_closed
     def write(self, b):
+        if self._text_mode:
+            b = b.encode("utf8")
+
         self._buf += b
         while len(self._buf) > STREAMING_CHUNK_SIZE:
             self._upload_buf()

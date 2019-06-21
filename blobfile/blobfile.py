@@ -290,7 +290,6 @@ class _GCSReadFile:
         self._closed = True
 
 
-# https://docs.python.org/3/library/io.html#io.IOBase
 def _check_closed(method):
     @functools.wraps(method)
     def wrapped(self, *args, **kwargs):
@@ -301,6 +300,7 @@ def _check_closed(method):
     return wrapped
 
 
+# https://docs.python.org/3/library/io.html#io.IOBase
 class _GCSFile:
     def __init__(self):
         self.closed = False

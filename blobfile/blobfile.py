@@ -10,6 +10,8 @@ import functools
 from urllib.request import urlopen, Request
 import urllib.parse
 import urllib.error
+import datetime
+import time
 
 from google.cloud.storage import Client
 import google.api_core.exceptions
@@ -24,6 +26,24 @@ gcs_client = None
 # it sounds like the client is threadsafe but not fork safe https://github.com/googleapis/google-cloud-python/issues/3272
 gcs_client_pid = None
 gcs_client_lock = threading.Lock()
+
+
+def retry(fn, attempts=None, min_backoff=1, max_backoff=60):
+    """
+    Call `fn` `attempts` times, performing exponential backoff if it fails.
+    """
+    backoff = min_backoff
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return fn()
+        except Exception:  # pylint: disable=broad-except
+            if attempts is not None and attempt >= attempts:
+                raise
+        time.sleep(backoff)
+        backoff *= 2
+        backoff = min(backoff, max_backoff)
 
 
 def _get_client():
@@ -221,6 +241,17 @@ def md5(path):
                     break
                 m.update(block)
         return m.hexdigest()
+
+
+def get_url(path):
+    """
+    Get a URL for the given path that a browser could open
+    """
+    if _is_gcs_path(path):
+        _bucket, blob = _make_gcs(path)
+        return blob.generate_signed_url(expiration=datetime.timedelta(days=365))
+    else:
+        return f"file://{path}"
 
 
 class _GCSWriteFile:

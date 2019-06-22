@@ -5,6 +5,7 @@ import tempfile
 import os
 import contextlib
 import json
+import urllib.request
 
 import pytest
 from tensorflow.io import gfile  # pylint: disable=import-error
@@ -89,14 +90,25 @@ def test_md5():
     meow_hash = hashlib.md5(contents).hexdigest()
     with tempfile.TemporaryDirectory() as tmpdir:
         local_path = os.path.join(tmpdir, "file.name")
-        with open(local_path, "wb") as f:
-            f.write(contents)
+        _write_contents(local_path, contents)
         assert bf.md5(local_path) == meow_hash
 
     with _get_test_dir() as tmpdir:
         remote_path = tmpdir + "/file.name"
         _write_contents(remote_path, contents)
         assert bf.md5(remote_path) == meow_hash
+
+
+def test_get_url():
+    contents = b"meow!"
+    with tempfile.TemporaryDirectory() as local_tmpdir, _get_test_dir() as remote_tmpdir:
+        local_path = os.path.join(local_tmpdir, "file.name")
+        remote_path = remote_tmpdir + "/file.name"
+
+        for path in [local_path, remote_path]:
+            _write_contents(path, contents)
+            url = bf.get_url(path)
+            assert urllib.request.urlopen(url).read() == contents
 
 
 def test_read_write():

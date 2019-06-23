@@ -17,40 +17,76 @@ from . import blobfile as bf
 
 
 @contextlib.contextmanager
-def _get_temp_gcs_dir():
-    remotedir = (
-        "gs://csh-test-2/"
-        + "".join(random.choice(string.ascii_lowercase) for i in range(16))
-        + "/"
-    )
-    yield remotedir
-    gfile.rmtree(remotedir)
+def _get_temp_local_path():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "file.name")
+        yield path
 
 
 @contextlib.contextmanager
-def _get_temp_http_dir():
+def _get_temp_gcs_path():
+    path = (
+        "gs://csh-test-2/"
+        + "".join(random.choice(string.ascii_lowercase) for i in range(16))
+        + "/file.name"
+    )
+    yield path
+    gfile.remove(path)
+
+
+@contextlib.contextmanager
+def _get_temp_http_path():
     with tempfile.TemporaryDirectory() as tmpdir:
 
         class HTTPHandler(http.server.SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, directory=tmpdir, **kwargs)
 
+            def do_POST(self):
+                filepath = os.path.join(tmpdir, self.path[1:])
+                print(self.headers)
+                if self.headers["Transfer-Encoding"] == "chunked":
+                    contents = b""
+                    while True:
+                        length = int(self.rfile.readline(), 16)
+                        if length == 0:
+                            break
+                        contents += self.rfile.read(length)
+                        self.rfile.read(2)  # CRLF
+                else:
+                    contents = self.rfile.read(int(self.headers["Content-Length"]))
+                with open(filepath, "wb") as f:
+                    f.write(contents)
+                self.send_response(200)
+                self.end_headers()
+
         with http.server.HTTPServer(("localhost", 0), HTTPHandler) as httpd:
             t = threading.Thread(target=httpd.serve_forever)
+            t.daemon = True
             t.start()
-            yield f"http://localhost:{httpd.server_port}/"
+            yield f"http://localhost:{httpd.server_port}/file.name"
             httpd.shutdown()
-            t.join()
 
 
 def _write_contents(path, contents):
-    with gfile.GFile(path, "wb") as f:
-        f.write(contents)
+    if path.startswith("http://"):
+        req = urllib.request.Request(url=path, data=contents, method="POST")
+        resp = urllib.request.urlopen(req)
+        assert resp.getcode() == 200
+    else:
+        with gfile.GFile(path, "wb") as f:
+            f.write(contents)
 
 
 def _read_contents(path):
-    with gfile.GFile(path, "rb") as f:
-        return f.read()
+    if path.startswith("http://"):
+        req = urllib.request.Request(url=path, method="GET")
+        resp = urllib.request.urlopen(req)
+        assert resp.getcode() == 200
+        return resp.read()
+    else:
+        with gfile.GFile(path, "rb") as f:
+            return f.read()
 
 
 def test_basename():
@@ -120,11 +156,8 @@ def test_join():
 
 def test_cache_key():
     contents = b"meow!"
-    with tempfile.TemporaryDirectory() as tmpdir, _get_temp_gcs_dir() as remote_tmpdir:
-        local_path = os.path.join(tmpdir, "file.name")
-        remote_path = remote_tmpdir + "file.name"
-
-        for path in [local_path, remote_path]:
+    for ctx in [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]:
+        with ctx() as path:
             _write_contents(path, contents)
             first_key = bf.cache_key(path)
             _write_contents(path, contents + contents)
@@ -134,11 +167,8 @@ def test_cache_key():
 
 def test_get_url():
     contents = b"meow!"
-    with tempfile.TemporaryDirectory() as local_tmpdir, _get_temp_gcs_dir() as remote_tmpdir:
-        local_path = os.path.join(local_tmpdir, "file.name")
-        remote_path = remote_tmpdir + "file.name"
-
-        for path in [local_path, remote_path]:
+    for ctx in [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]:
+        with ctx() as path:
             _write_contents(path, contents)
             url = bf.get_url(path)
             assert urllib.request.urlopen(url).read() == contents
@@ -146,11 +176,8 @@ def test_get_url():
 
 def test_read_write():
     contents = b"meow!"
-    with tempfile.TemporaryDirectory() as local_tmpdir, _get_temp_gcs_dir() as remote_tmpdir:
-        local_path = os.path.join(local_tmpdir, "file.name")
-        remote_path = remote_tmpdir + "file.name"
-
-        for path in [local_path, remote_path]:
+    for ctx in [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]:
+        with ctx() as path:
             with bf.BlobFile(path, "wb") as w:
                 w.write(contents)
             with bf.BlobFile(path, "rb") as r:
@@ -159,22 +186,23 @@ def test_read_write():
 
 def test_copy():
     contents = b"meow!"
-    with tempfile.TemporaryDirectory() as local_tmpdir, _get_temp_gcs_dir() as remote_tmpdir:
-        local_path1 = os.path.join(local_tmpdir, "file1.name")
-        local_path2 = os.path.join(local_tmpdir, "file2.name")
-        remote_path1 = remote_tmpdir + "file1.name"
-        remote_path2 = remote_tmpdir + "file2.name"
-
-        _write_contents(local_path1, contents)
-        assert _read_contents(local_path1) == contents
+    with _get_temp_local_path() as local_path1, _get_temp_local_path() as local_path2, _get_temp_local_path() as local_path3, _get_temp_local_path() as local_path4, _get_temp_gcs_path() as gcs_path1, _get_temp_gcs_path() as gcs_path2, _get_temp_http_path() as http_path1, _get_temp_http_path() as http_path2:
+        with pytest.raises(FileNotFoundError):
+            bf.copy(gcs_path1, gcs_path2)
 
         with pytest.raises(FileNotFoundError):
-            bf.copy(remote_path1, remote_path2)
+            bf.copy(http_path1, http_path2)
+
+        _write_contents(local_path1, contents)
 
         testcases = [
             (local_path1, local_path2),
-            (local_path1, remote_path1),
-            (remote_path1, remote_path2),
+            (local_path1, gcs_path1),
+            (gcs_path1, gcs_path2),
+            (gcs_path2, local_path3),
+            (local_path1, http_path1),
+            (local_path1, http_path2),
+            (http_path2, local_path4),
         ]
 
         for src, dst in testcases:
@@ -188,36 +216,30 @@ def test_copy():
 
 def test_exists():
     contents = b"meow!"
-    with tempfile.TemporaryDirectory() as local_tmpdir, _get_temp_gcs_dir() as remote_tmpdir:
-        local_path = os.path.join(local_tmpdir, "file.name")
-        remote_path = remote_tmpdir + "file.name"
-        assert not bf.exists(local_path)
-        assert not bf.exists(remote_path)
-        _write_contents(local_path, contents)
-        _write_contents(remote_path, contents)
-        assert bf.exists(local_path)
-        assert bf.exists(remote_path)
+    for ctx in [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]:
+        with ctx() as (write_path, path):
+            assert not bf.exists(path)
+            _write_contents(write_path, contents)
+            assert bf.exists(path)
 
 
 @pytest.mark.parametrize("local", [True, False])
 @pytest.mark.parametrize("binary", [True, False])
 @pytest.mark.parametrize("streaming", [True, False])
-def test_more_read_write(local, binary, streaming):
+@pytest.mark.parametrize("kind", ["local", "gcs", "http"])
+def test_more_read_write(local, binary, streaming, kind):
     rng = np.random.RandomState(0)
 
-    if local:
-        dir_context_manager = tempfile.TemporaryDirectory()
+    if kind == "local":
+        ctx = _get_temp_local_path
+    elif kind == "gcs":
+        ctx = _get_temp_gcs_path
+    elif kind == "http":
+        ctx = _get_temp_http_path
     else:
-        dir_context_manager = _get_temp_gcs_dir()
+        raise Exception("unrecognized path")
 
-    with dir_context_manager as tmpdir:
-        if local:
-            path = os.path.join(tmpdir, "file.name")
-        else:
-            path = tmpdir + "file.name"
-
-        print("path", path)
-
+    with ctx() as path:
         if binary:
             read_mode = "rb"
             write_mode = "wb"
@@ -292,11 +314,9 @@ def test_video():
     shape = (256, 64, 64, 3)
     video_data = rng.randint(0, 256, size=np.prod(shape), dtype=np.uint8).reshape(shape)
 
-    with tempfile.TemporaryDirectory() as local_tmpdir, _get_temp_gcs_dir() as remote_tmpdir:
-        local_path = os.path.join(local_tmpdir, "file.name")
-        remote_path = remote_tmpdir + "file.name"
-        for streaming in [False, True]:
-            for path in [local_path, remote_path]:
+    for streaming in [False, True]:
+        for ctx in [_get_temp_local_path, _get_temp_gcs_path]:
+            with ctx() as (_write_path, path):
                 with bf.BlobFile(path, mode="wb", streaming=streaming) as wf:
                     with imageio.get_writer(
                         wf,

@@ -19,6 +19,7 @@ import google.api_core.exceptions
 # TODO:
 # http tests using http.server
 #   make a context manager that creates an http server backed by a local dir, yields local_path, http_path
+# http POST to create file?
 # http streaming read file
 # pypi
 
@@ -52,7 +53,7 @@ def retry(fn, attempts=None, min_backoff=1, max_backoff=60):
         backoff = min(backoff, max_backoff)
 
 
-def _get_client():
+def _get_gcs_client():
     global gcs_client, gcs_client_pid
     with gcs_client_lock:
         pid = os.getpid()
@@ -83,83 +84,79 @@ def _split_url(path):
 
 def _make_gcs(path):
     _scheme, bucket_path, blob_path = _split_url(path)
-    client = _get_client()
+    client = _get_gcs_client()
     bucket = client.bucket(bucket_path)
     return bucket, bucket.blob(blob_path)
 
 
 def _get_head(path):
     req = urllib.request.Request(url=path, method="HEAD")
-    with urllib.request.urlopen(req) as f:
-        return f
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp
+    except urllib.error.HTTPError as resp:
+        return resp
+
+
+def _download_to_file(src, f):
+    if _is_local_path(src):
+        with open(src, "rb") as in_f:
+            shutil.copyfileobj(in_f, f)
+    elif _is_gcs_path(src):
+        _bucket, srcblob = _make_gcs(src)
+        srcblob.download_to_file(f)
+    elif _is_http_path(src):
+        req = urllib.request.Request(url=src, method="GET")
+        with urllib.request.urlopen(req) as resp:
+            assert resp.getcode() == 200
+            shutil.copyfileobj(resp, f)
+    else:
+        raise Exception("unrecognized path")
+
+
+def _upload_from_file(f, dst):
+    if _is_local_path(dst):
+        with open(dst, "wb") as dst_f:
+            shutil.copyfileobj(f, dst_f)
+    elif _is_gcs_path(dst):
+        _bucket, dstblob = _make_gcs(dst)
+        dstblob.upload_from_file(f)
+    elif _is_http_path(dst):
+        req = urllib.request.Request(url=dst, data=f, method="POST")
+        with urllib.request.urlopen(req) as resp:
+            assert resp.getcode() == 200
+    else:
+        raise Exception("unrecognized path")
 
 
 def copy(src, dst, overwrite=False):
-    # TODO: add test for http
     if not overwrite:
         if exists(dst):
             raise FileExistsError(
                 f"destination '{dst}' already exists and overwrite is disabled"
             )
-    if _is_local_path(src):
-        # local src
-        if _is_local_path(dst):
-            # local dst
-            shutil.copyfile(src, dst)
-        elif _is_gcs_path(dst):
-            # gcs dst
-            _bucket, dstblob = _make_gcs(dst)
-            dstblob.upload_from_filename(src)
-        elif _is_http_path(dst):
-            # http dst
-            raise Exception("cannot write to http paths")
-        else:
-            raise Exception("unrecognized path")
-    elif _is_gcs_path(src):
-        # gcs src
+
+    # special case gcs to gcs copy, don't download the file
+    if _is_gcs_path(src) and _is_gcs_path(dst):
         _bucket, srcblob = _make_gcs(src)
-        if _is_local_path(dst):
-            # local dst
-            srcblob.download_to_filename(dst)
-        elif _is_gcs_path(dst):
-            # gcs dst
-            _bucket, dstblob = _make_gcs(dst)
-            token = None
-            while True:
-                try:
-                    token, _bytes_rewritten, _total_bytes = dstblob.rewrite(
-                        srcblob, token=token
-                    )
-                except google.api_core.exceptions.NotFound:
-                    raise FileNotFoundError(f"src file '{src}' not found")
-                if token is None:
-                    break
-        elif _is_http_path(dst):
-            # http dst
-            raise Exception("cannot write to http paths")
-        else:
-            raise Exception("unrecognized path")
-    elif _is_http_path(src):
-        if _is_local_path(dst):
-            # local dst
-            with urllib.request.urlopen(src) as in_f, open(dst, "wb") as out_f:
-                shutil.copyfileobj(in_f, out_f)
-        elif _is_gcs_path(dst):
-            # gcs dst
-            _bucket, dstblob = _make_gcs(dst)
-            with urllib.request.urlopen(src) as in_f:
-                dstblob.upload_from_file(in_f)
-        elif _is_http_path(dst):
-            # http dst
-            raise Exception("cannot write to http paths")
-        else:
-            raise Exception("unrecognized path")
-    else:
-        raise Exception("unrecognized path")
+        _bucket, dstblob = _make_gcs(dst)
+        token = None
+        while True:
+            try:
+                token, _bytes_rewritten, _total_bytes = dstblob.rewrite(
+                    srcblob, token=token
+                )
+            except google.api_core.exceptions.NotFound:
+                raise FileNotFoundError(f"src file '{src}' not found")
+            if token is None:
+                break
+        return
+
+    with BlobFile(src, "rb") as src_f, BlobFile(dst, "wb") as dst_f:
+        shutil.copyfileobj(src_f, dst_f)
 
 
 def exists(path):
-    # TODO: add test for http
     if _is_local_path(path):
         return os.path.exists(path)
     elif _is_gcs_path(path):
@@ -281,7 +278,6 @@ def cache_key(path):
     """
     Get a cache key for a file
     """
-    # TODO: test http
     if _is_local_path(path):
         key_parts = [path, os.path.getmtime(path), os.path.getsize(path)]
     elif _is_gcs_path(path):
@@ -325,8 +321,10 @@ class _LocalFile:
         self._local_dir = tempfile.mkdtemp()
         self._local_path = join(self._local_dir, basename(path))
         if self._mode in ("r", "rb"):
-            assert exists(path)
-            copy(self._remote_path, self._local_path)
+            if not exists(path):
+                raise FileNotFoundError(f"file '{path}' not found")
+            with open(self._local_path, "wb") as f:
+                _download_to_file(self._remote_path, f)
         self._f = open(self._local_path, self._mode)
         self._closed = False
 
@@ -350,7 +348,8 @@ class _LocalFile:
 
         self._f.close()
         if self._mode in ("w", "wb"):
-            copy(self._local_path, self._remote_path, overwrite=True)
+            with open(self._local_path, "rb") as f:
+                _upload_from_file(f, self._remote_path)
         os.remove(self._local_path)
         os.rmdir(self._local_dir)
         self._closed = True
@@ -708,13 +707,15 @@ class BlobFile:
                 raise Exception(f"unsupported mode {self._mode}")
         elif _is_http_path(path):
             if self._mode in ("w", "wb"):
-                raise Exception("cannot write to http paths")
+                self._f = _LocalFile(path, self._mode)
+                # raise Exception("cannot write to http paths")
             elif self._mode in ("r", "rb"):
-                if streaming:
-                    raise Exception("oh no")
-                    # self._f = _HTTPStreamingReadFile(path, self._mode)
-                else:
-                    self._f = _LocalFile(path, self._mode)
+                self._f = _LocalFile(path, self._mode)
+                # if streaming:
+                # raise Exception("oh no")
+                # self._f = _HTTPStreamingReadFile(path, self._mode)
+                # else:
+                # self._f = _LocalFile(path, self._mode)
             else:
                 raise Exception(f"unsupported mode {self._mode}")
         else:

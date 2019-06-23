@@ -1,11 +1,12 @@
 import random
 import string
-import hashlib
 import tempfile
 import os
 import contextlib
 import json
 import urllib.request
+import threading
+import http.server
 
 import pytest
 from tensorflow.io import gfile  # pylint: disable=import-error
@@ -16,12 +17,30 @@ from . import blobfile as bf
 
 
 @contextlib.contextmanager
-def _get_test_dir():
-    remotedir = "gs://csh-test-2/" + "".join(
-        random.choice(string.ascii_lowercase) for i in range(16)
+def _get_temp_gcs_dir():
+    remotedir = (
+        "gs://csh-test-2/"
+        + "".join(random.choice(string.ascii_lowercase) for i in range(16))
+        + "/"
     )
     yield remotedir
     gfile.rmtree(remotedir)
+
+
+@contextlib.contextmanager
+def _get_temp_http_dir():
+    with tempfile.TemporaryDirectory() as tmpdir:
+
+        class HTTPHandler(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=tmpdir, **kwargs)
+
+        with http.server.HTTPServer(("localhost", 0), HTTPHandler) as httpd:
+            t = threading.Thread(target=httpd.serve_forever)
+            t.start()
+            yield f"http://localhost:{httpd.server_port}/"
+            httpd.shutdown()
+            t.join()
 
 
 def _write_contents(path, contents):
@@ -43,6 +62,10 @@ def test_basename():
         ("gs://a/", ""),
         ("gs://a/b", "b"),
         ("gs://a/b/c/test.filename", "test.filename"),
+        ("http://a", ""),
+        ("http://a/", ""),
+        ("http://a/b", "b"),
+        ("http://a/b/c/test.filename", "test.filename"),
     ]
     for input_, desired_output in testcases:
         actual_output = bf.basename(input_)
@@ -56,10 +79,15 @@ def test_dirname():
         ("a/b/c", "a/b"),
         ("a/b/c/", "a/b/c"),
         ("", ""),
-        ("gs://a", "gs://a"),
-        ("gs://a/b", "gs://a"),
-        ("gs://a/b/c/test.filename", "gs://a/b/c"),
-        ("gs://a/b/c/", "gs://a/b/c"),
+        ("gs://a", "gs://a/"),
+        ("gs://a/", "gs://a/"),
+        ("gs://a/b", "gs://a/"),
+        ("gs://a/b/c/test.filename", "gs://a/b/c/"),
+        ("gs://a/b/c/", "gs://a/b/"),
+        ("http://a", "http://a/"),
+        ("http://a/b", "http://a/"),
+        ("http://a/b/c/test.filename", "http://a/b/c/"),
+        ("http://a/b/c/", "http://a/b/"),
     ]
     for input_, desired_output in testcases:
         actual_output = bf.dirname(input_)
@@ -79,31 +107,36 @@ def test_join():
         ("gs://a/b/", "c", "gs://a/b/c"),
         ("gs://a/b/", "c/", "gs://a/b/c/"),
         ("gs://a/b/", "/c/", "gs://a/c/"),
+        ("http://a", "b", "http://a/b"),
+        ("http://a/b", "c", "http://a/b/c"),
+        ("http://a/b/", "c", "http://a/b/c"),
+        ("http://a/b/", "c/", "http://a/b/c/"),
+        ("http://a/b/", "/c/", "http://a/c/"),
     ]
     for input_a, input_b, desired_output in testcases:
         actual_output = bf.join(input_a, input_b)
         assert desired_output == actual_output, f"{input_a} {input_b}"
 
 
-def test_md5():
+def test_cache_key():
     contents = b"meow!"
-    meow_hash = hashlib.md5(contents).hexdigest()
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir, _get_temp_gcs_dir() as remote_tmpdir:
         local_path = os.path.join(tmpdir, "file.name")
-        _write_contents(local_path, contents)
-        assert bf.md5(local_path) == meow_hash
+        remote_path = remote_tmpdir + "file.name"
 
-    with _get_test_dir() as tmpdir:
-        remote_path = tmpdir + "/file.name"
-        _write_contents(remote_path, contents)
-        assert bf.md5(remote_path) == meow_hash
+        for path in [local_path, remote_path]:
+            _write_contents(path, contents)
+            first_key = bf.cache_key(path)
+            _write_contents(path, contents + contents)
+            second_key = bf.cache_key(path)
+            assert first_key != second_key
 
 
 def test_get_url():
     contents = b"meow!"
-    with tempfile.TemporaryDirectory() as local_tmpdir, _get_test_dir() as remote_tmpdir:
+    with tempfile.TemporaryDirectory() as local_tmpdir, _get_temp_gcs_dir() as remote_tmpdir:
         local_path = os.path.join(local_tmpdir, "file.name")
-        remote_path = remote_tmpdir + "/file.name"
+        remote_path = remote_tmpdir + "file.name"
 
         for path in [local_path, remote_path]:
             _write_contents(path, contents)
@@ -113,9 +146,9 @@ def test_get_url():
 
 def test_read_write():
     contents = b"meow!"
-    with tempfile.TemporaryDirectory() as local_tmpdir, _get_test_dir() as remote_tmpdir:
+    with tempfile.TemporaryDirectory() as local_tmpdir, _get_temp_gcs_dir() as remote_tmpdir:
         local_path = os.path.join(local_tmpdir, "file.name")
-        remote_path = remote_tmpdir + "/file.name"
+        remote_path = remote_tmpdir + "file.name"
 
         for path in [local_path, remote_path]:
             with bf.BlobFile(path, "wb") as w:
@@ -126,11 +159,11 @@ def test_read_write():
 
 def test_copy():
     contents = b"meow!"
-    with tempfile.TemporaryDirectory() as local_tmpdir, _get_test_dir() as remote_tmpdir:
+    with tempfile.TemporaryDirectory() as local_tmpdir, _get_temp_gcs_dir() as remote_tmpdir:
         local_path1 = os.path.join(local_tmpdir, "file1.name")
         local_path2 = os.path.join(local_tmpdir, "file2.name")
-        remote_path1 = remote_tmpdir + "/file1.name"
-        remote_path2 = remote_tmpdir + "/file2.name"
+        remote_path1 = remote_tmpdir + "file1.name"
+        remote_path2 = remote_tmpdir + "file2.name"
 
         _write_contents(local_path1, contents)
         assert _read_contents(local_path1) == contents
@@ -155,9 +188,9 @@ def test_copy():
 
 def test_exists():
     contents = b"meow!"
-    with tempfile.TemporaryDirectory() as local_tmpdir, _get_test_dir() as remote_tmpdir:
+    with tempfile.TemporaryDirectory() as local_tmpdir, _get_temp_gcs_dir() as remote_tmpdir:
         local_path = os.path.join(local_tmpdir, "file.name")
-        remote_path = remote_tmpdir + "/file.name"
+        remote_path = remote_tmpdir + "file.name"
         assert not bf.exists(local_path)
         assert not bf.exists(remote_path)
         _write_contents(local_path, contents)
@@ -175,13 +208,13 @@ def test_more_read_write(local, binary, streaming):
     if local:
         dir_context_manager = tempfile.TemporaryDirectory()
     else:
-        dir_context_manager = _get_test_dir()
+        dir_context_manager = _get_temp_gcs_dir()
 
     with dir_context_manager as tmpdir:
         if local:
             path = os.path.join(tmpdir, "file.name")
         else:
-            path = tmpdir + "/file.name"
+            path = tmpdir + "file.name"
 
         print("path", path)
 
@@ -259,9 +292,9 @@ def test_video():
     shape = (256, 64, 64, 3)
     video_data = rng.randint(0, 256, size=np.prod(shape), dtype=np.uint8).reshape(shape)
 
-    with tempfile.TemporaryDirectory() as local_tmpdir, _get_test_dir() as remote_tmpdir:
+    with tempfile.TemporaryDirectory() as local_tmpdir, _get_temp_gcs_dir() as remote_tmpdir:
         local_path = os.path.join(local_tmpdir, "file.name")
-        remote_path = remote_tmpdir + "/file.name"
+        remote_path = remote_tmpdir + "file.name"
         for streaming in [False, True]:
             for path in [local_path, remote_path]:
                 with bf.BlobFile(path, mode="wb", streaming=streaming) as wf:
@@ -282,3 +315,28 @@ def test_video():
                     ) as r:
                         for idx, frame in enumerate(r):
                             assert np.array_equal(frame, video_data[idx])
+
+
+def test_retry():
+    i = 0
+
+    def f():
+        nonlocal i
+        i += 1
+
+    bf.retry(f, attempts=3, min_backoff=0.01)
+    assert i == 1
+
+    i = 0
+
+    class Failed(Exception):
+        pass
+
+    def f2():
+        nonlocal i
+        i += 1
+        raise Failed("oh no")
+
+    with pytest.raises(Failed):
+        bf.retry(f2, attempts=3, min_backoff=0.01)
+    assert i == 3

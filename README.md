@@ -6,8 +6,8 @@ Writing to a remote path will not actually perform the write incrementally, so d
 
 The main function is `BlobFile`, a replacement for `GFile`.  There are also a few additional functions, `basename`, `dirname`, and `join`, which mostly do the same thing as their `os.path` namesakes, only they also support `gs://` paths.  There are also a few extra functions:
 
-* `md5` - returns the md5 hash of a path (this is especially fast for GCS since it's already stored on the object)
+* `cache_key` - returns a cache key that can be used for the path (this is not guaranteed to change when the content changes, but should hopefully do that)
 * `retry` - useful for retrying since network operations often fail
-* `md5` - returns the md5 hash of a path (this is especially fast for GCS since it's already stored on the object)
+* `get_url` - returns a url for a path
 
 A number of existing `gfile` functions are currently not implemented.

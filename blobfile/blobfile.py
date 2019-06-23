@@ -16,6 +16,12 @@ import time
 from google.cloud.storage import Client
 import google.api_core.exceptions
 
+# TODO:
+# http tests using http.server
+#   make a context manager that creates an http server backed by a local dir, yields local_path, http_path
+# http streaming read file
+# pypi
+
 
 HASH_CHUNK_SIZE = 65536
 STREAMING_CHUNK_SIZE = 2 ** 20
@@ -57,7 +63,7 @@ def _get_client():
 
 
 def _is_local_path(path):
-    return not _is_gcs_path(path)
+    return not _is_gcs_path(path) and not _is_http_path(path)
 
 
 def _is_gcs_path(path):
@@ -65,19 +71,31 @@ def _is_gcs_path(path):
     return url.scheme == "gs"
 
 
-def _split_gcs_path(path):
+def _is_http_path(path):
     url = urllib.parse.urlparse(path)
-    return url.netloc, url.path[1:]
+    return url.scheme in ["http", "https"]
+
+
+def _split_url(path):
+    url = urllib.parse.urlparse(path)
+    return url.scheme, url.netloc, url.path[1:]
 
 
 def _make_gcs(path):
-    bucket_path, blob_path = _split_gcs_path(path)
+    _scheme, bucket_path, blob_path = _split_url(path)
     client = _get_client()
     bucket = client.bucket(bucket_path)
     return bucket, bucket.blob(blob_path)
 
 
+def _get_head(path):
+    req = urllib.request.Request(url=path, method="HEAD")
+    with urllib.request.urlopen(req) as f:
+        return f
+
+
 def copy(src, dst, overwrite=False):
+    # TODO: add test for http
     if not overwrite:
         if exists(dst):
             raise FileExistsError(
@@ -88,18 +106,23 @@ def copy(src, dst, overwrite=False):
         if _is_local_path(dst):
             # local dst
             shutil.copyfile(src, dst)
-        else:
-            # remote dst
+        elif _is_gcs_path(dst):
+            # gcs dst
             _bucket, dstblob = _make_gcs(dst)
             dstblob.upload_from_filename(src)
-    else:
-        # remote src
+        elif _is_http_path(dst):
+            # http dst
+            raise Exception("cannot write to http paths")
+        else:
+            raise Exception("unrecognized path")
+    elif _is_gcs_path(src):
+        # gcs src
         _bucket, srcblob = _make_gcs(src)
         if _is_local_path(dst):
             # local dst
             srcblob.download_to_filename(dst)
-        else:
-            # remote dst
+        elif _is_gcs_path(dst):
+            # gcs dst
             _bucket, dstblob = _make_gcs(dst)
             token = None
             while True:
@@ -111,18 +134,45 @@ def copy(src, dst, overwrite=False):
                     raise FileNotFoundError(f"src file '{src}' not found")
                 if token is None:
                     break
+        elif _is_http_path(dst):
+            # http dst
+            raise Exception("cannot write to http paths")
+        else:
+            raise Exception("unrecognized path")
+    elif _is_http_path(src):
+        if _is_local_path(dst):
+            # local dst
+            with urllib.request.urlopen(src) as in_f, open(dst, "wb") as out_f:
+                shutil.copyfileobj(in_f, out_f)
+        elif _is_gcs_path(dst):
+            # gcs dst
+            _bucket, dstblob = _make_gcs(dst)
+            with urllib.request.urlopen(src) as in_f:
+                dstblob.upload_from_file(in_f)
+        elif _is_http_path(dst):
+            # http dst
+            raise Exception("cannot write to http paths")
+        else:
+            raise Exception("unrecognized path")
+    else:
+        raise Exception("unrecognized path")
 
 
 def exists(path):
-    if not _is_gcs_path(path):
+    # TODO: add test for http
+    if _is_local_path(path):
         return os.path.exists(path)
-
-    _bucket, blob = _make_gcs(path)
-    if path.endswith("/"):
-        dirblob = blob
+    elif _is_gcs_path(path):
+        _bucket, blob = _make_gcs(path)
+        if path.endswith("/"):
+            dirblob = blob
+        else:
+            _bucket, dirblob = _make_gcs(path + "/")
+        return blob.exists() or dirblob.exists()
+    elif _is_http_path(path):
+        return _get_head(path).getcode() == 200
     else:
-        _bucket, dirblob = _make_gcs(path + "/")
-    return blob.exists() or dirblob.exists()
+        raise Exception("unrecognized path")
 
 
 def glob(pattern):
@@ -171,8 +221,8 @@ def basename(path):
 
     For GCS, this is the part after the bucket
     """
-    if _is_gcs_path(path):
-        _bucket, path = _split_gcs_path(path)
+    if _is_gcs_path(path) or _is_http_path(path):
+        _scheme, _netloc, path = _split_url(path)
         return path.split("/")[-1]
     else:
         return os.path.basename(path)
@@ -184,28 +234,31 @@ def dirname(path):
 
     If this is a GCS path, the root directory is gs://<bucket name>/
     """
-    if _is_gcs_path(path):
-        bucket, path = _split_gcs_path(path)
-        return "/".join(f"gs://{bucket}/{path}".split("/")[:-1])
+    if _is_gcs_path(path) or _is_http_path(path):
+        scheme, netloc, urlpath = _split_url(path)
+        if urlpath.endswith("/"):
+            urlpath = urlpath[:-1]
+
+        if "/" in urlpath:
+            urlpath = "/".join(urlpath.split("/")[:-1]) + "/"
+        else:
+            urlpath = ""
+        return f"{scheme}://{netloc}/{urlpath}"
     else:
         return os.path.dirname(path)
 
 
 def join(a, b):
     """
-    Join two file paths, if path `b` is an absolute path, use it
-
-    For GCS, the bucket is treated as the root of the filesystem, and `b` must not have a bucket
+    Join two file paths, if path `b` is an absolute path, it will replace the entire path component of a
     """
-    if _is_gcs_path(a):
-        assert not _is_gcs_path(b), "second path must not be a gcs path"
-        assert ".." not in b, "parent directory not handled"
-        a_url = urllib.parse.urlparse(a)
-        if b.startswith("/"):
-            return f"gs://{a_url.netloc}{b}"
+    if _is_gcs_path(a) or _is_http_path(a):
         if not a.endswith("/"):
-            a = a + "/"
-        return a + b
+            a += "/"
+        assert "://" not in b
+        parsed_a = urllib.parse.urlparse(a)
+        newpath = urllib.parse.urljoin(parsed_a.path, b)
+        return f"{parsed_a.scheme}://{parsed_a.netloc}" + newpath
     else:
         return os.path.join(a, b)
 
@@ -219,28 +272,35 @@ def _reload_blob(blob):
         )
 
 
-def _assert_file_exists(path):
+def _assert_blob_exists(path):
     _bucket, blob = _make_gcs(path)
     _reload_blob(blob)
 
 
-def md5(path):
+def cache_key(path):
     """
-    Get the MD5 hash for a file
+    Get a cache key for a file
     """
-    if _is_gcs_path(path):
+    # TODO: test http
+    if _is_local_path(path):
+        key_parts = [path, os.path.getmtime(path), os.path.getsize(path)]
+    elif _is_gcs_path(path):
         _bucket, blob = _make_gcs(path)
         _reload_blob(blob)
         return binascii.hexlify(base64.b64decode(blob.md5_hash)).decode("utf8")
+    elif _is_http_path(path):
+        head = _get_head(path)
+        key_parts = [path]
+        for header in ["Last-Modified", "Content-Length", "ETag"]:
+            if header in head.headers:
+                key_parts.append(head.headers[header])
     else:
-        m = hashlib.md5()
-        with open(path, "rb") as f:
-            while True:
-                block = f.read(HASH_CHUNK_SIZE)
-                if block == b"":
-                    break
-                m.update(block)
-        return m.hexdigest()
+        raise Exception("unrecognized path")
+    return hashlib.md5(
+        "|".join(
+            hashlib.md5(str(p).encode("utf8")).hexdigest() for p in key_parts
+        ).encode("utf8")
+    ).hexdigest()
 
 
 def get_url(path):
@@ -250,16 +310,24 @@ def get_url(path):
     if _is_gcs_path(path):
         _bucket, blob = _make_gcs(path)
         return blob.generate_signed_url(expiration=datetime.timedelta(days=365))
-    else:
+    elif _is_http_path(path):
+        return path
+    elif _is_local_path(path):
         return f"file://{path}"
+    else:
+        raise Exception("unrecognized path")
 
 
-class _GCSWriteFile:
+class _LocalFile:
     def __init__(self, path, mode):
+        self._mode = mode
         self._remote_path = path
         self._local_dir = tempfile.mkdtemp()
-        self._local_path = os.path.join(self._local_dir, basename(path))
-        self._f = open(self._local_path, mode)
+        self._local_path = join(self._local_dir, basename(path))
+        if self._mode in ("r", "rb"):
+            assert exists(path)
+            copy(self._remote_path, self._local_path)
+        self._f = open(self._local_path, self._mode)
         self._closed = False
 
     def __getattr__(self, attr):
@@ -281,41 +349,8 @@ class _GCSWriteFile:
             return
 
         self._f.close()
-        copy(self._local_path, self._remote_path, overwrite=True)
-        os.remove(self._local_path)
-        os.rmdir(self._local_dir)
-        self._closed = True
-
-
-class _GCSReadFile:
-    def __init__(self, path, mode):
-        self._remote_path = path
-        _assert_file_exists(path)
-        self._local_dir = tempfile.mkdtemp()
-        copy(self._remote_path, join(self._local_dir, basename(path)))
-        self._local_path = os.path.join(self._local_dir, path.split("/")[-1])
-        self._f = open(self._local_path, mode)
-        self._closed = False
-
-    def __getattr__(self, attr):
-        if attr == "_f":
-            raise AttributeError(attr)
-        return getattr(self._f, attr)
-
-    def __enter__(self):
-        return self._f
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-
-    def __del__(self):
-        self.close()
-
-    def close(self):
-        if not hasattr(self, "_closed") or self._closed:
-            return
-
-        self._f.close()
+        if self._mode in ("w", "wb"):
+            copy(self._local_path, self._remote_path, overwrite=True)
         os.remove(self._local_path)
         os.rmdir(self._local_dir)
         self._closed = True
@@ -332,7 +367,7 @@ def _check_closed(method):
 
 
 # https://docs.python.org/3/library/io.html#io.IOBase
-class _GCSFile:
+class _BaseFile:
     def __init__(self):
         self.closed = False
 
@@ -362,7 +397,7 @@ class _GCSFile:
 
     @_check_closed
     def fileno(self):
-        raise NotImplementedError
+        raise io.UnsupportedOperation("operation not supported")
 
     @_check_closed
     def flush(self):
@@ -387,7 +422,7 @@ class _GCSFile:
 
     @_check_closed
     def seek(self, offset, whence=io.SEEK_SET):
-        raise NotImplementedError
+        raise io.UnsupportedOperation("operation not supported")
 
     @_check_closed
     def seekable(self):
@@ -395,7 +430,7 @@ class _GCSFile:
 
     @_check_closed
     def tell(self):
-        raise NotImplementedError
+        raise io.UnsupportedOperation("operation not supported")
 
     @_check_closed
     def truncate(self):
@@ -417,7 +452,7 @@ class _GCSFile:
         self.close()
 
 
-class _GCSStreamingReadFile(_GCSFile):
+class _GCSStreamingReadFile(_BaseFile):
     def __init__(self, path, mode):
         self._remote_path = path
         _bucket, self._blob = _make_gcs(path)
@@ -552,7 +587,7 @@ class _GCSStreamingReadFile(_GCSFile):
         return self._offset
 
 
-class _GCSStreamingWriteFile(_GCSFile):
+class _GCSStreamingWriteFile(_BaseFile):
     def __init__(self, path, mode):
         self._remote_path = path
         _bucket, self._blob = _make_gcs(path)
@@ -640,6 +675,13 @@ class _GCSStreamingWriteFile(_GCSFile):
             self.write(line)
 
 
+# class _HTTPStreamingReadFile(_BaseFile):
+#     # TODO
+#     # reuse streaming read file but with a custom command to get the data
+#     # handle case where ranges doesn't work
+#     pass
+
+
 class BlobFile:
     """
     Open a local or remote file for reading or writing
@@ -648,24 +690,35 @@ class BlobFile:
         streaming: set to False to do a single copy instead of streaming reads/writes
     """
 
-    def __init__(self, name, mode="r", streaming=True):
-        assert not name.endswith("/")
+    def __init__(self, path, mode="r", streaming=True):
+        assert not path.endswith("/")
         self._mode = mode
-        if _is_gcs_path(name):
+        if _is_gcs_path(path):
             if self._mode in ("w", "wb"):
                 if streaming:
-                    self._f = _GCSStreamingWriteFile(name, self._mode)
+                    self._f = _GCSStreamingWriteFile(path, self._mode)
                 else:
-                    self._f = _GCSWriteFile(name, self._mode)
+                    self._f = _LocalFile(path, self._mode)
             elif self._mode in ("r", "rb"):
                 if streaming:
-                    self._f = _GCSStreamingReadFile(name, self._mode)
+                    self._f = _GCSStreamingReadFile(path, self._mode)
                 else:
-                    self._f = _GCSReadFile(name, self._mode)
+                    self._f = _LocalFile(path, self._mode)
+            else:
+                raise Exception(f"unsupported mode {self._mode}")
+        elif _is_http_path(path):
+            if self._mode in ("w", "wb"):
+                raise Exception("cannot write to http paths")
+            elif self._mode in ("r", "rb"):
+                if streaming:
+                    raise Exception("oh no")
+                    # self._f = _HTTPStreamingReadFile(path, self._mode)
+                else:
+                    self._f = _LocalFile(path, self._mode)
             else:
                 raise Exception(f"unsupported mode {self._mode}")
         else:
-            self._f = open(file=name, mode=self._mode)
+            self._f = open(file=path, mode=self._mode)
 
     def __enter__(self):
         return self._f.__enter__()

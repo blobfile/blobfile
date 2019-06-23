@@ -14,7 +14,7 @@ from .blobfile import (
     basename,
     dirname,
     join,
-    md5,
+    cache_key,
     BlobFile,
 )
 
@@ -34,6 +34,6 @@ __all__ = [
     "basename",
     "dirname",
     "join",
-    "md5",
+    "cache_key",
     "BlobFile",
 ]

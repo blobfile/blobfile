@@ -40,11 +40,104 @@ def _get_temp_http_path():
 
         class HTTPHandler(http.server.SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
+                self.range = None
                 super().__init__(*args, directory=tmpdir, **kwargs)
+
+            # from https://gist.github.com/wassname/d7582bbcbd91189f80d8624ba46542c0
+            def send_head(self):
+                """Common code for GET and HEAD commands.
+                Return value is either a file object or None
+                """
+
+                path = self.translate_path(self.path)
+                ctype = self.guess_type(path)
+
+                # Handling file location
+                # If directory, let SimpleHTTPRequestHandler handle the request
+                if os.path.isdir(path):
+                    return http.server.SimpleHTTPRequestHandler.send_head(self)
+
+                # Handle file not found
+                if not os.path.exists(path):
+                    return self.send_error(404, self.responses.get(404)[0])
+
+                # Handle file request
+                f = open(path, "rb")
+                fs = os.fstat(f.fileno())
+                size = fs[6]
+
+                # Parse range header
+                # Range headers look like 'bytes=500-1000'
+                start, end = 0, size - 1
+                if "Range" in self.headers:
+                    start, end = (
+                        self.headers.get("Range").strip().strip("bytes=").split("-")
+                    )
+                if start == "":
+                    # If no start, then the request is for last N bytes
+                    ## e.g. bytes=-500
+                    try:
+                        end = int(end)
+                    except ValueError:
+                        self.send_error(400, "invalid range")
+                    start = size - end
+                else:
+                    try:
+                        start = int(start)
+                    except ValueError:
+                        self.send_error(400, "invalid range")
+                    if start > size:
+                        # If requested start is greater than filesize
+                        self.send_error(416, self.responses.get(416)[0])
+                    if end == "":
+                        # If only start is provided then serve till end
+                        end = size - 1
+                    else:
+                        try:
+                            end = int(end)
+                        except ValueError:
+                            self.send_error(400, "invalid range")
+
+                # Correct the values of start and end
+                start = max(start, 0)
+                end = min(end, size - 1)
+                self.range = (start, end)
+                # Setup headers and response
+                l = end - start + 1
+                if "Range" in self.headers:
+                    self.send_response(206)
+                else:
+                    self.send_response(200)
+                self.send_header("Content-type", ctype)
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Range", "bytes %s-%s/%s" % (start, end, size))
+                self.send_header("Content-Length", str(l))
+                self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
+                self.end_headers()
+                return f
+
+            def copyfile(self, infile, outfile):
+                """Copies data between two file objects
+                If the current request is a 'Range' request then only the requested
+                bytes are copied.
+                Otherwise, the entire file is copied using SimpleHTTPServer.copyfile
+                """
+                if "Range" not in self.headers:
+                    http.server.SimpleHTTPRequestHandler.copyfile(self, infile, outfile)
+                    return
+
+                start, end = self.range
+                infile.seek(start)
+                bufsize = 64 * 1024  # 64KB
+                remainder = (end - start) % bufsize
+                times = int((end - start) / bufsize)
+                steps = [bufsize] * times + [remainder]
+                for _ in steps:
+                    buf = infile.read(bufsize)
+                    outfile.write(buf)
 
             def do_POST(self):
                 filepath = os.path.join(tmpdir, self.path[1:])
-                print(self.headers)
                 if self.headers["Transfer-Encoding"] == "chunked":
                     contents = b""
                     while True:
@@ -309,32 +402,41 @@ def test_more_read_write(local, binary, streaming, kind):
                 assert json.load(r) == obj
 
 
-def test_video():
+@pytest.mark.parametrize("streaming", [True, False])
+@pytest.mark.parametrize("kind", ["local", "gcs", "http"])
+def test_video(streaming, kind):
     rng = np.random.RandomState(0)
     shape = (256, 64, 64, 3)
     video_data = rng.randint(0, 256, size=np.prod(shape), dtype=np.uint8).reshape(shape)
 
-    for streaming in [False, True]:
-        for ctx in [_get_temp_local_path, _get_temp_gcs_path]:
-            with ctx() as (_write_path, path):
-                with bf.BlobFile(path, mode="wb", streaming=streaming) as wf:
-                    with imageio.get_writer(
-                        wf,
-                        format="ffmpeg",
-                        quality=None,
-                        codec="libx264rgb",
-                        pixelformat="bgr24",
-                        output_params=["-f", "mp4", "-crf", "0"],
-                    ) as w:
-                        for frame in video_data:
-                            w.append_data(frame)
+    if kind == "local":
+        ctx = _get_temp_local_path
+    elif kind == "gcs":
+        ctx = _get_temp_gcs_path
+    elif kind == "http":
+        ctx = _get_temp_http_path
+    else:
+        raise Exception("unrecognized path")
 
-                with bf.BlobFile(path, mode="rb", streaming=streaming) as rf:
-                    with imageio.get_reader(
-                        rf, format="ffmpeg", input_params=["-f", "mp4"]
-                    ) as r:
-                        for idx, frame in enumerate(r):
-                            assert np.array_equal(frame, video_data[idx])
+    with ctx() as path:
+        with bf.BlobFile(path, mode="wb", streaming=streaming) as wf:
+            with imageio.get_writer(
+                wf,
+                format="ffmpeg",
+                quality=None,
+                codec="libx264rgb",
+                pixelformat="bgr24",
+                output_params=["-f", "mp4", "-crf", "0"],
+            ) as w:
+                for frame in video_data:
+                    w.append_data(frame)
+
+        with bf.BlobFile(path, mode="rb", streaming=streaming) as rf:
+            with imageio.get_reader(
+                rf, format="ffmpeg", input_params=["-f", "mp4"]
+            ) as r:
+                for idx, frame in enumerate(r):
+                    assert np.array_equal(frame, video_data[idx])
 
 
 def test_retry():

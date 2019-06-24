@@ -16,13 +16,6 @@ import time
 from google.cloud.storage import Client
 import google.api_core.exceptions
 
-# TODO:
-# http tests using http.server
-#   make a context manager that creates an http server backed by a local dir, yields local_path, http_path
-# http POST to create file?
-# http streaming read file
-# pypi
-
 
 HASH_CHUNK_SIZE = 65536
 STREAMING_CHUNK_SIZE = 2 ** 20
@@ -451,11 +444,10 @@ class _BaseFile:
         self.close()
 
 
-class _GCSStreamingReadFile(_BaseFile):
-    def __init__(self, path, mode):
-        self._remote_path = path
-        _bucket, self._blob = _make_gcs(path)
-        _reload_blob(self._blob)
+class _StreamingReadFile(_BaseFile):
+    def __init__(self, path, mode, size):
+        self._size = size
+        self._path = path
         self._text_mode = "b" not in mode
         if "b" in mode:
             self._newline = b"\n"
@@ -478,12 +470,15 @@ class _GCSStreamingReadFile(_BaseFile):
             raise StopIteration
         return line
 
+    def _download_range(self, start, end):
+        raise NotImplementedError
+
     def _read_into_buf(self, size=STREAMING_CHUNK_SIZE):
         start = self._offset + len(self._buf)
-        end = min(start + size, self._blob.size)
+        end = min(start + size, self._size)
         if start == end:
             return True
-        b = self._blob.download_as_string(start=start, end=end)
+        b = self._download_range(start, end)
         if self._text_mode:
             b = b.decode("utf8")
         self._buf += b
@@ -533,12 +528,12 @@ class _GCSStreamingReadFile(_BaseFile):
 
     @_check_closed
     def readall(self):
-        self._read_into_buf(size=self._blob.size - self._offset)
+        self._read_into_buf(size=self._size - self._offset)
         return self._read_from_buf()
 
     @_check_closed
     def readinto(self, b):
-        raise NotImplementedError
+        b[:] = self.read(len(b))
 
     @_check_closed
     def readable(self):
@@ -570,7 +565,7 @@ class _GCSStreamingReadFile(_BaseFile):
         elif whence == io.SEEK_CUR:
             new_offset = self._offset + offset
         elif whence == io.SEEK_END:
-            new_offset = self._blob.size + offset
+            new_offset = self._size + offset
         else:
             raise ValueError(f"invalid whence")
         if new_offset != self._offset:
@@ -586,10 +581,37 @@ class _GCSStreamingReadFile(_BaseFile):
         return self._offset
 
 
-class _GCSStreamingWriteFile(_BaseFile):
+class _GCSStreamingReadFile(_StreamingReadFile):
     def __init__(self, path, mode):
-        self._remote_path = path
         _bucket, self._blob = _make_gcs(path)
+        _reload_blob(self._blob)
+        super().__init__(path, mode, self._blob.size)
+
+    def _download_range(self, start, end):
+        return self._blob.download_as_string(start=start, end=end)
+
+
+class _HTTPStreamingReadFile(_StreamingReadFile):
+    def __init__(self, path, mode):
+        self._path = path
+        head = _get_head(path)
+        if head is None:
+            FileNotFoundError(f"No such file or directory: '{path}'")
+        assert head.headers["Accept-Ranges"] == "bytes"
+        size = head.headers["Content-Length"]
+        super().__init__(path, mode, size)
+
+    def _download_range(self, start, end):
+        req = Request(
+            url=self._path, headers={"Range": f"bytes={start}-{end-1}"}, method="GET"
+        )
+        resp = urlopen(req)
+        assert resp.getcode() == 206
+        return resp.read()
+
+
+class _StreamingWriteFile(_BaseFile):
+    def __init__(self, mode):
         self._text_mode = "b" not in mode
         self._newline = b"\n"
         self._empty = b""
@@ -597,8 +619,10 @@ class _GCSStreamingWriteFile(_BaseFile):
         self._offset = 0
         # contents waiting to be uploaded
         self._buf = self._empty
-        self._upload_url = self._blob.create_resumable_upload_session()
         super().__init__()
+
+    def _upload_chunk(self, chunk, start, end, finalize):
+        raise NotImplementedError
 
     def _upload_buf(self, finalize=False):
         size = STREAMING_CHUNK_SIZE
@@ -609,6 +633,51 @@ class _GCSStreamingWriteFile(_BaseFile):
 
         start = self._offset
         end = self._offset + len(chunk) - 1
+        self._upload_chunk(chunk, start, end, finalize)
+        self._offset += len(chunk)
+
+    def close(self):
+        if not hasattr(self, "closed") or self.closed:
+            return
+
+        # we will have a partial remaining buffer at this point
+        self._upload_buf(finalize=True)
+        self.closed = True
+
+    @_check_closed
+    def tell(self):
+        return self._offset
+
+    @_check_closed
+    def truncate(self):
+        raise io.UnsupportedOperation("operation not supported")
+
+    @_check_closed
+    def writable(self):
+        return True
+
+    @_check_closed
+    def write(self, b):
+        if self._text_mode:
+            b = b.encode("utf8")
+
+        self._buf += b
+        while len(self._buf) > STREAMING_CHUNK_SIZE:
+            self._upload_buf()
+
+    @_check_closed
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
+
+class _GCSStreamingWriteFile(_StreamingWriteFile):
+    def __init__(self, path, mode):
+        _bucket, self._blob = _make_gcs(path)
+        self._upload_url = self._blob.create_resumable_upload_session()
+        super().__init__(mode)
+
+    def _upload_chunk(self, chunk, start, end, finalize):
         total_size = "*"
         if finalize:
             total_size = self._offset + len(chunk)
@@ -630,55 +699,12 @@ class _GCSStreamingWriteFile(_BaseFile):
             resp = urlopen(req)
         except urllib.error.HTTPError as e:
             if finalize:
-                print(e.read(), req.headers)
                 raise
             # 308 is the expected response
             if e.getcode() != 308:
                 raise
         if finalize:
             assert resp.getcode() in (200, 201)
-        self._offset += len(chunk)
-
-    def close(self):
-        if not hasattr(self, "closed") or self.closed:
-            return
-
-        # we will have a partial remaining buffer at this point
-        self._upload_buf(finalize=True)
-        self.closed = True
-
-    @_check_closed
-    def tell(self):
-        return self._offset
-
-    @_check_closed
-    def truncate(self):
-        raise NotImplementedError
-
-    @_check_closed
-    def writable(self):
-        return True
-
-    @_check_closed
-    def write(self, b):
-        if self._text_mode:
-            b = b.encode("utf8")
-
-        self._buf += b
-        while len(self._buf) > STREAMING_CHUNK_SIZE:
-            self._upload_buf()
-
-    @_check_closed
-    def writelines(self, lines):
-        for line in lines:
-            self.write(line)
-
-
-# class _HTTPStreamingReadFile(_BaseFile):
-#     # TODO
-#     # reuse streaming read file but with a custom command to get the data
-#     # handle case where ranges doesn't work
-#     pass
 
 
 class BlobFile:
@@ -708,14 +734,11 @@ class BlobFile:
         elif _is_http_path(path):
             if self._mode in ("w", "wb"):
                 self._f = _LocalFile(path, self._mode)
-                # raise Exception("cannot write to http paths")
             elif self._mode in ("r", "rb"):
-                self._f = _LocalFile(path, self._mode)
-                # if streaming:
-                # raise Exception("oh no")
-                # self._f = _HTTPStreamingReadFile(path, self._mode)
-                # else:
-                # self._f = _LocalFile(path, self._mode)
+                if streaming:
+                    self._f = _HTTPStreamingReadFile(path, self._mode)
+                else:
+                    self._f = _LocalFile(path, self._mode)
             else:
                 raise Exception(f"unsupported mode {self._mode}")
         else:

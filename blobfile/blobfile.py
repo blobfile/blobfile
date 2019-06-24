@@ -735,6 +735,7 @@ class BlobFile:
                 raise Exception(f"unsupported mode {self._mode}")
         elif _is_http_path(path):
             if self._mode in ("w", "wb"):
+                # don't have a streaming version of this yet
                 self._f = _LocalFile(path, self._mode)
             elif self._mode in ("r", "rb"):
                 if streaming:

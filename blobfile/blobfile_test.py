@@ -113,11 +113,6 @@ def _get_temp_http_path():
                 return f
 
             def copyfile(self, source, outputfile):
-                """Copies data between two file objects
-                If the current request is a 'Range' request then only the requested
-                bytes are copied.
-                Otherwise, the entire file is copied using SimpleHTTPServer.copyfile
-                """
                 if "Range" not in self.headers:
                     http.server.SimpleHTTPRequestHandler.copyfile(
                         self, source, outputfile

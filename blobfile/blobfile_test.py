@@ -45,10 +45,6 @@ def _get_temp_http_path():
 
             # from https://gist.github.com/wassname/d7582bbcbd91189f80d8624ba46542c0
             def send_head(self):
-                """Common code for GET and HEAD commands.
-                Return value is either a file object or None
-                """
-
                 path = self.translate_path(self.path)
                 ctype = self.guess_type(path)
 
@@ -75,7 +71,7 @@ def _get_temp_http_path():
                     )
                 if start == "":
                     # If no start, then the request is for last N bytes
-                    ## e.g. bytes=-500
+                    # e.g. bytes=-500
                     try:
                         end = int(end)
                     except ValueError:
@@ -103,7 +99,7 @@ def _get_temp_http_path():
                 end = min(end, size - 1)
                 self.range = (start, end)
                 # Setup headers and response
-                l = end - start + 1
+                content_length = end - start + 1
                 if "Range" in self.headers:
                     self.send_response(206)
                 else:
@@ -111,30 +107,32 @@ def _get_temp_http_path():
                 self.send_header("Content-type", ctype)
                 self.send_header("Accept-Ranges", "bytes")
                 self.send_header("Content-Range", "bytes %s-%s/%s" % (start, end, size))
-                self.send_header("Content-Length", str(l))
+                self.send_header("Content-Length", str(content_length))
                 self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
                 self.end_headers()
                 return f
 
-            def copyfile(self, infile, outfile):
+            def copyfile(self, source, outputfile):
                 """Copies data between two file objects
                 If the current request is a 'Range' request then only the requested
                 bytes are copied.
                 Otherwise, the entire file is copied using SimpleHTTPServer.copyfile
                 """
                 if "Range" not in self.headers:
-                    http.server.SimpleHTTPRequestHandler.copyfile(self, infile, outfile)
+                    http.server.SimpleHTTPRequestHandler.copyfile(
+                        self, source, outputfile
+                    )
                     return
 
                 start, end = self.range
-                infile.seek(start)
+                source.seek(start)
                 bufsize = 64 * 1024  # 64KB
                 remainder = (end - start) % bufsize
                 times = int((end - start) / bufsize)
                 steps = [bufsize] * times + [remainder]
                 for _ in steps:
-                    buf = infile.read(bufsize)
-                    outfile.write(buf)
+                    buf = source.read(bufsize)
+                    outputfile.write(buf)
 
             def do_POST(self):
                 filepath = os.path.join(tmpdir, self.path[1:])
@@ -310,9 +308,9 @@ def test_copy():
 def test_exists():
     contents = b"meow!"
     for ctx in [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]:
-        with ctx() as (write_path, path):
+        with ctx() as path:
             assert not bf.exists(path)
-            _write_contents(write_path, contents)
+            _write_contents(path, contents)
             assert bf.exists(path)
 
 

@@ -279,6 +279,8 @@ def cache_key(path):
         return binascii.hexlify(base64.b64decode(blob.md5_hash)).decode("utf8")
     elif _is_http_path(path):
         head = _get_head(path)
+        if head.getcode() != 200:
+            raise FileNotFoundError(f"No such file or directory: '{path}'")
         key_parts = [path]
         for header in ["Last-Modified", "Content-Length", "ETag"]:
             if header in head.headers:
@@ -595,10 +597,10 @@ class _HTTPStreamingReadFile(_StreamingReadFile):
     def __init__(self, path, mode):
         self._path = path
         head = _get_head(path)
-        if head is None:
-            FileNotFoundError(f"No such file or directory: '{path}'")
+        if head.getcode() != 200:
+            raise FileNotFoundError(f"No such file or directory: '{path}'")
         assert head.headers["Accept-Ranges"] == "bytes"
-        size = head.headers["Content-Length"]
+        size = int(head.headers["Content-Length"])
         super().__init__(path, mode, size)
 
     def _download_range(self, start, end):

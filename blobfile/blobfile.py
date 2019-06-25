@@ -282,7 +282,7 @@ def cache_key(path):
         if head.getcode() != 200:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         key_parts = [path]
-        for header in ["Last-Modified", "Content-Length", "ETag"]:
+        for header in ["Last-Modified", "Content-Length", "ETag", "Content-MD5"]:
             if header in head.headers:
                 key_parts.append(head.headers[header])
     else:
@@ -307,6 +307,25 @@ def get_url(path):
         return f"file://{path}"
     else:
         raise Exception("unrecognized path")
+
+
+def md5(path):
+    """
+    Get the MD5 hash for a file
+    """
+    if _is_gcs_path(path):
+        _bucket, blob = _make_gcs(path)
+        _reload_blob(blob)
+        return binascii.hexlify(base64.b64decode(blob.md5_hash)).decode("utf8")
+    else:
+        m = hashlib.md5()
+        with BlobFile(path, "rb") as f:
+            while True:
+                block = f.read(HASH_CHUNK_SIZE)
+                if block == b"":
+                    break
+                m.update(block)
+        return m.hexdigest()
 
 
 class _LocalFile:
@@ -744,8 +763,10 @@ class BlobFile:
                     self._f = _LocalFile(path, self._mode)
             else:
                 raise Exception(f"unsupported mode {self._mode}")
-        else:
+        elif _is_local_path(path):
             self._f = open(file=path, mode=self._mode)
+        else:
+            raise Exception("unrecognized path")
 
     def __enter__(self):
         return self._f.__enter__()

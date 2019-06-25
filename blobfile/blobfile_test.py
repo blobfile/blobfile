@@ -7,6 +7,7 @@ import json
 import urllib.request
 import threading
 import http.server
+import hashlib
 
 import pytest
 from tensorflow.io import gfile  # pylint: disable=import-error
@@ -240,34 +241,40 @@ def test_join():
         assert desired_output == actual_output, f"{input_a} {input_b}"
 
 
-def test_cache_key():
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]
+)
+def test_cache_key(ctx):
     contents = b"meow!"
-    for ctx in [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]:
-        with ctx() as path:
-            _write_contents(path, contents)
-            first_key = bf.cache_key(path)
-            _write_contents(path, contents + contents)
-            second_key = bf.cache_key(path)
-            assert first_key != second_key
+    with ctx() as path:
+        _write_contents(path, contents)
+        first_key = bf.cache_key(path)
+        _write_contents(path, contents + contents)
+        second_key = bf.cache_key(path)
+        assert first_key != second_key
 
 
-def test_get_url():
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]
+)
+def test_get_url(ctx):
     contents = b"meow!"
-    for ctx in [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]:
-        with ctx() as path:
-            _write_contents(path, contents)
-            url = bf.get_url(path)
-            assert urllib.request.urlopen(url).read() == contents
+    with ctx() as path:
+        _write_contents(path, contents)
+        url = bf.get_url(path)
+        assert urllib.request.urlopen(url).read() == contents
 
 
-def test_read_write():
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]
+)
+def test_read_write(ctx):
     contents = b"meow!"
-    for ctx in [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]:
-        with ctx() as path:
-            with bf.BlobFile(path, "wb") as w:
-                w.write(contents)
-            with bf.BlobFile(path, "rb") as r:
-                assert r.read() == contents
+    with ctx() as path:
+        with bf.BlobFile(path, "wb") as w:
+            w.write(contents)
+        with bf.BlobFile(path, "rb") as r:
+            assert r.read() == contents
 
 
 def test_copy():
@@ -300,30 +307,25 @@ def test_copy():
             assert _read_contents(dst) == contents
 
 
-def test_exists():
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]
+)
+def test_exists(ctx):
     contents = b"meow!"
-    for ctx in [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]:
-        with ctx() as path:
-            assert not bf.exists(path)
-            _write_contents(path, contents)
-            assert bf.exists(path)
+    with ctx() as path:
+        assert not bf.exists(path)
+        _write_contents(path, contents)
+        assert bf.exists(path)
 
 
 @pytest.mark.parametrize("local", [True, False])
 @pytest.mark.parametrize("binary", [True, False])
 @pytest.mark.parametrize("streaming", [True, False])
-@pytest.mark.parametrize("kind", ["local", "gcs", "http"])
-def test_more_read_write(local, binary, streaming, kind):
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]
+)
+def test_more_read_write(local, binary, streaming, ctx):
     rng = np.random.RandomState(0)
-
-    if kind == "local":
-        ctx = _get_temp_local_path
-    elif kind == "gcs":
-        ctx = _get_temp_gcs_path
-    elif kind == "http":
-        ctx = _get_temp_http_path
-    else:
-        raise Exception("unrecognized path")
 
     with ctx() as path:
         if binary:
@@ -396,20 +398,13 @@ def test_more_read_write(local, binary, streaming, kind):
 
 
 @pytest.mark.parametrize("streaming", [True, False])
-@pytest.mark.parametrize("kind", ["local", "gcs", "http"])
-def test_video(streaming, kind):
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]
+)
+def test_video(streaming, ctx):
     rng = np.random.RandomState(0)
     shape = (256, 64, 64, 3)
     video_data = rng.randint(0, 256, size=np.prod(shape), dtype=np.uint8).reshape(shape)
-
-    if kind == "local":
-        ctx = _get_temp_local_path
-    elif kind == "gcs":
-        ctx = _get_temp_gcs_path
-    elif kind == "http":
-        ctx = _get_temp_http_path
-    else:
-        raise Exception("unrecognized path")
 
     with ctx() as path:
         with bf.BlobFile(path, mode="wb", streaming=streaming) as wf:
@@ -455,3 +450,15 @@ def test_retry():
     with pytest.raises(Failed):
         bf.retry(f2, attempts=3, min_backoff=0.01)
     assert i == 3
+
+
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]
+)
+def test_md5(ctx):
+    contents = b"meow!"
+    meow_hash = hashlib.md5(contents).hexdigest()
+
+    with ctx() as path:
+        _write_contents(path, contents)
+        assert bf.md5(path) == meow_hash

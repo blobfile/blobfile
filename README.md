@@ -9,5 +9,6 @@ The main function is `BlobFile`, a replacement for `GFile`.  There are also a fe
 * `cache_key` - returns a cache key that can be used for the path (this is not guaranteed to change when the content changes, but should hopefully do that)
 * `retry` - useful for retrying since network operations often fail
 * `get_url` - returns a url for a path
+* `md5` - get the md5 hash for a path, for GCS this is fast, but for other backends this may be slow
 
 A number of existing `gfile` functions are currently not implemented.

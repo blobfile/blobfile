@@ -15,6 +15,8 @@ from .blobfile import (
     dirname,
     join,
     cache_key,
+    md5,
+    retry,
     BlobFile,
 )
 
@@ -35,5 +37,7 @@ __all__ = [
     "dirname",
     "join",
     "cache_key",
+    "md5",
+    "retry",
     "BlobFile",
 ]

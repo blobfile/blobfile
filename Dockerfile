@@ -10,3 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ADD env.yaml .
 RUN conda env update --name base --file env.yaml
+
+# git subrepo
+RUN apt-get install --yes git-core
+RUN git clone https://github.com/ingydotnet/git-subrepo /git-subrepo

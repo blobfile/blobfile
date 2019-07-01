@@ -14,9 +14,11 @@ import datetime
 import time
 
 from google.cloud.storage import Client
+from google.api_core import retry
 import google.api_core.exceptions
 
 
+DEFAULT_TIMEOUT = 60
 HASH_CHUNK_SIZE = 65536
 STREAMING_CHUNK_SIZE = 2 ** 20
 # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
@@ -28,22 +30,33 @@ gcs_client_pid = None
 gcs_client_lock = threading.Lock()
 
 
-def retry(fn, attempts=None, min_backoff=1, max_backoff=60):
-    """
-    Call `fn` `attempts` times, performing exponential backoff if it fails.
-    """
-    backoff = min_backoff
-    attempt = 0
-    while True:
-        attempt += 1
+def _log_callback(msg):
+    print(msg)
+
+
+def set_log_callback(fn):
+    global _log_callback
+    _log_callback = fn
+
+
+def _execute_request(req, retry_codes=(500,), timeout=DEFAULT_TIMEOUT):
+    for attempt, backoff in enumerate(
+        google.api_core.retry.exponential_sleep_generator(1.0, maximum=60.0)
+    ):
         try:
-            return fn()
-        except Exception:  # pylint: disable=broad-except
-            if attempts is not None and attempt >= attempts:
+            return urlopen(req, timeout=timeout)
+        except urllib.error.URLError as e:
+            if isinstance(e, urllib.error.HTTPError):
+                if e.getcode() not in retry_codes:
+                    return e
+            else:
+                # TODO: find transient urlerrors
+                # TODO: handle timeouts
                 raise
+        except socket.timeout as e:
+        if attempt > 3:
+            _log_callback(f"error {e} when executing http request {req}")
         time.sleep(backoff)
-        backoff *= 2
-        backoff = min(backoff, max_backoff)
 
 
 def _get_gcs_client():
@@ -84,11 +97,14 @@ def _make_gcs(path):
 
 def _get_head(path):
     req = urllib.request.Request(url=path, method="HEAD")
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return resp
-    except urllib.error.HTTPError as resp:
+    with _execute_request(req) as resp:
         return resp
+
+
+# this will retry for transient errors automatically
+@retry.Retry(deadline=None)
+def _retry_gcs(fn):
+    return fn()
 
 
 def _download_to_file(src, f):
@@ -97,10 +113,10 @@ def _download_to_file(src, f):
             shutil.copyfileobj(in_f, f)
     elif _is_gcs_path(src):
         _bucket, srcblob = _make_gcs(src)
-        srcblob.download_to_file(f)
+        _retry_gcs(lambda: srcblob.download_to_file(f))
     elif _is_http_path(src):
         req = urllib.request.Request(url=src, method="GET")
-        with urllib.request.urlopen(req) as resp:
+        with _execute_request(req) as resp:
             assert resp.getcode() == 200
             shutil.copyfileobj(resp, f)
     else:
@@ -113,10 +129,10 @@ def _upload_from_file(f, dst):
             shutil.copyfileobj(f, dst_f)
     elif _is_gcs_path(dst):
         _bucket, dstblob = _make_gcs(dst)
-        dstblob.upload_from_file(f)
+        _retry_gcs(lambda: dstblob.upload_from_file(f))
     elif _is_http_path(dst):
         req = urllib.request.Request(url=dst, data=f, method="POST")
-        with urllib.request.urlopen(req) as resp:
+        with _execute_request(req) as resp:
             assert resp.getcode() == 200
     else:
         raise Exception("unrecognized path")
@@ -136,8 +152,8 @@ def copy(src, dst, overwrite=False):
         token = None
         while True:
             try:
-                token, _bytes_rewritten, _total_bytes = dstblob.rewrite(
-                    srcblob, token=token
+                token, _bytes_rewritten, _total_bytes = _retry_gcs(
+                    lambda: dstblob.rewrite(srcblob, token=token)
                 )
             except google.api_core.exceptions.NotFound:
                 raise FileNotFoundError(f"src file '{src}' not found")
@@ -158,7 +174,7 @@ def exists(path):
             dirblob = blob
         else:
             _bucket, dirblob = _make_gcs(path + "/")
-        return blob.exists() or dirblob.exists()
+        return _retry_gcs(blob.exists) or _retry_gcs(dirblob.exists)
     elif _is_http_path(path):
         return _get_head(path).getcode() == 200
     else:
@@ -253,6 +269,8 @@ def join(a, b):
         return os.path.join(a, b)
 
 
+# TODO:does deadline=None work?
+@retry.Retry(deadline=None)
 def _reload_blob(blob):
     try:
         blob.reload()
@@ -609,7 +627,7 @@ class _GCSStreamingReadFile(_StreamingReadFile):
         super().__init__(path, mode, self._blob.size)
 
     def _download_range(self, start, end):
-        return self._blob.download_as_string(start=start, end=end)
+        return _retry_gcs(lambda: self._blob.download_as_string(start=start, end=end))
 
 
 class _HTTPStreamingReadFile(_StreamingReadFile):
@@ -626,9 +644,9 @@ class _HTTPStreamingReadFile(_StreamingReadFile):
         req = Request(
             url=self._path, headers={"Range": f"bytes={start}-{end-1}"}, method="GET"
         )
-        resp = urlopen(req)
-        assert resp.getcode() == 206
-        return resp.read()
+        with _execute_request(req) as resp:
+            assert resp.getcode() == 206
+            return resp.read()
 
 
 class _StreamingWriteFile(_BaseFile):
@@ -695,9 +713,11 @@ class _StreamingWriteFile(_BaseFile):
 class _GCSStreamingWriteFile(_StreamingWriteFile):
     def __init__(self, path, mode):
         _bucket, self._blob = _make_gcs(path)
-        self._upload_url = self._blob.create_resumable_upload_session()
+        self._upload_url = _retry_gcs(self._blob.create_resumable_upload_session)
         super().__init__(mode)
 
+    # TODO: handle when chunk upload succeeded but we thought it failed
+    # need to figure out what code we get when that happens
     def _upload_chunk(self, chunk, start, end, finalize):
         total_size = "*"
         if finalize:
@@ -716,16 +736,12 @@ class _GCSStreamingWriteFile(_StreamingWriteFile):
             # not clear what the correct content-range is for a zero length file, so just don't include the header
             req.headers["Content-Range"] = content_range
 
-        try:
-            resp = urlopen(req)
-        except urllib.error.HTTPError as e:
+        with _execute_request(req) as resp:
             if finalize:
-                raise
-            # 308 is the expected response
-            if e.getcode() != 308:
-                raise
-        if finalize:
-            assert resp.getcode() in (200, 201)
+                assert resp.getcode() in (200, 201)
+            else:
+                # 308 is the expected response
+                assert resp.getcode() == 308
 
 
 class BlobFile:
@@ -736,7 +752,7 @@ class BlobFile:
         streaming: set to False to do a single copy instead of streaming reads/writes
     """
 
-    def __init__(self, path, mode="r", streaming=True):
+    def __init__(self, path, mode="r", streaming=False):
         assert not path.endswith("/")
         self._mode = mode
         if _is_gcs_path(path):

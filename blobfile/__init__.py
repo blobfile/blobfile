@@ -18,6 +18,7 @@ from .blobfile import (
     get_url,
     md5,
     retry,
+    set_log_callback,
     BlobFile,
 )
 
@@ -42,4 +43,5 @@ __all__ = [
     "md5",
     "retry",
     "BlobFile",
+    "set_log_callback",
 ]

@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.error
 import datetime
 import time
+import socket
 
 from google.cloud.storage import Client
 from google.api_core import retry
@@ -29,9 +30,7 @@ gcs_client = None
 gcs_client_pid = None
 gcs_client_lock = threading.Lock()
 
-
-def _log_callback(msg):
-    print(msg)
+_log_callback = lambda msg: print(msg)
 
 
 def set_log_callback(fn):
@@ -51,9 +50,9 @@ def _execute_request(req, retry_codes=(500,), timeout=DEFAULT_TIMEOUT):
                     return e
             else:
                 # TODO: find transient urlerrors
-                # TODO: handle timeouts
                 raise
         except socket.timeout as e:
+            pass
         if attempt > 3:
             _log_callback(f"error {e} when executing http request {req}")
         time.sleep(backoff)

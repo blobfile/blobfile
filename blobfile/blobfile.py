@@ -275,7 +275,6 @@ def join(a, b):
         return os.path.join(a, b)
 
 
-# TODO:does deadline=None work?
 @retry.Retry(deadline=None)
 def _reload_blob(blob):
     try:
@@ -722,8 +721,6 @@ class _GCSStreamingWriteFile(_StreamingWriteFile):
         self._upload_url = _retry_gcs(self._blob.create_resumable_upload_session)
         super().__init__(mode)
 
-    # TODO: handle when chunk upload succeeded but we thought it failed
-    # need to figure out what code we get when that happens
     def _upload_chunk(self, chunk, start, end, finalize):
         total_size = "*"
         if finalize:

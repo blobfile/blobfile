@@ -30,7 +30,9 @@ gcs_client = None
 gcs_client_pid = None
 gcs_client_lock = threading.Lock()
 
-_log_callback = lambda msg: print(msg)
+
+def _log_callback(msg):
+    print(msg)
 
 
 def set_log_callback(fn):
@@ -42,9 +44,11 @@ def _execute_request(req, retry_codes=(500,), timeout=DEFAULT_TIMEOUT):
     for attempt, backoff in enumerate(
         google.api_core.retry.exponential_sleep_generator(1.0, maximum=60.0)
     ):
+        err = None
         try:
             return urlopen(req, timeout=timeout)
         except urllib.error.URLError as e:
+            err = e
             if isinstance(e, urllib.error.HTTPError):
                 if e.getcode() not in retry_codes:
                     return e
@@ -52,9 +56,9 @@ def _execute_request(req, retry_codes=(500,), timeout=DEFAULT_TIMEOUT):
                 # TODO: find transient urlerrors
                 raise
         except socket.timeout as e:
-            pass
+            err = e
         if attempt > 3:
-            _log_callback(f"error {e} when executing http request {req}")
+            _log_callback(f"error {err} when executing http request {req}")
         time.sleep(backoff)
 
 

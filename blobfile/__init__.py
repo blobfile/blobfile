@@ -17,7 +17,6 @@ from .blobfile import (
     cache_key,
     get_url,
     md5,
-    retry,
     set_log_callback,
     BlobFile,
 )
@@ -41,7 +40,6 @@ __all__ = [
     "cache_key",
     "get_url",
     "md5",
-    "retry",
-    "BlobFile",
     "set_log_callback",
+    "BlobFile",
 ]

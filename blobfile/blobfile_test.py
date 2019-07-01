@@ -427,31 +427,6 @@ def test_video(streaming, ctx):
                     assert np.array_equal(frame, video_data[idx])
 
 
-def test_retry():
-    i = 0
-
-    def f():
-        nonlocal i
-        i += 1
-
-    bf.retry(f, attempts=3, min_backoff=0.01)
-    assert i == 1
-
-    i = 0
-
-    class Failed(Exception):
-        pass
-
-    def f2():
-        nonlocal i
-        i += 1
-        raise Failed("oh no")
-
-    with pytest.raises(Failed):
-        bf.retry(f2, attempts=3, min_backoff=0.01)
-    assert i == 3
-
-
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]
 )

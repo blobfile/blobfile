@@ -31,8 +31,12 @@ gcs_client_pid = None
 gcs_client_lock = threading.Lock()
 
 
-def _log_callback(msg):
+def __log_callback(msg):
     print(msg)
+
+
+# pytest can't figure this out when it's a def
+_log_callback = __log_callback
 
 
 def set_log_callback(fn):
@@ -47,13 +51,12 @@ def _execute_request(req, retry_codes=(500,), timeout=DEFAULT_TIMEOUT):
         err = None
         try:
             return urlopen(req, timeout=timeout)
-        except urllib.error.URLError as e:
+        except (urllib.error.URLError, urllib.error.HTTPError) as e:
             err = e
             if isinstance(e, urllib.error.HTTPError):
                 if e.getcode() not in retry_codes:
                     return e
             else:
-                # TODO: find transient urlerrors
                 raise
         except socket.timeout as e:
             err = e

@@ -25,10 +25,7 @@ STREAMING_CHUNK_SIZE = 2 ** 20
 # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
 assert STREAMING_CHUNK_SIZE % (256 * 1024) == 0
 
-gcs_client = None
-# it sounds like the client is threadsafe but not fork safe https://github.com/googleapis/google-cloud-python/issues/3272
-gcs_client_pid = None
-gcs_client_lock = threading.Lock()
+local = threading.local()
 
 
 def __log_callback(msg):
@@ -66,13 +63,20 @@ def _execute_request(req, retry_codes=(500,), timeout=DEFAULT_TIMEOUT):
 
 
 def _get_gcs_client():
-    global gcs_client, gcs_client_pid
-    with gcs_client_lock:
-        pid = os.getpid()
-        if gcs_client_pid is None or gcs_client_pid != pid:
-            gcs_client = Client()
-            gcs_client_pid = pid
-    return gcs_client
+    # it sounds like the client is not fork safe https://github.com/googleapis/google-cloud-python/issues/3272
+    # and also possibly not threadsafe https://github.com/kennethreitz/requests/issues/2766
+    create_gcs_client = False
+    pid = os.getpid()
+    if hasattr(local, "gcs_client"):
+        if local.gcs_client_pid != pid:
+            create_gcs_client = True
+    else:
+        create_gcs_client = True
+
+    if create_gcs_client:
+        local.gcs_client = Client()
+        local.gcs_client_pid = pid
+    return local.gcs_client
 
 
 def _is_local_path(path):

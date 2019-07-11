@@ -117,6 +117,20 @@ def _retry_gcs(fn):
     return fn()
 
 
+# upload_from_file will occasionally return a 410 for no obvious reason
+# https://github.com/cshesse/blobfile/issues/1
+@retry.Retry(
+    deadline=None,
+    predicate=lambda exc: retry.if_transient_error(exc)
+    or (
+        retry.if_exception_type(exc, google.api_core.exceptions.GoogleAPICallError)
+        and exc.code == 410
+    ),
+)
+def _retry_gcs_upload(fn):
+    return fn()
+
+
 def _download_to_file(src, f):
     if _is_local_path(src):
         with open(src, "rb") as in_f:
@@ -139,7 +153,7 @@ def _upload_from_file(f, dst):
             shutil.copyfileobj(f, dst_f)
     elif _is_gcs_path(dst):
         _bucket, dstblob = _make_gcs(dst)
-        _retry_gcs(lambda: dstblob.upload_from_file(f))
+        _retry_gcs_upload(lambda: dstblob.upload_from_file(f))
     elif _is_http_path(dst):
         req = urllib.request.Request(url=dst, data=f, method="POST")
         with _execute_request(req) as resp:

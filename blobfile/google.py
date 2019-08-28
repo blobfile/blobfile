@@ -6,7 +6,6 @@ import os
 import time
 import platform
 import datetime
-import collections
 import hashlib
 import binascii
 
@@ -169,22 +168,28 @@ def create_resumable_upload_request(access_token, bucket, name):
 
 
 def generate_signed_url(
-    bucket, name, expiration, http_method="GET", query_parameters=None, headers=None
+    bucket, name, expiration, method="GET", params=None, headers=None
 ):
+    if params is None:
+        params = {}
+
+    if headers is None:
+        headers = {}
+
+    # https://cloud.google.com/storage/docs/access-control/signing-urls-manually
     creds = _load_credentials()
     if "private_key" not in creds:
         raise Exception(
             "private key not found in credentials, please set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to point to a JSON key for a service account to use this call"
         )
 
-    # https://cloud.google.com/storage/docs/access-control/signing-urls-manually
     if expiration > MAX_EXPIRATION:
         raise Exception(
             f"expiration can't be longer than {MAX_EXPIRATION} seconds (7 days)."
         )
 
     escaped_object_name = urllib.parse.quote(name, safe="")
-    canonical_uri = "/{}/{}".format(bucket, escaped_object_name)
+    canonical_uri = f"/{bucket}/{escaped_object_name}"
 
     datetime_now = datetime.datetime.utcnow()
     request_timestamp = datetime_now.strftime("%Y%m%dT%H%M%SZ")
@@ -192,35 +197,30 @@ def generate_signed_url(
 
     credential_scope = f"{datestamp}/auto/storage/goog4_request"
     credential = f"{creds['client_email']}/{credential_scope}"
-
-    if headers is None:
-        headers = dict()
     headers["host"] = "storage.googleapis.com"
 
     canonical_headers = ""
-    ordered_headers = collections.OrderedDict(sorted(headers.items()))
-    for k, v in ordered_headers.items():
+    ordered_headers = sorted(headers.items())
+    for k, v in ordered_headers:
         lower_k = str(k).lower()
         strip_v = str(v).lower()
         canonical_headers += f"{lower_k}:{strip_v}\n"
 
     signed_headers_parts = []
-    for k, _ in ordered_headers.items():
+    for k, _ in ordered_headers:
         lower_k = str(k).lower()
         signed_headers_parts.append(lower_k)
     signed_headers = ";".join(signed_headers_parts)
 
-    if query_parameters is None:
-        query_parameters = {}
-    query_parameters["X-Goog-Algorithm"] = "GOOG4-RSA-SHA256"
-    query_parameters["X-Goog-Credential"] = credential
-    query_parameters["X-Goog-Date"] = request_timestamp
-    query_parameters["X-Goog-Expires"] = expiration
-    query_parameters["X-Goog-SignedHeaders"] = signed_headers
+    params["X-Goog-Algorithm"] = "GOOG4-RSA-SHA256"
+    params["X-Goog-Credential"] = credential
+    params["X-Goog-Date"] = request_timestamp
+    params["X-Goog-Expires"] = expiration
+    params["X-Goog-SignedHeaders"] = signed_headers
 
     canonical_query_string_parts = []
-    ordered_query_parameters = collections.OrderedDict(sorted(query_parameters.items()))
-    for k, v in ordered_query_parameters.items():
+    ordered_params = sorted(params.items())
+    for k, v in ordered_params:
         encoded_k = urllib.parse.quote(str(k), safe="")
         encoded_v = urllib.parse.quote(str(v), safe="")
         canonical_query_string_parts.append(f"{encoded_k}={encoded_v}")
@@ -228,7 +228,7 @@ def generate_signed_url(
 
     canonical_request = "\n".join(
         [
-            http_method,
+            method,
             canonical_uri,
             canonical_query_string,
             canonical_headers,

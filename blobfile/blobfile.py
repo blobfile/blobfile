@@ -10,13 +10,11 @@ import functools
 from urllib.request import urlopen, Request
 import urllib.parse
 import urllib.error
-import datetime
 import time
+import json
 import socket
 
-from google.cloud.storage import Client
-from google.api_core import retry
-import google.api_core.exceptions
+from . import google
 
 
 DEFAULT_TIMEOUT = 60
@@ -24,8 +22,6 @@ HASH_CHUNK_SIZE = 65536
 STREAMING_CHUNK_SIZE = 2 ** 20
 # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
 assert STREAMING_CHUNK_SIZE % (256 * 1024) == 0
-
-local = threading.local()
 
 
 def __log_callback(msg):
@@ -41,17 +37,52 @@ def set_log_callback(fn):
     _log_callback = fn
 
 
+class AccessTokenManager:
+    def __init__(self, scopes):
+        self._scopes = scopes
+        self._access_token = None
+        self._lock = threading.Lock()
+        self._expiration = None
+
+    def get_token(self):
+        with self._lock:
+            now = time.time()
+            if self._expiration is None or now > self._expiration:
+                self._access_token = None
+
+            if self._access_token is None:
+                req = google.create_access_token_request(self._scopes)
+                with _execute_request(req) as resp:
+                    assert resp.code == 200
+                    result = json.load(resp)
+                    self._access_token = result["access_token"]
+                    self._expiration = now + result["expires_in"]
+        return self._access_token
+
+
+global_access_token_manager = AccessTokenManager(
+    ["https://www.googleapis.com/auth/devstorage.full_control"]
+)
+
+
+def exponential_sleep_generator(initial, maximum, multiplier=2):
+    value = initial
+    while True:
+        yield value
+        value *= multiplier
+        if value > maximum:
+            value = maximum
+
+
 def _execute_request(req, retry_codes=(500,), timeout=DEFAULT_TIMEOUT):
-    for attempt, backoff in enumerate(
-        google.api_core.retry.exponential_sleep_generator(1.0, maximum=60.0)
-    ):
+    for attempt, backoff in enumerate(exponential_sleep_generator(1.0, maximum=60.0)):
         err = None
         try:
             return urlopen(req, timeout=timeout)
         except (urllib.error.URLError, urllib.error.HTTPError) as e:
             err = e
             if isinstance(e, urllib.error.HTTPError):
-                if e.getcode() not in retry_codes:
+                if e.code not in retry_codes:
                     return e
             else:
                 raise
@@ -60,23 +91,6 @@ def _execute_request(req, retry_codes=(500,), timeout=DEFAULT_TIMEOUT):
         if attempt > 3:
             _log_callback(f"error {err} when executing http request {req}")
         time.sleep(backoff)
-
-
-def _get_gcs_client():
-    # it sounds like the client is not fork safe https://github.com/googleapis/google-cloud-python/issues/3272
-    # and also possibly not threadsafe https://github.com/kennethreitz/requests/issues/2766
-    create_gcs_client = False
-    pid = os.getpid()
-    if hasattr(local, "gcs_client"):
-        if local.gcs_client_pid != pid:
-            create_gcs_client = True
-    else:
-        create_gcs_client = True
-
-    if create_gcs_client:
-        local.gcs_client = Client()
-        local.gcs_client_pid = pid
-    return local.gcs_client
 
 
 def _is_local_path(path):
@@ -98,37 +112,10 @@ def _split_url(path):
     return url.scheme, url.netloc, url.path[1:]
 
 
-def _make_gcs(path):
-    _scheme, bucket_path, blob_path = _split_url(path)
-    client = _get_gcs_client()
-    bucket = client.bucket(bucket_path)
-    return bucket, bucket.blob(blob_path)
-
-
 def _get_head(path):
     req = urllib.request.Request(url=path, method="HEAD")
     with _execute_request(req) as resp:
         return resp
-
-
-# this will retry for transient errors automatically
-@retry.Retry(deadline=None)
-def _retry_gcs(fn):
-    return fn()
-
-
-# upload_from_file will occasionally return a 410 for no obvious reason
-# https://github.com/cshesse/blobfile/issues/1
-@retry.Retry(
-    deadline=None,
-    predicate=lambda exc: retry.if_transient_error(exc)
-    or (
-        retry.if_exception_type(exc, google.api_core.exceptions.GoogleAPICallError)
-        and exc.code == 410
-    ),
-)
-def _retry_gcs_upload(fn):
-    return fn()
 
 
 def _download_to_file(src, f):
@@ -136,12 +123,17 @@ def _download_to_file(src, f):
         with open(src, "rb") as in_f:
             shutil.copyfileobj(in_f, f)
     elif _is_gcs_path(src):
-        _bucket, srcblob = _make_gcs(src)
-        _retry_gcs(lambda: srcblob.download_to_file(f))
+        _scheme, srcbucket, srcname = _split_url(src)
+        req = google.create_read_blob_request(
+            global_access_token_manager.get_token(), srcbucket, srcname
+        )
+        with _execute_request(req) as resp:
+            assert resp.code == 200
+            shutil.copyfileobj(resp, f)
     elif _is_http_path(src):
         req = urllib.request.Request(url=src, method="GET")
         with _execute_request(req) as resp:
-            assert resp.getcode() == 200
+            assert resp.code == 200
             shutil.copyfileobj(resp, f)
     else:
         raise Exception("unrecognized path")
@@ -152,12 +144,26 @@ def _upload_from_file(f, dst):
         with open(dst, "wb") as dst_f:
             shutil.copyfileobj(f, dst_f)
     elif _is_gcs_path(dst):
-        _bucket, dstblob = _make_gcs(dst)
-        _retry_gcs_upload(lambda: dstblob.upload_from_file(f))
+        _scheme, dstbucket, dstname = _split_url(dst)
+        req = google.create_resumable_upload_request(
+            global_access_token_manager.get_token(), dstbucket, dstname
+        )
+        with _execute_request(req) as resp:
+            assert resp.code == 200
+            upload_url = resp.headers["Location"]
+
+        req = Request(
+            url=upload_url,
+            data=f,
+            headers={"Content-Type": "application/octet-stream"},
+            method="PUT",
+        )
+        with _execute_request(req) as resp:
+            assert resp.code in (200, 201)
     elif _is_http_path(dst):
         req = urllib.request.Request(url=dst, data=f, method="POST")
         with _execute_request(req) as resp:
-            assert resp.getcode() == 200
+            assert resp.code == 200
     else:
         raise Exception("unrecognized path")
 
@@ -171,36 +177,72 @@ def copy(src, dst, overwrite=False):
 
     # special case gcs to gcs copy, don't download the file
     if _is_gcs_path(src) and _is_gcs_path(dst):
-        _bucket, srcblob = _make_gcs(src)
-        _bucket, dstblob = _make_gcs(dst)
+        _scheme, srcbucket, srcname = _split_url(src)
+        _scheme, dstbucket, dstname = _split_url(dst)
         token = None
         while True:
-            try:
-                token, _bytes_rewritten, _total_bytes = _retry_gcs(
-                    lambda: dstblob.rewrite(srcblob, token=token)
-                )
-            except google.api_core.exceptions.NotFound:
-                raise FileNotFoundError(f"src file '{src}' not found")
-            if token is None:
-                break
+            params = None
+            if token is not None:
+                params = {"rewriteToken": token}
+            req = google.create_api_request(
+                access_token=global_access_token_manager.get_token(),
+                url=google.build_url(
+                    "/storage/v1/b/{sourceBucket}/o/{sourceObject}/rewriteTo/b/{destinationBucket}/o/{destinationObject}",
+                    sourceBucket=srcbucket,
+                    sourceObject=srcname,
+                    destinationBucket=dstbucket,
+                    destinationObject=dstname,
+                ),
+                method="POST",
+                params=params,
+            )
+            with _execute_request(req) as resp:
+                if resp.code == 404:
+                    raise FileNotFoundError(f"src file '{src}' not found")
+                assert resp.code == 200
+                result = json.load(resp)
+                if result["done"]:
+                    break
+                token = result["rewriteToken"]
         return
 
     with BlobFile(src, "rb") as src_f, BlobFile(dst, "wb") as dst_f:
         shutil.copyfileobj(src_f, dst_f)
 
 
+def _gcs_get_blob_metadata(path):
+    _scheme, bucket, blob = _split_url(path)
+    req = google.create_api_request(
+        access_token=global_access_token_manager.get_token(),
+        url=google.build_url(
+            "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
+        ),
+        method="GET",
+    )
+    with _execute_request(req) as resp:
+        assert resp.code in (200, 404)
+        return resp, json.load(resp)
+
+
+def _gcs_exists(path):
+    resp, _metadata = _gcs_get_blob_metadata(path)
+    assert resp.code in (200, 404)
+    return resp.code == 200
+
+
 def exists(path):
     if _is_local_path(path):
         return os.path.exists(path)
     elif _is_gcs_path(path):
-        _bucket, blob = _make_gcs(path)
-        if path.endswith("/"):
-            dirblob = blob
-        else:
-            _bucket, dirblob = _make_gcs(path + "/")
-        return _retry_gcs(blob.exists) or _retry_gcs(dirblob.exists)
+        if _gcs_exists(path):
+            return True
+        if not path.endswith("/"):
+            return _gcs_exists(path + "/")
+        return False
     elif _is_http_path(path):
-        return _get_head(path).getcode() == 200
+        code = _get_head(path).code
+        assert code in (200, 404)
+        return code == 200
     else:
         raise Exception("unrecognized path")
 
@@ -293,21 +335,6 @@ def join(a, b):
         return os.path.join(a, b)
 
 
-@retry.Retry(deadline=None)
-def _reload_blob(blob):
-    try:
-        blob.reload()
-    except google.api_core.exceptions.NotFound:
-        raise FileNotFoundError(
-            f"No such file or directory: 'gs://{blob.bucket.name}/{blob.name}'"
-        )
-
-
-def _assert_blob_exists(path):
-    _bucket, blob = _make_gcs(path)
-    _reload_blob(blob)
-
-
 def cache_key(path):
     """
     Get a cache key for a file
@@ -315,12 +342,10 @@ def cache_key(path):
     if _is_local_path(path):
         key_parts = [path, os.path.getmtime(path), os.path.getsize(path)]
     elif _is_gcs_path(path):
-        _bucket, blob = _make_gcs(path)
-        _reload_blob(blob)
-        return binascii.hexlify(base64.b64decode(blob.md5_hash)).decode("utf8")
+        return md5(path)
     elif _is_http_path(path):
         head = _get_head(path)
-        if head.getcode() != 200:
+        if head.code != 200:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         key_parts = [path]
         for header in ["Last-Modified", "Content-Length", "ETag", "Content-MD5"]:
@@ -340,8 +365,10 @@ def get_url(path):
     Get a URL for the given path that a browser could open
     """
     if _is_gcs_path(path):
-        _bucket, blob = _make_gcs(path)
-        return blob.generate_signed_url(expiration=datetime.timedelta(days=365))
+        _scheme, bucket, blob = _split_url(path)
+        return google.generate_signed_url(
+            bucket, blob, expiration=google.MAX_EXPIRATION
+        )
     elif _is_http_path(path):
         return path
     elif _is_local_path(path):
@@ -355,9 +382,9 @@ def md5(path):
     Get the MD5 hash for a file
     """
     if _is_gcs_path(path):
-        _bucket, blob = _make_gcs(path)
-        _reload_blob(blob)
-        return binascii.hexlify(base64.b64decode(blob.md5_hash)).decode("utf8")
+        resp, metadata = _gcs_get_blob_metadata(path)
+        assert resp.code == 200
+        return binascii.hexlify(base64.b64decode(metadata["md5Hash"])).decode("utf8")
     else:
         m = hashlib.md5()
         with BlobFile(path, "rb") as f:
@@ -645,19 +672,30 @@ class _StreamingReadFile(_BaseFile):
 
 class _GCSStreamingReadFile(_StreamingReadFile):
     def __init__(self, path, mode):
-        _bucket, self._blob = _make_gcs(path)
-        _reload_blob(self._blob)
-        super().__init__(path, mode, self._blob.size)
+        resp, self._metadata = _gcs_get_blob_metadata(path)
+        if resp.code == 404:
+            raise FileNotFoundError(f"No such file or directory: '{path}'")
+        assert resp.code == 200
+        super().__init__(path, mode, int(self._metadata["size"]))
 
     def _download_range(self, start, end):
-        return _retry_gcs(lambda: self._blob.download_as_string(start=start, end=end))
+        req = google.create_read_blob_request(
+            access_token=global_access_token_manager.get_token(),
+            bucket=self._metadata["bucket"],
+            name=self._metadata["name"],
+            start=start,
+            end=end,
+        )
+        with _execute_request(req) as resp:
+            assert resp.code == 206
+            return resp.read()
 
 
 class _HTTPStreamingReadFile(_StreamingReadFile):
     def __init__(self, path, mode):
         self._path = path
         head = _get_head(path)
-        if head.getcode() != 200:
+        if head.code != 200:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         assert head.headers["Accept-Ranges"] == "bytes"
         size = int(head.headers["Content-Length"])
@@ -668,7 +706,7 @@ class _HTTPStreamingReadFile(_StreamingReadFile):
             url=self._path, headers={"Range": f"bytes={start}-{end-1}"}, method="GET"
         )
         with _execute_request(req) as resp:
-            assert resp.getcode() == 206
+            assert resp.code == 206
             return resp.read()
 
 
@@ -735,8 +773,15 @@ class _StreamingWriteFile(_BaseFile):
 
 class _GCSStreamingWriteFile(_StreamingWriteFile):
     def __init__(self, path, mode):
-        _bucket, self._blob = _make_gcs(path)
-        self._upload_url = _retry_gcs(self._blob.create_resumable_upload_session)
+        _scheme, bucket, name = _split_url(path)
+        req = google.create_resumable_upload_request(
+            access_token=global_access_token_manager.get_token(),
+            bucket=bucket,
+            name=name,
+        )
+        with _execute_request(req) as resp:
+            assert resp.code == 200
+            self._upload_url = resp.headers["Location"]
         super().__init__(mode)
 
     def _upload_chunk(self, chunk, start, end, finalize):
@@ -759,10 +804,10 @@ class _GCSStreamingWriteFile(_StreamingWriteFile):
 
         with _execute_request(req) as resp:
             if finalize:
-                assert resp.getcode() in (200, 201)
+                assert resp.code in (200, 201)
             else:
                 # 308 is the expected response
-                assert resp.getcode() == 308
+                assert resp.code == 308
 
 
 class BlobFile:

@@ -7,7 +7,7 @@ README = open(os.path.join(SCRIPT_DIR, "README.md")).read()
 
 setup_dict = dict(
     name="blobfile",
-    version="0.2.3",
+    version="0.3.0",
     description="Read GCS and local paths with the same interface, clone of tensorflow.io.gfile",
     long_description=README,
     long_description_content_type="text/markdown",
@@ -15,7 +15,7 @@ setup_dict = dict(
     author="Christopher Hesse",
     license="Public Domain",
     packages=find_packages(),
-    install_requires=["google-cloud-storage~=1.16"],
+    install_requires=["pycryptodomex~=3.8.2"],
     extras_require={"dev": ["pytest", "tensorflow", "imageio", "imageio-ffmpeg"]},
 )
 

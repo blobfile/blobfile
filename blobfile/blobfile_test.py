@@ -318,13 +318,12 @@ def test_exists(ctx):
         assert bf.exists(path)
 
 
-@pytest.mark.parametrize("local", [True, False])
 @pytest.mark.parametrize("binary", [True, False])
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_http_path]
 )
-def test_more_read_write(local, binary, streaming, ctx):
+def test_more_read_write(binary, streaming, ctx):
     rng = np.random.RandomState(0)
 
     with ctx() as path:

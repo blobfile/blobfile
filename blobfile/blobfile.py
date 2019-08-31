@@ -38,6 +38,10 @@ def set_log_callback(fn):
 
 
 class AccessTokenManager:
+    """
+    Automatically refresh a google access token when it expires
+    """
+
     def __init__(self, scopes):
         self._scopes = scopes
         self._access_token = None
@@ -118,56 +122,6 @@ def _get_head(path):
         return resp
 
 
-def _download_to_file(src, f):
-    if _is_local_path(src):
-        with open(src, "rb") as in_f:
-            shutil.copyfileobj(in_f, f)
-    elif _is_gcs_path(src):
-        _scheme, srcbucket, srcname = _split_url(src)
-        req = google.create_read_blob_request(
-            global_access_token_manager.get_token(), srcbucket, srcname
-        )
-        with _execute_request(req) as resp:
-            assert resp.code == 200
-            shutil.copyfileobj(resp, f)
-    elif _is_http_path(src):
-        req = urllib.request.Request(url=src, method="GET")
-        with _execute_request(req) as resp:
-            assert resp.code == 200
-            shutil.copyfileobj(resp, f)
-    else:
-        raise Exception("unrecognized path")
-
-
-def _upload_from_file(f, dst):
-    if _is_local_path(dst):
-        with open(dst, "wb") as dst_f:
-            shutil.copyfileobj(f, dst_f)
-    elif _is_gcs_path(dst):
-        _scheme, dstbucket, dstname = _split_url(dst)
-        req = google.create_resumable_upload_request(
-            global_access_token_manager.get_token(), dstbucket, dstname
-        )
-        with _execute_request(req) as resp:
-            assert resp.code == 200
-            upload_url = resp.headers["Location"]
-
-        req = Request(
-            url=upload_url,
-            data=f,
-            headers={"Content-Type": "application/octet-stream"},
-            method="PUT",
-        )
-        with _execute_request(req) as resp:
-            assert resp.code in (200, 201)
-    elif _is_http_path(dst):
-        req = urllib.request.Request(url=dst, data=f, method="POST")
-        with _execute_request(req) as resp:
-            assert resp.code == 200
-    else:
-        raise Exception("unrecognized path")
-
-
 def copy(src, dst, overwrite=False):
     if not overwrite:
         if exists(dst):
@@ -206,8 +160,10 @@ def copy(src, dst, overwrite=False):
                 token = result["rewriteToken"]
         return
 
-    with BlobFile(src, "rb") as src_f, BlobFile(dst, "wb") as dst_f:
-        shutil.copyfileobj(src_f, dst_f)
+    with BlobFile(src, "rb", streaming=True) as src_f, BlobFile(
+        dst, "wb", streaming=True
+    ) as dst_f:
+        shutil.copyfileobj(src_f, dst_f, length=STREAMING_CHUNK_SIZE)
 
 
 def _gcs_get_blob_metadata(path):
@@ -236,6 +192,7 @@ def exists(path):
     elif _is_gcs_path(path):
         if _gcs_exists(path):
             return True
+        # this should check for any object that exists with this prefix
         if not path.endswith("/"):
             return _gcs_exists(path + "/")
         return False
@@ -398,6 +355,7 @@ def md5(path):
 
 class _LocalFile:
     def __init__(self, path, mode):
+        print(f"create LocalFile {path}")
         self._mode = mode
         self._remote_path = path
         self._local_dir = tempfile.mkdtemp()
@@ -406,7 +364,8 @@ class _LocalFile:
             if not exists(path):
                 raise FileNotFoundError(f"file '{path}' not found")
             with open(self._local_path, "wb") as f:
-                _download_to_file(self._remote_path, f)
+                with BlobFile(self._remote_path, "rb", streaming=True) as src_f:
+                    shutil.copyfileobj(src_f, f, length=STREAMING_CHUNK_SIZE)
         self._f = open(self._local_path, self._mode)
         self._closed = False
 
@@ -431,7 +390,8 @@ class _LocalFile:
         self._f.close()
         if self._mode in ("w", "wb"):
             with open(self._local_path, "rb") as f:
-                _upload_from_file(f, self._remote_path)
+                with BlobFile(self._remote_path, "wb", streaming=True) as dst_f:
+                    shutil.copyfileobj(f, dst_f, length=STREAMING_CHUNK_SIZE)
         os.remove(self._local_path)
         os.rmdir(self._local_dir)
         self._closed = True
@@ -546,83 +506,51 @@ class _StreamingReadFile(_BaseFile):
             self._empty = ""
         # current reading byte offset in the file
         self._offset = 0
-        # a local chunk of the file that we have downloaded
-        self._buf = self._empty
+        self._f = None
         super().__init__()
 
     def __iter__(self):
         return self
 
     def __next__(self):
-        line, eof = self._readline()
-        if len(line) == 0 and eof:
+        line = self.readline()
+        if len(line) == 0:
             raise StopIteration
         return line
 
-    def _download_range(self, start, end):
+    def _get_fp(self, offset):
         raise NotImplementedError
 
-    def _read_into_buf(self, size=STREAMING_CHUNK_SIZE):
-        start = self._offset + len(self._buf)
-        end = min(start + size, self._size)
-        if start == end:
-            return True
-        b = self._download_range(start, end)
-        if self._text_mode:
-            b = b.decode("utf8")
-        self._buf += b
-        return False
+    def _call_fp_method(self, method, *args):
+        # this should catch exceptions and get a new file pointer, but it's not clear what recoverable exceptions will occur here
+        if self._f is None:
+            self._f = self._get_fp(self._offset)
+        return getattr(self._f, method)(*args)
 
-    def _read_from_buf(self, size=None):
-        if size is None:
-            size = len(self._buf)
-        assert len(self._buf) >= size
-        result = self._buf[:size]
-        self._buf = self._buf[size:]
-        self._offset += size
-        return result
-
-    def _readline(self, size=-1):
-        eof = False
-        while True:
-            newline_index = self._buf.find(self._newline)
-            if newline_index != -1:
-                end = newline_index + 1
-                break
-            if size > -1 and len(self._buf) >= size:
-                end = size
-                break
-            if eof:
-                end = len(self._buf)
-                break
-            eof = self._read_into_buf()
-
-        result = self._read_from_buf(end)
-        return result, len(result) == 0 and eof
-
+    # according to https://docs.python.org/3/library/io.html#io.RawIOBase.read this should be size=-1, but that doesn't work with HTTPResponse files
     @_check_closed
-    def read(self, size=-1):
-        if size == -1:
-            return self.readall()
-        while True:
-            if len(self._buf) >= size:
-                end = size
-                break
-            eof = self._read_into_buf()
-            if eof:
-                end = len(self._buf)
-                break
-        result = self._read_from_buf(end)
-        return result
+    def read(self, size=None):
+        if self._size == self._offset:
+            return self._empty
+        buf = self._call_fp_method("read", size)
+        self._offset += len(buf)
+        if self._text_mode:
+            buf = buf.decode("utf8")
+        return buf
 
     @_check_closed
     def readall(self):
-        self._read_into_buf(size=self._size - self._offset)
-        return self._read_from_buf()
+        return self.read()
 
     @_check_closed
     def readinto(self, b):
-        b[:] = self.read(len(b))
+        if self._text_mode:
+            raise io.UnsupportedOperation("operation not supported")
+        if self._size == self._offset:
+            return 0
+        n = self._call_fp_method("readinto", b)
+        self._offset += n
+        return n
 
     @_check_closed
     def readable(self):
@@ -630,21 +558,22 @@ class _StreamingReadFile(_BaseFile):
 
     @_check_closed
     def readline(self, size=-1):
-        result, _eof = self._readline(size=size)
-        return result
+        if self._size == self._offset:
+            return self._empty
+        buf = self._call_fp_method("readline", size)
+        self._offset += len(buf)
+        if self._text_mode:
+            buf = buf.decode("utf8")
+        return buf
 
     @_check_closed
     def readlines(self, hint=-1):
-        total_bytes = 0
-        lines = []
-        while True:
-            line, eof = self._readline()
-            if eof:
-                break
-            lines.append(line)
-            total_bytes += len(line)
-            if hint > -1 and total_bytes > hint:
-                break
+        if self._size == self._offset:
+            return []
+        lines = self._call_fp_method("readlines", hint)
+        self._offset += sum([len(l) for l in lines])
+        if self._text_mode:
+            lines = [l.decode("utf8") for l in lines]
         return lines
 
     @_check_closed
@@ -659,7 +588,7 @@ class _StreamingReadFile(_BaseFile):
             raise ValueError(f"invalid whence")
         if new_offset != self._offset:
             self._offset = new_offset
-            self._buf = self._empty
+            self._f = None
 
     @_check_closed
     def seekable(self):
@@ -668,6 +597,11 @@ class _StreamingReadFile(_BaseFile):
     @_check_closed
     def tell(self):
         return self._offset
+
+    def close(self):
+        super().close()
+        if hasattr(self, "_f") and self._f is not None:
+            self._f.close()
 
 
 class _GCSStreamingReadFile(_StreamingReadFile):
@@ -678,17 +612,16 @@ class _GCSStreamingReadFile(_StreamingReadFile):
         assert resp.code == 200
         super().__init__(path, mode, int(self._metadata["size"]))
 
-    def _download_range(self, start, end):
+    def _get_fp(self, offset):
         req = google.create_read_blob_request(
             access_token=global_access_token_manager.get_token(),
             bucket=self._metadata["bucket"],
             name=self._metadata["name"],
-            start=start,
-            end=end,
+            start=offset,
         )
-        with _execute_request(req) as resp:
-            assert resp.code == 206
-            return resp.read()
+        resp = _execute_request(req)
+        assert resp.code == 206
+        return resp
 
 
 class _HTTPStreamingReadFile(_StreamingReadFile):
@@ -701,13 +634,13 @@ class _HTTPStreamingReadFile(_StreamingReadFile):
         size = int(head.headers["Content-Length"])
         super().__init__(path, mode, size)
 
-    def _download_range(self, start, end):
+    def _get_fp(self, offset):
         req = Request(
-            url=self._path, headers={"Range": f"bytes={start}-{end-1}"}, method="GET"
+            url=self._path, headers={"Range": f"bytes={offset}-"}, method="GET"
         )
-        with _execute_request(req) as resp:
-            assert resp.code == 206
-            return resp.read()
+        resp = _execute_request(req)
+        assert resp.code == 206
+        return resp
 
 
 class _StreamingWriteFile(_BaseFile):
@@ -725,9 +658,11 @@ class _StreamingWriteFile(_BaseFile):
         raise NotImplementedError
 
     def _upload_buf(self, finalize=False):
-        size = STREAMING_CHUNK_SIZE
-        if not finalize:
-            assert len(self._buf) > size
+        if finalize:
+            size = len(self._buf)
+        else:
+            size = (len(self._buf) // STREAMING_CHUNK_SIZE) * STREAMING_CHUNK_SIZE
+            assert size > 0
         chunk = self._buf[:size]
         self._buf = self._buf[size:]
 
@@ -810,6 +745,28 @@ class _GCSStreamingWriteFile(_StreamingWriteFile):
                 assert resp.code == 308
 
 
+class _HTTPStreamingWriteFile(_StreamingWriteFile):
+    # this is a fake streaming write file since we don't support range uploads yet
+    # instead we store all buffers and then upload all of them on finalize
+    def __init__(self, path, mode):
+        super().__init__(mode)
+        self._upload_buffer = self._empty
+        self._path = path
+
+    def _upload_chunk(self, chunk, start, end, finalize):
+        self._upload_buffer += chunk
+
+        if not finalize:
+            return
+
+        req = urllib.request.Request(
+            url=self._path, data=self._upload_buffer, method="POST"
+        )
+        resp = _execute_request(req)
+        assert resp.code == 200
+        self._upload_buffer = None
+
+
 class BlobFile:
     """
     Open a local or remote file for reading or writing
@@ -836,8 +793,10 @@ class BlobFile:
                 raise Exception(f"unsupported mode {self._mode}")
         elif _is_http_path(path):
             if self._mode in ("w", "wb"):
-                # don't have a streaming version of this yet
-                self._f = _LocalFile(path, self._mode)
+                if streaming:
+                    self._f = _HTTPStreamingWriteFile(path, self._mode)
+                else:
+                    self._f = _LocalFile(path, self._mode)
             elif self._mode in ("r", "rb"):
                 if streaming:
                     self._f = _HTTPStreamingReadFile(path, self._mode)

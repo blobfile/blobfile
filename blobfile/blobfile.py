@@ -69,7 +69,7 @@ global_access_token_manager = AccessTokenManager(
 )
 
 
-def exponential_sleep_generator(initial, maximum, multiplier=2):
+def _exponential_sleep_generator(initial, maximum, multiplier=2):
     value = initial
     while True:
         yield value
@@ -79,7 +79,7 @@ def exponential_sleep_generator(initial, maximum, multiplier=2):
 
 
 def _execute_request(req, retry_codes=(500,), timeout=DEFAULT_TIMEOUT):
-    for attempt, backoff in enumerate(exponential_sleep_generator(1.0, maximum=60.0)):
+    for attempt, backoff in enumerate(_exponential_sleep_generator(1.0, maximum=60.0)):
         err = None
         try:
             return urlopen(req, timeout=timeout)
@@ -166,10 +166,14 @@ def copy(src, dst, overwrite=False):
         shutil.copyfileobj(src_f, dst_f, length=STREAMING_CHUNK_SIZE)
 
 
+def _create_google_api_request(**kwargs):
+    kwargs["access_token"] = global_access_token_manager.get_token()
+    return google.create_api_request(**kwargs)
+
+
 def _gcs_get_blob_metadata(path):
     _scheme, bucket, blob = _split_url(path)
-    req = google.create_api_request(
-        access_token=global_access_token_manager.get_token(),
+    req = _create_google_api_request(
         url=google.build_url(
             "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
         ),
@@ -212,8 +216,46 @@ def isdir(path):
     raise NotImplementedError
 
 
+def _create_google_page_iterator(url, method, data=None, params=None):
+    if params is not None:
+        params = params.copy()
+        msg = params
+    if data is not None:
+        data = data.copy()
+        msg = data
+    while True:
+        req = _create_google_api_request(
+            url=url, method=method, params=params, data=data
+        )
+        with _execute_request(req) as resp:
+            result = json.load(resp)
+            yield result
+            if "nextPageToken" not in result:
+                break
+        msg["pageToken"] = result["nextPageToken"]
+
+
 def listdir(path):
-    raise NotImplementedError
+    if _is_local_path(path):
+        for d in os.listdir(path):
+            yield d
+    elif _is_gcs_path(path):
+        assert path.endswith("/"), "directories must always end with a slash"
+        _scheme, bucket, blob = _split_url(path)
+        it = _create_google_page_iterator(
+            url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+            method="GET",
+            params=dict(delimiter="/", prefix=blob),
+        )
+        for result in it:
+            if "prefixes" in result:
+                for p in result["prefixes"]:
+                    yield p[len(blob) :]
+            if "items" in result:
+                for item in result["items"]:
+                    yield item["name"][len(blob) :]
+    else:
+        raise Exception("unrecognized path")
 
 
 def makedirs(path):

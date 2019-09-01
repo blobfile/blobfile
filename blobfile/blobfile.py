@@ -13,6 +13,9 @@ import urllib.error
 import time
 import json
 import socket
+import glob as local_glob
+
+import fnmatch
 
 from . import google
 
@@ -209,7 +212,38 @@ def exists(path):
 
 
 def glob(pattern):
-    raise NotImplementedError
+    if _is_local_path(pattern):
+        for filepath in local_glob.glob(pattern):
+            yield filepath
+    elif _is_gcs_path(pattern):
+        assert "?" not in pattern and "[" not in pattern and "]" not in pattern
+        if "*" in pattern:
+            assert pattern.count("*") == 1
+            prefix, _sep, _suffix = pattern.partition("*")
+            _scheme, bucket, blob_prefix = _split_url(prefix)
+            assert "*" not in bucket
+            params = dict(prefix=blob_prefix)
+            if "/" in blob_prefix:
+                params["delimiter"] = "/"
+            it = _create_google_page_iterator(
+                url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+                method="GET",
+                params=params,
+            )
+            for name in _gcs_get_names(it):
+                filepath = join("gs://" + bucket, name)
+                if basename(filepath).startswith(".") and not basename(
+                    pattern
+                ).startswith("."):
+                    # don't find hidden files
+                    continue
+                if fnmatch.fnmatch(filepath, pattern):
+                    yield filepath
+        else:
+            if _gcs_exists(pattern):
+                yield pattern
+    else:
+        raise Exception("unrecognized path")
 
 
 def isdir(path):
@@ -235,6 +269,16 @@ def _create_google_page_iterator(url, method, data=None, params=None):
         msg["pageToken"] = result["nextPageToken"]
 
 
+def _gcs_get_names(it):
+    for result in it:
+        if "prefixes" in result:
+            for p in result["prefixes"]:
+                yield p
+        if "items" in result:
+            for item in result["items"]:
+                yield item["name"]
+
+
 def listdir(path):
     if _is_local_path(path):
         for d in os.listdir(path):
@@ -247,13 +291,8 @@ def listdir(path):
             method="GET",
             params=dict(delimiter="/", prefix=blob),
         )
-        for result in it:
-            if "prefixes" in result:
-                for p in result["prefixes"]:
-                    yield p[len(blob) :]
-            if "items" in result:
-                for item in result["items"]:
-                    yield item["name"][len(blob) :]
+        for name in _gcs_get_names(it):
+            yield name[len(blob) :]
     else:
         raise Exception("unrecognized path")
 

@@ -32,7 +32,8 @@ def _get_temp_gcs_path():
         + "/file.name"
     )
     yield path
-    gfile.remove(path)
+    if gfile.exists(path):
+        gfile.remove(path)
 
 
 @contextlib.contextmanager
@@ -275,6 +276,42 @@ def test_read_write(ctx):
             w.write(contents)
         with bf.BlobFile(path, "rb") as r:
             assert r.read() == contents
+
+
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+def test_listdir(ctx):
+    contents = b"meow!"
+    with ctx() as path:
+        dirpath = bf.dirname(path)
+        a_path = bf.join(dirpath, "a")
+        with bf.BlobFile(a_path, "wb") as w:
+            w.write(contents)
+        b_path = bf.join(dirpath, "b")
+        with bf.BlobFile(b_path, "wb") as w:
+            w.write(contents)
+        assert sorted(list(bf.listdir(dirpath))) == ["a", "b"]
+
+
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+def test_glob(ctx):
+    contents = b"meow!"
+    with ctx() as path:
+        dirpath = bf.dirname(path)
+        a_path = bf.join(dirpath, "ab")
+        with bf.BlobFile(a_path, "wb") as w:
+            w.write(contents)
+        b_path = bf.join(dirpath, "bb")
+        with bf.BlobFile(b_path, "wb") as w:
+            w.write(contents)
+
+        def assert_listing_equal(actual, desired):
+            actual = [bf.basename(p) for p in sorted(list(bf.glob(actual)))]
+            assert actual == desired
+
+        assert_listing_equal(bf.join(dirpath, "*b"), ["ab", "bb"])
+        assert_listing_equal(bf.join(dirpath, "a*"), ["ab"])
+        assert_listing_equal(bf.join(dirpath, "*"), ["ab", "bb"])
+        assert_listing_equal(bf.join(dirpath, "bb"), ["bb"])
 
 
 def test_copy():

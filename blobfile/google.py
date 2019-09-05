@@ -1,4 +1,3 @@
-import urllib.request
 import urllib.parse
 import json
 import base64
@@ -12,6 +11,8 @@ import binascii
 from Cryptodome.Signature import pkcs1_15
 from Cryptodome.Hash import SHA256
 from Cryptodome.PublicKey import RSA
+
+from .common import Request
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
 
@@ -50,7 +51,7 @@ def create_token_request(client_email, private_key, scopes):
         "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
         "assertion": _create_jwt(private_key, claim_set),
     }
-    return urllib.request.Request(
+    return Request(
         url="https://www.googleapis.com/oauth2/v4/token",
         method="POST",
         headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -66,7 +67,7 @@ def refresh_access_token_request(client_id, client_secret, refresh_token):
         "client_id": client_id,
         "client_secret": client_secret,
     }
-    return urllib.request.Request(
+    return Request(
         url="https://www.googleapis.com/oauth2/v4/token",
         method="POST",
         headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -123,7 +124,7 @@ def create_api_request(access_token, url, method, params=None, data=None):
             url += "?" + urllib.parse.urlencode(params)
     if data is not None:
         data = json.dumps(data).encode("utf8")
-    return urllib.request.Request(url=url, method=method, headers=headers, data=data)
+    return Request(url=url, method=method, headers=headers, data=data)
 
 
 def build_url(template, **data):

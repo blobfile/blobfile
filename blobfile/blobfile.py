@@ -7,17 +7,16 @@ import base64
 import binascii
 import io
 import functools
-from urllib.request import urlopen, Request
 import urllib.parse
-import urllib.error
 import time
 import json
-import socket
 import glob as local_glob
-
 import fnmatch
 
+import urllib3
+
 from . import google
+from .common import Request
 
 
 DEFAULT_TIMEOUT = 60
@@ -25,6 +24,8 @@ HASH_CHUNK_SIZE = 65536
 STREAMING_CHUNK_SIZE = 2 ** 20
 # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
 assert STREAMING_CHUNK_SIZE % (256 * 1024) == 0
+
+http = urllib3.PoolManager()
 
 
 def __log_callback(msg):
@@ -60,7 +61,7 @@ class AccessTokenManager:
             if self._access_token is None:
                 req = google.create_access_token_request(self._scopes)
                 with _execute_request(req) as resp:
-                    assert resp.code == 200
+                    assert resp.status == 200
                     result = json.load(resp)
                     self._access_token = result["access_token"]
                     self._expiration = now + result["expires_in"]
@@ -81,23 +82,33 @@ def _exponential_sleep_generator(initial, maximum, multiplier=2):
             value = maximum
 
 
-def _execute_request(req, retry_codes=(500,), timeout=DEFAULT_TIMEOUT):
+def _execute_request(req, retry_statuses=(500,), timeout=DEFAULT_TIMEOUT):
     for attempt, backoff in enumerate(_exponential_sleep_generator(1.0, maximum=60.0)):
         err = None
         try:
-            return urlopen(req, timeout=timeout)
-        except (urllib.error.URLError, urllib.error.HTTPError) as e:
-            err = e
-            if isinstance(e, urllib.error.HTTPError):
-                if e.code not in retry_codes:
-                    return e
+            resp = http.request(
+                method=req.method,
+                url=req.url,
+                headers=req.headers,
+                body=req.data,
+                timeout=timeout,
+                preload_content=False,
+                retries=False,
+                redirect=False,
+            )
+            if resp.status in retry_statuses:
+                err = f"request failed with status {resp.status}"
             else:
-                raise
-        except socket.timeout as e:
+                return resp
+        except (
+            urllib3.exceptions.ConnectTimeoutError,
+            urllib3.exceptions.ReadTimeoutError,
+        ) as e:
             err = e
         if attempt > 3:
             _log_callback(f"error {err} when executing http request {req}")
         time.sleep(backoff)
+    return None  # unreachable, for pylint
 
 
 def _is_local_path(path):
@@ -120,7 +131,7 @@ def _split_url(path):
 
 
 def _get_head(path):
-    req = urllib.request.Request(url=path, method="HEAD")
+    req = Request(url=path, method="HEAD")
     with _execute_request(req) as resp:
         return resp
 
@@ -154,9 +165,9 @@ def copy(src, dst, overwrite=False):
                 params=params,
             )
             with _execute_request(req) as resp:
-                if resp.code == 404:
+                if resp.status == 404:
                     raise FileNotFoundError(f"src file '{src}' not found")
-                assert resp.code == 200
+                assert resp.status == 200
                 result = json.load(resp)
                 if result["done"]:
                     break
@@ -183,14 +194,14 @@ def _gcs_get_blob_metadata(path):
         method="GET",
     )
     with _execute_request(req) as resp:
-        assert resp.code in (200, 404)
+        assert resp.status in (200, 404)
         return resp, json.load(resp)
 
 
 def _gcs_exists(path):
     resp, _metadata = _gcs_get_blob_metadata(path)
-    assert resp.code in (200, 404)
-    return resp.code == 200
+    assert resp.status in (200, 404)
+    return resp.status == 200
 
 
 def exists(path):
@@ -204,9 +215,9 @@ def exists(path):
             return _gcs_exists(path + "/")
         return False
     elif _is_http_path(path):
-        code = _get_head(path).code
-        assert code in (200, 404)
-        return code == 200
+        status = _get_head(path).status
+        assert status in (200, 404)
+        return status == 200
     else:
         raise Exception("unrecognized path")
 
@@ -383,7 +394,7 @@ def cache_key(path):
         return md5(path)
     elif _is_http_path(path):
         head = _get_head(path)
-        if head.code != 200:
+        if head.status != 200:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         key_parts = [path]
         for header in ["Last-Modified", "Content-Length", "ETag", "Content-MD5"]:
@@ -421,7 +432,7 @@ def md5(path):
     """
     if _is_gcs_path(path):
         resp, metadata = _gcs_get_blob_metadata(path)
-        assert resp.code == 200
+        assert resp.status == 200
         return binascii.hexlify(base64.b64decode(metadata["md5Hash"])).decode("utf8")
     else:
         m = hashlib.md5()
@@ -599,13 +610,13 @@ class _StreamingReadFile(_BaseFile):
             raise StopIteration
         return line
 
-    def _get_fp(self, offset):
+    def _get_file(self, offset):
         raise NotImplementedError
 
-    def _call_fp_method(self, method, *args):
+    def _call_file_method(self, method, *args):
         # this should catch exceptions and get a new file pointer, but it's not clear what recoverable exceptions will occur here
         if self._f is None:
-            self._f = self._get_fp(self._offset)
+            self._f = self._get_file(self._offset)
         return getattr(self._f, method)(*args)
 
     # according to https://docs.python.org/3/library/io.html#io.RawIOBase.read this should be size=-1, but that doesn't work with HTTPResponse files
@@ -613,7 +624,7 @@ class _StreamingReadFile(_BaseFile):
     def read(self, size=None):
         if self._size == self._offset:
             return self._empty
-        buf = self._call_fp_method("read", size)
+        buf = self._call_file_method("read", size)
         self._offset += len(buf)
         if self._text_mode:
             buf = buf.decode("utf8")
@@ -629,7 +640,7 @@ class _StreamingReadFile(_BaseFile):
             raise io.UnsupportedOperation("operation not supported")
         if self._size == self._offset:
             return 0
-        n = self._call_fp_method("readinto", b)
+        n = self._call_file_method("readinto", b)
         self._offset += n
         return n
 
@@ -641,7 +652,7 @@ class _StreamingReadFile(_BaseFile):
     def readline(self, size=-1):
         if self._size == self._offset:
             return self._empty
-        buf = self._call_fp_method("readline", size)
+        buf = self._call_file_method("readline", size)
         self._offset += len(buf)
         if self._text_mode:
             buf = buf.decode("utf8")
@@ -651,7 +662,7 @@ class _StreamingReadFile(_BaseFile):
     def readlines(self, hint=-1):
         if self._size == self._offset:
             return []
-        lines = self._call_fp_method("readlines", hint)
+        lines = self._call_file_method("readlines", hint)
         self._offset += sum([len(l) for l in lines])
         if self._text_mode:
             lines = [l.decode("utf8") for l in lines]
@@ -688,12 +699,12 @@ class _StreamingReadFile(_BaseFile):
 class _GCSStreamingReadFile(_StreamingReadFile):
     def __init__(self, path, mode):
         resp, self._metadata = _gcs_get_blob_metadata(path)
-        if resp.code == 404:
+        if resp.status == 404:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
-        assert resp.code == 200
+        assert resp.status == 200
         super().__init__(path, mode, int(self._metadata["size"]))
 
-    def _get_fp(self, offset):
+    def _get_file(self, offset):
         req = google.create_read_blob_request(
             access_token=global_access_token_manager.get_token(),
             bucket=self._metadata["bucket"],
@@ -701,7 +712,7 @@ class _GCSStreamingReadFile(_StreamingReadFile):
             start=offset,
         )
         resp = _execute_request(req)
-        assert resp.code == 206
+        assert resp.status == 206
         return resp
 
 
@@ -709,18 +720,18 @@ class _HTTPStreamingReadFile(_StreamingReadFile):
     def __init__(self, path, mode):
         self._path = path
         head = _get_head(path)
-        if head.code != 200:
+        if head.status != 200:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         assert head.headers["Accept-Ranges"] == "bytes"
         size = int(head.headers["Content-Length"])
         super().__init__(path, mode, size)
 
-    def _get_fp(self, offset):
+    def _get_file(self, offset):
         req = Request(
             url=self._path, headers={"Range": f"bytes={offset}-"}, method="GET"
         )
         resp = _execute_request(req)
-        assert resp.code == 206
+        assert resp.status == 206
         return resp
 
 
@@ -796,7 +807,7 @@ class _GCSStreamingWriteFile(_StreamingWriteFile):
             name=name,
         )
         with _execute_request(req) as resp:
-            assert resp.code == 200
+            assert resp.status == 200
             self._upload_url = resp.headers["Location"]
         super().__init__(mode)
 
@@ -820,10 +831,10 @@ class _GCSStreamingWriteFile(_StreamingWriteFile):
 
         with _execute_request(req) as resp:
             if finalize:
-                assert resp.code in (200, 201)
+                assert resp.status in (200, 201)
             else:
                 # 308 is the expected response
-                assert resp.code == 308
+                assert resp.status == 308
 
 
 class _HTTPStreamingWriteFile(_StreamingWriteFile):
@@ -840,11 +851,9 @@ class _HTTPStreamingWriteFile(_StreamingWriteFile):
         if not finalize:
             return
 
-        req = urllib.request.Request(
-            url=self._path, data=self._upload_buffer, method="POST"
-        )
+        req = Request(url=self._path, data=self._upload_buffer, method="POST")
         resp = _execute_request(req)
-        assert resp.code == 200
+        assert resp.status == 200
         self._upload_buffer = None
 
 

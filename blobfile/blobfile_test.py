@@ -17,6 +17,17 @@ import numpy as np
 from . import blobfile as bf
 
 
+# test_stat
+#   make sure mtime of newly created file is within the last few seconds and that size is correct
+# rename
+# remove
+# makedirs
+# listdir
+#  test nested directories
+# isdir
+# glob
+
+
 @contextlib.contextmanager
 def _get_temp_local_path():
     with tempfile.TemporaryDirectory() as tmpdir:

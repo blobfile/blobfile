@@ -1,4 +1,4 @@
-import threading
+import calendar
 import os
 import tempfile
 import shutil
@@ -12,6 +12,8 @@ import time
 import json
 import glob as local_glob
 import fnmatch
+import collections
+import threading
 
 import urllib3
 
@@ -24,6 +26,12 @@ HASH_CHUNK_SIZE = 65536
 STREAMING_CHUNK_SIZE = 2 ** 20
 # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
 assert STREAMING_CHUNK_SIZE % (256 * 1024) == 0
+
+LOCAL_PATH = "local"
+GCS_PATH = "gcs"
+HTTP_PATH = "http"
+
+Stat = collections.namedtuple("Stat", "size, mtime")
 
 http = urllib3.PoolManager()
 
@@ -125,6 +133,17 @@ def _is_http_path(path):
     return url.scheme in ["http", "https"]
 
 
+def _get_path_type(path):
+    if _is_local_path(path):
+        return LOCAL_PATH
+    elif _is_gcs_path(path):
+        return GCS_PATH
+    elif _is_http_path(path):
+        return HTTP_PATH
+    else:
+        raise Exception("unrecognized path")
+
+
 def _split_url(path):
     url = urllib.parse.urlparse(path)
     return url.scheme, url.netloc, url.path[1:]
@@ -210,10 +229,7 @@ def exists(path):
     elif _is_gcs_path(path):
         if _gcs_exists(path):
             return True
-        # this should check for any object that exists with this prefix
-        if not path.endswith("/"):
-            return _gcs_exists(path + "/")
-        return False
+        return isdir(path)
     elif _is_http_path(path):
         status = _get_head(path).status
         assert status in (200, 404)
@@ -258,7 +274,25 @@ def glob(pattern):
 
 
 def isdir(path):
-    raise NotImplementedError
+    if _is_local_path(path):
+        return os.path.isdir(path)
+    elif _is_gcs_path(path):
+        if not path.endswith("/"):
+            path += "/"
+        _scheme, bucket, blob_prefix = _split_url(path)
+        params = dict(prefix=blob_prefix, delimiter="/", maxResults=1)
+        req = _create_google_api_request(
+            url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+            method="GET",
+            params=params,
+        )
+        with _execute_request(req) as resp:
+            result = json.load(resp)
+            if "items" in result or "prefixes" in result:
+                return True
+        return False
+    else:
+        raise Exception("unrecognized path")
 
 
 def _create_google_page_iterator(url, method, data=None, params=None):
@@ -291,11 +325,19 @@ def _gcs_get_names(it):
 
 
 def listdir(path):
+    """
+    Returns an iterator of the contents of the directory at `path`
+    """
+    if not exists(path):
+        raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
+    if not isdir(path):
+        raise NotADirectoryError(f"The directory name is invalid: '{path}'")
     if _is_local_path(path):
         for d in os.listdir(path):
             yield d
     elif _is_gcs_path(path):
-        assert path.endswith("/"), "directories must always end with a slash"
+        if not path.endswith("/"):
+            path += "/"
         _scheme, bucket, blob = _split_url(path)
         it = _create_google_page_iterator(
             url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
@@ -309,31 +351,189 @@ def listdir(path):
 
 
 def makedirs(path):
-    raise NotImplementedError
-
-
-def mkdir(path):
-    raise NotImplementedError
+    """
+    Make any directories necessary to ensure that path is a directory
+    """
+    if _is_local_path(path):
+        os.makedirs(path, exist_ok=True)
+    elif _is_gcs_path(path):
+        if not path.endswith("/"):
+            path += "/"
+        _scheme, bucket, blob = _split_url(path)
+        req = _create_google_api_request(
+            url=google.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
+            method="POST",
+            params=dict(uploadType="media", name=blob),
+        )
+        with _execute_request(req) as resp:
+            assert resp.status == 200
+    else:
+        raise Exception("unrecognized path")
 
 
 def remove(path):
-    raise NotImplementedError
+    if not exists(path):
+        raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
+    if isdir(path):
+        raise IsADirectoryError(f"Is a directory: '{path}'")
+    if _is_local_path(path):
+        os.remove(path)
+    elif _is_gcs_path(path):
+        _scheme, bucket, blob = _split_url(path)
+        req = _create_google_api_request(
+            url=google.build_url(
+                "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
+            ),
+            method="DELETE",
+        )
+        with _execute_request(req) as resp:
+            assert resp.status == 200
+    else:
+        raise Exception("unrecognized path")
 
 
 def rename(src, dst, overwrite=False):
-    raise NotImplementedError
-
-
-def rmtree(path):
-    raise NotImplementedError
+    assert _get_path_type(src) == _get_path_type(
+        dst
+    ), f"src and dst must both be the same type of paths: '{src}' -> '{dst}'"
+    if not exists(src):
+        raise FileNotFoundError(f"No such file or directory: '{src}' -> '{dst}'")
+    if not overwrite and exists(dst):
+        raise FileExistsError(
+            f"Cannot create a file when that file already exists: '{src}' -> '{dst}'"
+        )
+    src_is_dir = isdir(src)
+    dst_is_dir = isdir(dst)
+    if src_is_dir and not dst_is_dir:
+        raise NotADirectoryError(f"Is not a directory: '{dst}'")
+    if not src_is_dir and dst_is_dir:
+        raise IsADirectoryError(f"Is a directory: '{dst}'")
+    if _is_local_path(src):
+        os.replace(src, dst)
+    elif _is_gcs_path(src):
+        if src_is_dir:
+            copytree(src, dst)
+            rmtree(src)
+        else:
+            copy(src, dst)
+            remove(src)
+    else:
+        raise Exception("unrecognized path")
 
 
 def stat(path):
-    raise NotImplementedError
+    if _is_local_path(path):
+        s = os.stat(path)
+        return Stat(size=s.st_size, mtime=s.st_mtime)
+    elif _is_gcs_path(path):
+        resp, result = _gcs_get_blob_metadata(path)
+        if resp.status == 404:
+            raise FileNotFoundError(f"No such file or directory: '{path}'")
+        ts = time.strptime(result["updated"], "%Y-%m-%dT%H:%M:%S.%fZ")
+        t = calendar.timegm(ts)
+        return Stat(size=int(result["size"]), mtime=t)
+    else:
+        raise Exception("unrecognized path")
+
+
+def copytree(src, dst):
+    if not isdir(src):
+        raise NotADirectoryError(f"The directory name is invalid: '{src}'")
+    if exists(dst):
+        raise NotADirectoryError(
+            f"Cannot create a file when that file already exists: '{dst}'"
+        )
+    assert not dst.startswith(src), "cannot copytree to subdir"
+    if not src.endswith("/"):
+        src += "/"
+    makedirs(dst)
+    for dirpath, dirnames, filenames in walk(src):
+        relpath = dirpath[len(src) :]
+        # on GCS we can have a directory name that has the same name as a file
+        # if that's the case, skip it since that's too confusing
+        skip_filenames = set()
+        for dn in dirnames:
+            dn = dn.replace("/", "")
+            skip_filenames.add(dn)
+            dst_dirpath = join(dst, relpath, dn)
+            makedirs(dst_dirpath)
+        for filename in filenames:
+            if filename in skip_filenames:
+                continue
+            src_path = join(src, relpath, filename)
+            dst_path = join(dst, relpath, filename)
+            copy(src_path, dst_path)
+    return dst
+
+
+def rmtree(path):
+    if not isdir(path):
+        raise NotADirectoryError(f"The directory name is invalid: '{path}'")
+
+    if _is_local_path(path):
+        shutil.rmtree(path)
+    elif _is_gcs_path(path):
+        if not path.endswith("/"):
+            path += "/"
+        _scheme, bucket, blob = _split_url(path)
+        it = _create_google_page_iterator(
+            url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+            method="GET",
+            params=dict(prefix=blob),
+        )
+        for result in it:
+            for item in result["items"]:
+                req = _create_google_api_request(
+                    url=google.build_url(
+                        "/storage/v1/b/{bucket}/o/{object}",
+                        bucket=bucket,
+                        object=item["name"],
+                    ),
+                    method="DELETE",
+                )
+                with _execute_request(req) as resp:
+                    assert resp.status == 204
+    else:
+        raise Exception("unrecognized path")
 
 
 def walk(top, topdown=True, onerror=None):
-    raise NotImplementedError
+    if not isdir(top):
+        return
+
+    if _is_local_path(top):
+        for result in os.walk(top=top, topdown=topdown, onerror=onerror):
+            yield result
+    elif _is_gcs_path(top):
+        assert topdown
+        if not top.endswith("/"):
+            top = top + "/"
+        dq = collections.deque()
+        dq.append(top)
+        while len(dq) > 0:
+            cur = dq.popleft()
+            _scheme, bucket, blob = _split_url(cur)
+            it = _create_google_page_iterator(
+                url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+                method="GET",
+                params=dict(delimiter="/", prefix=blob),
+            )
+            dirnames = []
+            filenames = []
+            for result in it:
+                if "prefixes" in result:
+                    for prefix in result["prefixes"]:
+                        dirnames.append(prefix[len(blob) :])
+                if "items" in result:
+                    for item in result["items"]:
+                        if item["name"] == blob:
+                            # don't list the current directory if it exists as a file
+                            continue
+                        filenames.append(item["name"][len(blob) :])
+            yield (cur, dirnames, filenames)
+            dq.extend(join(cur, dirname) for dirname in dirnames)
+    else:
+        raise Exception("unrecognized path")
 
 
 def basename(path):
@@ -369,7 +569,17 @@ def dirname(path):
         return os.path.dirname(path)
 
 
-def join(a, b):
+def join(a, *args):
+    """
+    Join file paths, if a path is an absolute path, it will replace the entire path component of previous paths
+    """
+    out = a
+    for b in args:
+        out = _join2(out, b)
+    return out
+
+
+def _join2(a, b):
     """
     Join two file paths, if path `b` is an absolute path, it will replace the entire path component of a
     """

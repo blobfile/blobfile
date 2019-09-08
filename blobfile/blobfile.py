@@ -29,7 +29,6 @@ assert STREAMING_CHUNK_SIZE % (256 * 1024) == 0
 
 LOCAL_PATH = "local"
 GCS_PATH = "gcs"
-HTTP_PATH = "http"
 
 Stat = collections.namedtuple("Stat", "size, mtime")
 
@@ -120,7 +119,7 @@ def _execute_request(req, retry_statuses=(500,), timeout=DEFAULT_TIMEOUT):
 
 
 def _is_local_path(path):
-    return not _is_gcs_path(path) and not _is_http_path(path)
+    return not _is_gcs_path(path)
 
 
 def _is_gcs_path(path):
@@ -128,18 +127,11 @@ def _is_gcs_path(path):
     return url.scheme == "gs"
 
 
-def _is_http_path(path):
-    url = urllib.parse.urlparse(path)
-    return url.scheme in ["http", "https"]
-
-
 def _get_path_type(path):
     if _is_local_path(path):
         return LOCAL_PATH
     elif _is_gcs_path(path):
         return GCS_PATH
-    elif _is_http_path(path):
-        return HTTP_PATH
     else:
         raise Exception("unrecognized path")
 
@@ -230,10 +222,6 @@ def exists(path):
         if _gcs_exists(path):
             return True
         return isdir(path)
-    elif _is_http_path(path):
-        status = _get_head(path).status
-        assert status in (200, 404)
-        return status == 200
     else:
         raise Exception("unrecognized path")
 
@@ -257,7 +245,7 @@ def glob(pattern):
                 method="GET",
                 params=params,
             )
-            for name in _gcs_get_names(it):
+            for name in _gcs_get_names(it, blob_prefix):
                 filepath = join("gs://" + bucket, name)
                 if basename(filepath).startswith(".") and not basename(
                     pattern
@@ -314,13 +302,15 @@ def _create_google_page_iterator(url, method, data=None, params=None):
         msg["pageToken"] = result["nextPageToken"]
 
 
-def _gcs_get_names(it):
+def _gcs_get_names(it, skip_item_name):
     for result in it:
         if "prefixes" in result:
             for p in result["prefixes"]:
                 yield p
         if "items" in result:
             for item in result["items"]:
+                if item["name"] == skip_item_name:
+                    continue
                 yield item["name"]
 
 
@@ -344,7 +334,7 @@ def listdir(path):
             method="GET",
             params=dict(delimiter="/", prefix=blob),
         )
-        for name in _gcs_get_names(it):
+        for name in _gcs_get_names(it, blob):
             yield name[len(blob) :]
     else:
         raise Exception("unrecognized path")
@@ -387,7 +377,7 @@ def remove(path):
             method="DELETE",
         )
         with _execute_request(req) as resp:
-            assert resp.status == 200
+            assert resp.status == 204
     else:
         raise Exception("unrecognized path")
 
@@ -520,16 +510,12 @@ def walk(top, topdown=True, onerror=None):
             )
             dirnames = []
             filenames = []
-            for result in it:
-                if "prefixes" in result:
-                    for prefix in result["prefixes"]:
-                        dirnames.append(prefix[len(blob) :])
-                if "items" in result:
-                    for item in result["items"]:
-                        if item["name"] == blob:
-                            # don't list the current directory if it exists as a file
-                            continue
-                        filenames.append(item["name"][len(blob) :])
+            for name in _gcs_get_names(it, blob):
+                name = name[len(blob) :]
+                if name.endswith("/"):
+                    dirnames.append(name)
+                else:
+                    filenames.append(name)
             yield (cur, dirnames, filenames)
             dq.extend(join(cur, dirname) for dirname in dirnames)
     else:
@@ -542,7 +528,7 @@ def basename(path):
 
     For GCS, this is the part after the bucket
     """
-    if _is_gcs_path(path) or _is_http_path(path):
+    if _is_gcs_path(path):
         _scheme, _netloc, path = _split_url(path)
         return path.split("/")[-1]
     else:
@@ -555,7 +541,7 @@ def dirname(path):
 
     If this is a GCS path, the root directory is gs://<bucket name>/
     """
-    if _is_gcs_path(path) or _is_http_path(path):
+    if _is_gcs_path(path):
         scheme, netloc, urlpath = _split_url(path)
         if urlpath.endswith("/"):
             urlpath = urlpath[:-1]
@@ -583,7 +569,7 @@ def _join2(a, b):
     """
     Join two file paths, if path `b` is an absolute path, it will replace the entire path component of a
     """
-    if _is_gcs_path(a) or _is_http_path(a):
+    if _is_gcs_path(a):
         if not a.endswith("/"):
             a += "/"
         assert "://" not in b
@@ -602,14 +588,6 @@ def cache_key(path):
         key_parts = [path, os.path.getmtime(path), os.path.getsize(path)]
     elif _is_gcs_path(path):
         return md5(path)
-    elif _is_http_path(path):
-        head = _get_head(path)
-        if head.status != 200:
-            raise FileNotFoundError(f"No such file or directory: '{path}'")
-        key_parts = [path]
-        for header in ["Last-Modified", "Content-Length", "ETag", "Content-MD5"]:
-            if header in head.headers:
-                key_parts.append(head.headers[header])
     else:
         raise Exception("unrecognized path")
     return hashlib.md5(
@@ -628,8 +606,6 @@ def get_url(path):
         return google.generate_signed_url(
             bucket, blob, expiration=google.MAX_EXPIRATION
         )
-    elif _is_http_path(path):
-        return path
     elif _is_local_path(path):
         return f"file://{path}"
     else:
@@ -926,25 +902,6 @@ class _GCSStreamingReadFile(_StreamingReadFile):
         return resp
 
 
-class _HTTPStreamingReadFile(_StreamingReadFile):
-    def __init__(self, path, mode):
-        self._path = path
-        head = _get_head(path)
-        if head.status != 200:
-            raise FileNotFoundError(f"No such file or directory: '{path}'")
-        assert head.headers["Accept-Ranges"] == "bytes"
-        size = int(head.headers["Content-Length"])
-        super().__init__(path, mode, size)
-
-    def _get_file(self, offset):
-        req = Request(
-            url=self._path, headers={"Range": f"bytes={offset}-"}, method="GET"
-        )
-        resp = _execute_request(req)
-        assert resp.status == 206
-        return resp
-
-
 class _StreamingWriteFile(_BaseFile):
     def __init__(self, mode):
         self._text_mode = "b" not in mode
@@ -1047,26 +1004,6 @@ class _GCSStreamingWriteFile(_StreamingWriteFile):
                 assert resp.status == 308
 
 
-class _HTTPStreamingWriteFile(_StreamingWriteFile):
-    # this is a fake streaming write file since we don't support range uploads yet
-    # instead we store all buffers and then upload all of them on finalize
-    def __init__(self, path, mode):
-        super().__init__(mode)
-        self._upload_buffer = self._empty
-        self._path = path
-
-    def _upload_chunk(self, chunk, start, end, finalize):
-        self._upload_buffer += chunk
-
-        if not finalize:
-            return
-
-        req = Request(url=self._path, data=self._upload_buffer, method="POST")
-        resp = _execute_request(req)
-        assert resp.status == 200
-        self._upload_buffer = None
-
-
 class BlobFile:
     """
     Open a local or remote file for reading or writing
@@ -1087,19 +1024,6 @@ class BlobFile:
             elif self._mode in ("r", "rb"):
                 if streaming:
                     self._f = _GCSStreamingReadFile(path, self._mode)
-                else:
-                    self._f = _LocalFile(path, self._mode)
-            else:
-                raise Exception(f"unsupported mode {self._mode}")
-        elif _is_http_path(path):
-            if self._mode in ("w", "wb"):
-                if streaming:
-                    self._f = _HTTPStreamingWriteFile(path, self._mode)
-                else:
-                    self._f = _LocalFile(path, self._mode)
-            elif self._mode in ("r", "rb"):
-                if streaming:
-                    self._f = _HTTPStreamingReadFile(path, self._mode)
                 else:
                     self._f = _LocalFile(path, self._mode)
             else:

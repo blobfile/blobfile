@@ -4,10 +4,20 @@ This is a standalone clone of TensorFlow's [`gfile`](https://www.tensorflow.org/
 
 The main function is `BlobFile`, a replacement for `GFile`.  There are also a few additional functions, `basename`, `dirname`, and `join`, which mostly do the same thing as their `os.path` namesakes, only they also support `gs://` paths.  
 
-By default reads are copied on open() and writes on close(), set `streaming=True` to `BlobFile` to stream reads and writes instead.  GCS files are written in large chunks though, so be careful if you do a log file this way as the end could be truncated.
+By default reads copy the entire source file on creation and writes on `close()`.  Set `streaming=True` to `BlobFile` to stream reads and writes instead.  GCS files are written in large chunks though, so be careful if you do a log file this way as the end could be truncated.
+
+Example usage:
+
+```py
+import blobfile as bf
+
+with bf.BlobFile("gs://my-bucket-name/cats", "wb") as w:
+    w.write(b"meow!")
+```
 
 Here are the functions:
 
+* `BlobFile` - like `open()` but works with `gs://` paths too
 * `copy` - copy a file from one path to another
 * `exists` - returns `True` if the file or directory exists
 * `glob` - return files matching a pattern, on GCS this only supports the `*` operator and can be slow if the `*` appears early in the pattern since GCS can only do prefix matches, all additional filtering must happen locally

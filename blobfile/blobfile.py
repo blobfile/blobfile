@@ -633,7 +633,6 @@ def md5(path):
 
 class _LocalFile:
     def __init__(self, path, mode):
-        print(f"create LocalFile {path}")
         self._mode = mode
         self._remote_path = path
         self._local_dir = tempfile.mkdtemp()

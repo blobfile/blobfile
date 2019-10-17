@@ -14,11 +14,13 @@ import glob as local_glob
 import fnmatch
 import collections
 import threading
+import datetime
 
 import urllib3
+import xmltodict
 
-from . import google
-from .common import Request
+from . import google, azure, common
+from .common import Request, create_oauth_request
 
 
 DEFAULT_TIMEOUT = 60
@@ -50,11 +52,11 @@ def set_log_callback(fn):
 
 class AccessTokenManager:
     """
-    Automatically refresh a google access token when it expires
+    Automatically refresh an access token when it expires
     """
 
-    def __init__(self, scopes):
-        self._scopes = scopes
+    def __init__(self, create_request_fn):
+        self._create_request_fn = create_request_fn
         self._access_token = None
         self._lock = threading.Lock()
         self._expiration = None
@@ -66,17 +68,23 @@ class AccessTokenManager:
                 self._access_token = None
 
             if self._access_token is None:
-                req = google.create_access_token_request(self._scopes)
+                req = self._create_request_fn()
                 with _execute_request(req) as resp:
                     assert resp.status == 200
                     result = json.load(resp)
                     self._access_token = result["access_token"]
-                    self._expiration = now + result["expires_in"]
+                    self._expiration = now + float(result["expires_in"])
         return self._access_token
 
 
-global_access_token_manager = AccessTokenManager(
-    ["https://www.googleapis.com/auth/devstorage.full_control"]
+global_google_access_token_manager = AccessTokenManager(
+    lambda: google.create_access_token_request(
+        ["https://www.googleapis.com/auth/devstorage.full_control"]
+    )
+)
+
+global_azure_access_token_manager = AccessTokenManager(
+    lambda: azure.create_access_token_request("https://storage.azure.com/")
 )
 
 
@@ -119,12 +127,17 @@ def _execute_request(req, retry_statuses=(500,), timeout=DEFAULT_TIMEOUT):
 
 
 def _is_local_path(path):
-    return not _is_gcs_path(path)
+    return not _is_gcs_path(path) and not _is_azure_path(path)
 
 
 def _is_gcs_path(path):
     url = urllib.parse.urlparse(path)
     return url.scheme == "gs"
+
+
+def _is_azure_path(path):
+    url = urllib.parse.urlparse(path)
+    return url.scheme == "az"
 
 
 def _get_path_type(path):
@@ -163,8 +176,8 @@ def copy(src, dst, overwrite=False):
             params = None
             if token is not None:
                 params = {"rewriteToken": token}
-            req = google.create_api_request(
-                access_token=global_access_token_manager.get_token(),
+            req = create_oauth_request(
+                access_token=global_google_access_token_manager.get_token(),
                 url=google.build_url(
                     "/storage/v1/b/{sourceBucket}/o/{sourceObject}/rewriteTo/b/{destinationBucket}/o/{destinationObject}",
                     sourceBucket=srcbucket,
@@ -192,8 +205,19 @@ def copy(src, dst, overwrite=False):
 
 
 def _create_google_api_request(**kwargs):
-    kwargs["access_token"] = global_access_token_manager.get_token()
-    return google.create_api_request(**kwargs)
+    kwargs["access_token"] = global_google_access_token_manager.get_token()
+    return create_oauth_request(**kwargs)
+
+
+def _create_azure_api_request(**kwargs):
+    kwargs["access_token"] = global_azure_access_token_manager.get_token()
+    req = create_oauth_request(**kwargs)
+    # https://docs.microsoft.com/en-us/rest/api/storageservices/previous-azure-storage-service-versions
+    req.headers["x-ms-version"] = "2019-02-02"
+    req.headers["x-ms-date"] = datetime.datetime.utcnow().strftime(
+        "%a, %d %b %Y %H:%M:%S GMT"
+    )
+    return req
 
 
 def _gcs_get_blob_metadata(path):
@@ -209,9 +233,44 @@ def _gcs_get_blob_metadata(path):
         return resp, json.load(resp)
 
 
+def _todo_az_list_containers(path):
+    _scheme, storage_account, path = _split_url(path)
+    req = _create_azure_api_request(
+        url=common.build_url(f"https://{storage_account}.blob.core.windows.net", "/"),
+        method="GET",
+        params=dict(comp="list"),
+    )
+    with _execute_request(req) as resp:
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "application/xml"
+        return xmltodict.parse(resp)
+
+
+def _az_get_blob_metadata(path):
+    _scheme, storage_account, path = _split_url(path)
+    container, _sep, blob = path.partition("/")
+    req = _create_azure_api_request(
+        url=common.build_url(
+            f"https://{storage_account}.blob.core.windows.net",
+            "/{container}/{blob}",
+            container=container,
+            blob=blob,
+        ),
+        method="HEAD",
+    )
+    with _execute_request(req) as resp:
+        assert resp.status in (200, 404)
+        return resp
+
+
 def _gcs_exists(path):
     resp, _metadata = _gcs_get_blob_metadata(path)
     assert resp.status in (200, 404)
+    return resp.status == 200
+
+
+def _azure_exists(path):
+    resp = _az_get_blob_metadata(path)
     return resp.status == 200
 
 
@@ -222,6 +281,12 @@ def exists(path):
         if _gcs_exists(path):
             return True
         return isdir(path)
+    elif _is_azure_path(path):
+        if _azure_exists(path):
+            return True
+        return False
+        # TODO:
+        # return isdir(path)
     else:
         raise Exception("unrecognized path")
 
@@ -891,7 +956,7 @@ class _GCSStreamingReadFile(_StreamingReadFile):
 
     def _get_file(self, offset):
         req = google.create_read_blob_request(
-            access_token=global_access_token_manager.get_token(),
+            access_token=global_google_access_token_manager.get_token(),
             bucket=self._metadata["bucket"],
             name=self._metadata["name"],
             start=offset,
@@ -968,7 +1033,7 @@ class _GCSStreamingWriteFile(_StreamingWriteFile):
     def __init__(self, path, mode):
         _scheme, bucket, name = _split_url(path)
         req = google.create_resumable_upload_request(
-            access_token=global_access_token_manager.get_token(),
+            access_token=global_google_access_token_manager.get_token(),
             bucket=bucket,
             name=name,
         )

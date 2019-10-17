@@ -12,6 +12,7 @@ from Cryptodome.Signature import pkcs1_15
 from Cryptodome.Hash import SHA256
 from Cryptodome.PublicKey import RSA
 
+from . import common
 from .common import Request
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
@@ -117,25 +118,12 @@ def create_access_token_request(scopes):
         raise Exception("credentials not recognized")
 
 
-def create_api_request(access_token, url, method, params=None, data=None):
-    headers = {"Authorization": f"Bearer {access_token}"}
-    if params is not None:
-        if len(params) > 0:
-            url += "?" + urllib.parse.urlencode(params)
-    if data is not None:
-        data = json.dumps(data).encode("utf8")
-    return Request(url=url, method=method, headers=headers, data=data)
-
-
 def build_url(template, **data):
-    escaped_data = {}
-    for k, v in data.items():
-        escaped_data[k] = urllib.parse.quote_plus(v)
-    return "https://www.googleapis.com" + template.format(**escaped_data)
+    return common.build_url("https://www.googleapis.com", template, **data)
 
 
 def create_read_blob_request(access_token, bucket, name, start=None, end=None):
-    req = create_api_request(
+    req = common.create_oauth_request(
         access_token=access_token,
         url=build_url("/storage/v1/b/{bucket}/o/{name}", bucket=bucket, name=name),
         method="GET",
@@ -156,7 +144,7 @@ def create_read_blob_request(access_token, bucket, name, start=None, end=None):
 
 
 def create_resumable_upload_request(access_token, bucket, name):
-    req = create_api_request(
+    req = common.create_oauth_request(
         access_token=access_token,
         url=build_url(
             "/upload/storage/v1/b/{bucket}/o?uploadType=resumable", bucket=bucket

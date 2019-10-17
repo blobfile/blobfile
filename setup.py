@@ -15,7 +15,7 @@ setup_dict = dict(
     author="Christopher Hesse",
     license="Public Domain",
     packages=find_packages(),
-    install_requires=["pycryptodomex~=3.8.2", "urllib3~=1.25.3"],
+    install_requires=["pycryptodomex~=3.8.2", "urllib3~=1.25.3", "xmltodict~=0.12.0"],
     extras_require={"dev": ["pytest", "tensorflow", "imageio", "imageio-ffmpeg"]},
 )
 

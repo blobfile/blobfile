@@ -14,13 +14,12 @@ import glob as local_glob
 import fnmatch
 import collections
 import threading
-import datetime
 
 import urllib3
 import xmltodict
 
 from . import google, azure, common
-from .common import Request, create_oauth_request
+from .common import Request, create_authenticated_request
 
 
 DEFAULT_TIMEOUT = 60
@@ -83,6 +82,7 @@ global_google_access_token_manager = AccessTokenManager(
     )
 )
 
+# TODO: token cache should probably be per account
 global_azure_access_token_manager = AccessTokenManager(
     lambda: azure.create_access_token_request("https://storage.azure.com/")
 )
@@ -176,7 +176,7 @@ def copy(src, dst, overwrite=False):
             params = None
             if token is not None:
                 params = {"rewriteToken": token}
-            req = create_oauth_request(
+            req = create_authenticated_request(
                 access_token=global_google_access_token_manager.get_token(),
                 url=google.build_url(
                     "/storage/v1/b/{sourceBucket}/o/{sourceObject}/rewriteTo/b/{destinationBucket}/o/{destinationObject}",
@@ -187,6 +187,7 @@ def copy(src, dst, overwrite=False):
                 ),
                 method="POST",
                 params=params,
+                encoding="json",
             )
             with _execute_request(req) as resp:
                 if resp.status == 404:
@@ -205,19 +206,15 @@ def copy(src, dst, overwrite=False):
 
 
 def _create_google_api_request(**kwargs):
-    kwargs["access_token"] = global_google_access_token_manager.get_token()
-    return create_oauth_request(**kwargs)
+    return google.create_api_request(
+        access_token=global_google_access_token_manager.get_token(), **kwargs
+    )
 
 
 def _create_azure_api_request(**kwargs):
-    kwargs["access_token"] = global_azure_access_token_manager.get_token()
-    req = create_oauth_request(**kwargs)
-    # https://docs.microsoft.com/en-us/rest/api/storageservices/previous-azure-storage-service-versions
-    req.headers["x-ms-version"] = "2019-02-02"
-    req.headers["x-ms-date"] = datetime.datetime.utcnow().strftime(
-        "%a, %d %b %Y %H:%M:%S GMT"
+    return azure.create_api_request(
+        access_token=global_azure_access_token_manager.get_token(), **kwargs
     )
-    return req
 
 
 def _gcs_get_blob_metadata(path):
@@ -246,12 +243,17 @@ def _todo_az_list_containers(path):
         return xmltodict.parse(resp)
 
 
-def _az_get_blob_metadata(path):
-    _scheme, storage_account, path = _split_url(path)
+def _split_azure_url(path):
+    _scheme, account, path = _split_url(path)
     container, _sep, blob = path.partition("/")
+    return account, container, blob
+
+
+def _az_get_blob_metadata(path):
+    account, container, blob = _split_azure_url(path)
     req = _create_azure_api_request(
         url=common.build_url(
-            f"https://{storage_account}.blob.core.windows.net",
+            f"https://{account}.blob.core.windows.net",
             "/{container}/{blob}",
             container=container,
             blob=blob,
@@ -671,6 +673,17 @@ def get_url(path):
         return google.generate_signed_url(
             bucket, blob, expiration=google.MAX_EXPIRATION
         )
+    elif _is_azure_path(path):
+        account, container, blob = _split_azure_url(path)
+        url = f"https://{account}.blob.core.windows.net/{container}/{blob}"
+        # TODO: cache sas request (per account?)
+        req, expiration = azure.create_user_delegation_sas_request(
+            access_token=global_azure_access_token_manager.get_token(), account=account
+        )
+        resp = _execute_request(req)
+        assert resp.status == 200
+        out = xmltodict.parse(resp)
+        return azure.generate_signed_url(key=out["UserDelegationKey"], url=url)
     elif _is_local_path(path):
         return f"file://{path}"
     else:

@@ -1,6 +1,8 @@
 import urllib
 import json
 
+import xmltodict
+
 
 class Request:
     def __init__(self, method, url, headers=None, data=None):
@@ -13,13 +15,21 @@ class Request:
         return f"<Request method={self.method} url={self.url} headers={self.headers}>"
 
 
-def create_oauth_request(access_token, url, method, params=None, data=None):
+def create_authenticated_request(
+    access_token, url, method, encoding, params=None, data=None
+):
     headers = {"Authorization": f"Bearer {access_token}"}
     if params is not None:
         if len(params) > 0:
             url += "?" + urllib.parse.urlencode(params)
     if data is not None:
-        data = json.dumps(data).encode("utf8")
+        if encoding == "json":
+            data = json.dumps(data)
+        elif encoding == "xml":
+            data = xmltodict.unparse(data)
+        else:
+            raise Exception("invalid encoding")
+        data = data.encode("utf8")
     return Request(url=url, method=method, headers=headers, data=data)
 
 

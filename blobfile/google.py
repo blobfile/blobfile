@@ -38,7 +38,7 @@ def _create_jwt(private_key, data):
     return header_b64 + b"." + body_b64 + b"." + signature_b64
 
 
-def create_token_request(client_email, private_key, scopes):
+def _create_token_request(client_email, private_key, scopes):
     # https://developers.google.com/identity/protocols/OAuth2ServiceAccount
     now = time.time()
     claim_set = {
@@ -60,7 +60,7 @@ def create_token_request(client_email, private_key, scopes):
     )
 
 
-def refresh_access_token_request(client_id, client_secret, refresh_token):
+def _refresh_access_token_request(client_id, client_secret, refresh_token):
     # https://developers.google.com/identity/protocols/OAuth2WebServer#offline
     data = {
         "grant_type": "refresh_token",
@@ -107,9 +107,11 @@ def create_access_token_request(scopes):
     creds = _load_credentials()
     if "private_key" in creds:
         # looks like GCS does not support the no-oauth flow https://developers.google.com/identity/protocols/OAuth2ServiceAccount#jwt-auth
-        return create_token_request(creds["client_email"], creds["private_key"], scopes)
+        return _create_token_request(
+            creds["client_email"], creds["private_key"], scopes
+        )
     elif "refresh_token" in creds:
-        return refresh_access_token_request(
+        return _refresh_access_token_request(
             refresh_token=creds["refresh_token"],
             client_id=creds["client_id"],
             client_secret=creds["client_secret"],
@@ -123,11 +125,12 @@ def build_url(template, **data):
 
 
 def create_read_blob_request(access_token, bucket, name, start=None, end=None):
-    req = common.create_oauth_request(
+    req = common.create_authenticated_request(
         access_token=access_token,
         url=build_url("/storage/v1/b/{bucket}/o/{name}", bucket=bucket, name=name),
         method="GET",
         params=dict(alt="media"),
+        encoding="json",
     )
     # https://cloud.google.com/storage/docs/xml-api/get-object-download
     # oddly range requests are not mentioned in the JSON API, only in the XML api
@@ -144,16 +147,23 @@ def create_read_blob_request(access_token, bucket, name, start=None, end=None):
 
 
 def create_resumable_upload_request(access_token, bucket, name):
-    req = common.create_oauth_request(
+    req = common.create_authenticated_request(
         access_token=access_token,
         url=build_url(
             "/upload/storage/v1/b/{bucket}/o?uploadType=resumable", bucket=bucket
         ),
         method="POST",
         data=dict(name=name),
+        encoding="json",
     )
     req.headers["Content-Type"] = "application/json; charset=UTF-8"
     return req
+
+
+def create_api_request(access_token, **kwargs):
+    return common.create_authenticated_request(
+        access_token=access_token, encoding="xml", **kwargs
+    )
 
 
 def generate_signed_url(

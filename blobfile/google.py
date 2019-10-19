@@ -217,3 +217,9 @@ def generate_signed_url(
     host_name = "https://storage.googleapis.com"
     signed_url = f"{host_name}{canonical_uri}?{canonical_query_string}&X-Goog-Signature={signature}"
     return signed_url
+
+
+def split_url(path):
+    url = urllib.parse.urlparse(path)
+    assert url.scheme == "gs"
+    return url.netloc, url.path[1:]

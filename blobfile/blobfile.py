@@ -196,11 +196,6 @@ def _get_path_type(path):
         raise Exception("unrecognized path")
 
 
-def _split_url(path):
-    url = urllib.parse.urlparse(path)
-    return url.scheme, url.netloc, url.path[1:]
-
-
 def _get_head(path):
     req = Request(url=path, method="HEAD")
     with _execute_request(req) as resp:
@@ -216,8 +211,8 @@ def copy(src, dst, overwrite=False):
 
     # special case gcs to gcs copy, don't download the file
     if _is_gcs_path(src) and _is_gcs_path(dst):
-        _scheme, srcbucket, srcname = _split_url(src)
-        _scheme, dstbucket, dstname = _split_url(dst)
+        srcbucket, srcname = google.split_url(src)
+        dstbucket, dstname = google.split_url(dst)
         token = None
         while True:
             params = None
@@ -265,7 +260,7 @@ def _create_azure_api_request(**kwargs):
 
 
 def _gcs_get_blob_metadata(path):
-    _scheme, bucket, blob = _split_url(path)
+    bucket, blob = google.split_url(path)
     req = _create_google_api_request(
         url=google.build_url(
             "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
@@ -275,25 +270,6 @@ def _gcs_get_blob_metadata(path):
     with _execute_request(req) as resp:
         assert resp.status in (200, 404)
         return resp, json.load(resp)
-
-
-# def _todo_az_list_containers(path):
-#     _scheme, account, path = _split_url(path)
-#     req = _create_azure_api_request(
-#         url=common.build_url(f"https://{account}.blob.core.windows.net", "/"),
-#         method="GET",
-#         params=dict(comp="list"),
-#     )
-#     with _execute_request(req) as resp:
-#         assert resp.status == 200
-#         assert resp.headers["Content-Type"] == "application/xml"
-#         return xmltodict.parse(resp)
-
-
-def _split_azure_url(path):
-    _scheme, account, path = _split_url(path)
-    container, _sep, blob = path.partition("/")
-    return account, container, blob
 
 
 def _set_range(req, start=None, end=None):
@@ -311,7 +287,7 @@ def _set_range(req, start=None, end=None):
 
 
 def _azure_get_blob_metadata(path):
-    account, container, blob = _split_azure_url(path)
+    account, container, blob = azure.split_url(path)
     req = _create_azure_api_request(
         url=azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
@@ -347,8 +323,7 @@ def exists(path):
     elif _is_azure_path(path):
         if _azure_exists(path):
             return True
-        # TODO: return isdir(path)
-        return False
+        return isdir(path)
     else:
         raise Exception("unrecognized path")
 
@@ -365,7 +340,7 @@ def glob(pattern):
         if "*" in pattern:
             assert pattern.count("*") == 1
             prefix, _sep, _suffix = pattern.partition("*")
-            _scheme, bucket, blob_prefix = _split_url(prefix)
+            bucket, blob_prefix = google.split_url(prefix)
             assert "*" not in bucket
             params = dict(prefix=blob_prefix)
             if "/" in blob_prefix:
@@ -400,7 +375,7 @@ def isdir(path):
     elif _is_gcs_path(path):
         if not path.endswith("/"):
             path += "/"
-        _scheme, bucket, blob_prefix = _split_url(path)
+        bucket, blob_prefix = google.split_url(path)
         params = dict(prefix=blob_prefix, delimiter="/", maxResults=1)
         req = _create_google_api_request(
             url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
@@ -411,6 +386,9 @@ def isdir(path):
             result = json.load(resp)
             if "items" in result or "prefixes" in result:
                 return True
+        return False
+    elif _is_azure_path(path):
+        # we don't have directory existence checking yet
         return False
     else:
         raise Exception("unrecognized path")
@@ -461,7 +439,7 @@ def listdir(path):
     elif _is_gcs_path(path):
         if not path.endswith("/"):
             path += "/"
-        _scheme, bucket, blob = _split_url(path)
+        bucket, blob = google.split_url(path)
         it = _create_google_page_iterator(
             url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
             method="GET",
@@ -482,7 +460,7 @@ def makedirs(path):
     elif _is_gcs_path(path):
         if not path.endswith("/"):
             path += "/"
-        _scheme, bucket, blob = _split_url(path)
+        bucket, blob = google.split_url(path)
         req = _create_google_api_request(
             url=google.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
             method="POST",
@@ -505,7 +483,7 @@ def remove(path):
     if _is_local_path(path):
         os.remove(path)
     elif _is_gcs_path(path):
-        _scheme, bucket, blob = _split_url(path)
+        bucket, blob = google.split_url(path)
         req = _create_google_api_request(
             url=google.build_url(
                 "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
@@ -614,7 +592,7 @@ def rmtree(path):
     elif _is_gcs_path(path):
         if not path.endswith("/"):
             path += "/"
-        _scheme, bucket, blob = _split_url(path)
+        bucket, blob = google.split_url(path)
         it = _create_google_page_iterator(
             url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
             method="GET",
@@ -654,7 +632,7 @@ def walk(top, topdown=True, onerror=None):
         dq.append(top)
         while len(dq) > 0:
             cur = dq.popleft()
-            _scheme, bucket, blob = _split_url(cur)
+            bucket, blob = google.split_url(cur)
             it = _create_google_page_iterator(
                 url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
                 method="GET",
@@ -681,7 +659,7 @@ def basename(path):
     For GCS, this is the part after the bucket
     """
     if _is_gcs_path(path):
-        _scheme, _netloc, path = _split_url(path)
+        _netloc, path = google.split_url(path)
         return path.split("/")[-1]
     else:
         return os.path.basename(path)
@@ -694,7 +672,7 @@ def dirname(path):
     If this is a GCS path, the root directory is gs://<bucket name>/
     """
     if _is_gcs_path(path):
-        scheme, netloc, urlpath = _split_url(path)
+        netloc, urlpath = google.split_url(path)
         if urlpath.endswith("/"):
             urlpath = urlpath[:-1]
 
@@ -702,7 +680,7 @@ def dirname(path):
             urlpath = "/".join(urlpath.split("/")[:-1]) + "/"
         else:
             urlpath = ""
-        return f"{scheme}://{netloc}/{urlpath}"
+        return f"gs://{netloc}/{urlpath}"
     else:
         return os.path.dirname(path)
 
@@ -754,12 +732,12 @@ def get_url(path):
     Get a URL for the given path that a browser could open
     """
     if _is_gcs_path(path):
-        _scheme, bucket, blob = _split_url(path)
+        bucket, blob = google.split_url(path)
         return google.generate_signed_url(
             bucket, blob, expiration=google.MAX_EXPIRATION
         )
     elif _is_azure_path(path):
-        account, container, blob = _split_azure_url(path)
+        account, container, blob = azure.split_url(path)
         url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
         )
@@ -1081,7 +1059,7 @@ class _AzureStreamingReadFile(_StreamingReadFile):
         super().__init__(path, mode, int(self._metadata["Content-Length"]))
 
     def _get_file(self, offset):
-        account, container, blob = _split_azure_url(self._path)
+        account, container, blob = azure.split_url(self._path)
         req = _create_azure_api_request(
             url=azure.build_url(
                 account, "/{container}/{blob}", container=container, blob=blob
@@ -1159,7 +1137,7 @@ class _StreamingWriteFile(_BaseFile):
 
 class _GCSStreamingWriteFile(_StreamingWriteFile):
     def __init__(self, path, mode):
-        _scheme, bucket, name = _split_url(path)
+        bucket, name = google.split_url(path)
         req = _create_google_api_request(
             url=google.build_url(
                 "/upload/storage/v1/b/{bucket}/o?uploadType=resumable", bucket=bucket
@@ -1201,7 +1179,7 @@ class _GCSStreamingWriteFile(_StreamingWriteFile):
 
 class _AzureStreamingWriteFile(_StreamingWriteFile):
     def __init__(self, path, mode):
-        account, container, blob = _split_azure_url(path)
+        account, container, blob = azure.split_url(path)
         self._url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
         )

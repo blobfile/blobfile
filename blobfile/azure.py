@@ -178,3 +178,10 @@ def generate_signed_url(key, url):
     )
     query = urllib.parse.urlencode({k: v for k, v in params.items() if v != ""})
     return url + "?" + query
+
+
+def split_url(path):
+    url = urllib.parse.urlparse(path)
+    assert url.scheme == "as"
+    container, _sep, blob = url.path[1:].partition("/")
+    return url.netloc, container, blob

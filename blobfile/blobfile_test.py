@@ -15,7 +15,7 @@ from tensorflow.io import gfile  # pylint: disable=import-error
 import imageio
 import numpy as np
 
-from . import blobfile as bf
+from . import blobfile as bf, azure
 
 GCS_TEST_BUCKET = "csh-test-2"
 AS_TEST_ACCOUNT = "cshteststorage"
@@ -65,7 +65,7 @@ def _get_temp_as_path():
 def _write_contents(path, contents):
     if path.startswith("as://"):
         with tempfile.TemporaryDirectory() as tmpdir:
-            account, container, blob = bf._split_azure_url(path)
+            account, container, blob = azure.split_url(path)
             filepath = os.path.join(tmpdir, "tmp")
             with open(filepath, "wb") as f:
                 f.write(contents)
@@ -97,7 +97,7 @@ def _write_contents(path, contents):
 def _read_contents(path):
     if path.startswith("as://"):
         with tempfile.TemporaryDirectory() as tmpdir:
-            account, container, blob = bf._split_azure_url(path)
+            account, container, blob = azure.split_url(path)
             filepath = os.path.join(tmpdir, "tmp")
             sp.run(
                 [
@@ -325,9 +325,7 @@ def test_copy():
             assert _read_contents(dst) == contents
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
 def test_exists(ctx):
     contents = b"meow!"
     with ctx() as path:

@@ -16,7 +16,16 @@ setup_dict = dict(
     license="Public Domain",
     packages=find_packages(),
     install_requires=["pycryptodomex~=3.8.2", "urllib3~=1.25.3", "xmltodict~=0.12.0"],
-    extras_require={"dev": ["pytest", "tensorflow", "imageio", "imageio-ffmpeg"]},
+    extras_require={
+        "dev": [
+            "pytest",
+            "tensorflow",
+            "imageio",
+            "imageio-ffmpeg",
+            "azure-cli",
+            "google-cloud-storage",
+        ]
+    },
 )
 
 if os.environ.get("USE_SCM_VERSION", "1") == "1":

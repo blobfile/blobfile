@@ -8,21 +8,31 @@ import datetime
 from . import common
 
 
-def _create_token_request(appId, tenant, password, scope):
-    # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-oauth2-client-creds-grant-flow#request-an-access-token
-    # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-protocols-oauth-code
-    # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory#use-oauth-access-tokens-for-authentication
-    # https://docs.microsoft.com/en-us/rest/api/azure/
-    # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory
-    # az ad sp create-for-rbac --name <name>
-    # az account list
-    # az role assignment create --role "Storage Blob Data Contributor" --assignee <appid> --scope "/subscriptions/<sub id>"
-    data = {
-        "grant_type": "client_credentials",
-        "client_id": appId,
-        "client_secret": password,
-        "resource": scope,
-    }
+def _create_token_request(creds, scope):
+    if "refreshToken" in creds:
+        # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-protocols-oauth-code#refreshing-the-access-tokens
+        data = {
+            "grant_type": "refresh_token",
+            "refresh_token": creds["refreshToken"],
+            "resource": scope,
+        }
+        tenant = "common"
+    else:
+        # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-oauth2-client-creds-grant-flow#request-an-access-token
+        # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-protocols-oauth-code
+        # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory#use-oauth-access-tokens-for-authentication
+        # https://docs.microsoft.com/en-us/rest/api/azure/
+        # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory
+        # az ad sp create-for-rbac --name <name>
+        # az account list
+        # az role assignment create --role "Storage Blob Data Contributor" --assignee <appid> --scope "/subscriptions/<sub id>"
+        data = {
+            "grant_type": "client_credentials",
+            "client_id": creds["appId"],
+            "client_secret": creds["password"],
+            "resource": scope,
+        }
+        tenant = creds["tenant"]
     return common.Request(
         url=f"https://login.microsoftonline.com/{tenant}/oauth2/token",
         method="POST",
@@ -36,10 +46,31 @@ def _load_credentials():
         creds_path = os.environ["AZURE_APPLICATION_CREDENTIALS"]
         if not os.path.exists(creds_path):
             raise Exception(
-                "credentials not found at {creds_path} specified by environment variable 'AZURE_APPLICATION_CREDENTIALS'"
+                f"credentials not found at {creds_path} specified by environment variable 'AZURE_APPLICATION_CREDENTIALS'"
             )
         with open(creds_path) as f:
             return json.load(f)
+
+    # this doesn't work, it may need to use this token to list storage account keys
+    # https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Storage/storageAccounts/{accountName}/listKeys?api-version=2019-04-01
+    # this may produce a sharedkey
+    # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#specifying-the-authorization-header
+
+    # # https://mikhail.io/2019/07/how-azure-cli-manages-access-tokens/
+    # default_creds_path = os.path.expanduser("~/.azure/accessTokens.json")
+    # if os.path.exists(default_creds_path):
+    #     with open(default_creds_path) as f:
+    #         tokens = json.load(f)
+    #         best_token = None
+    #         for token in tokens:
+    #             if best_token is None:
+    #                 best_token = token
+    #             else:
+    #                 if token["expiresOn"] > best_token["expiresOn"]:
+    #                     best_token = token
+    #         if best_token is not None:
+    #             return best_token
+    # TODO: link to setup instructions for azure accounts
     raise Exception(
         "credentials not found, please create an account with 'az ad sp create-for-rbac --name <name>' and set the 'AZURE_APPLICATION_CREDENTIALS' environment variable to the path of the output from that command"
     )
@@ -47,12 +78,7 @@ def _load_credentials():
 
 def create_access_token_request(scope):
     creds = _load_credentials()
-    return _create_token_request(
-        appId=creds["appId"],
-        password=creds["password"],
-        tenant=creds["tenant"],
-        scope=scope,
-    )
+    return _create_token_request(creds=creds, scope=scope)
 
 
 def create_api_request(access_token, **kwargs):
@@ -120,9 +146,6 @@ def generate_signed_url(key, url):
         params["st"],
         params["se"],
         canonicalized_resource,
-        # # this is documented on a different page
-        # # https://docs.microsoft.com/en-us/rest/api/storageservices/create-service-sas#specifying-the-signed-identifier
-        # params["si"], # not sure where this is supposed to go
         params["skoid"],
         params["sktid"],
         params["skt"],
@@ -138,7 +161,9 @@ def generate_signed_url(key, url):
         params["rsce"],
         params["rscl"],
         params["rsct"],
-        "",  # unknown
+        # this is documented on a different page
+        # https://docs.microsoft.com/en-us/rest/api/storageservices/create-service-sas#specifying-the-signed-identifier
+        params["si"],
     )
     string_to_sign = "\n".join(parts_to_sign)
     params["sig"] = base64.b64encode(

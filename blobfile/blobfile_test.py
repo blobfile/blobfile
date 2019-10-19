@@ -7,6 +7,8 @@ import json
 import urllib.request
 import hashlib
 import time
+import subprocess as sp
+import platform
 
 import pytest
 from tensorflow.io import gfile  # pylint: disable=import-error
@@ -14,6 +16,10 @@ import imageio
 import numpy as np
 
 from . import blobfile as bf
+
+GCS_TEST_BUCKET = "csh-test-2"
+AS_TEST_ACCOUNT = "cshteststorage"
+AS_TEST_CONTAINER = "testcontainer"
 
 
 @contextlib.contextmanager
@@ -25,7 +31,7 @@ def _get_temp_local_path():
 
 @contextlib.contextmanager
 def _get_temp_gcs_path():
-    path = "gs://csh-test-2/" + "".join(
+    path = f"gs://{GCS_TEST_BUCKET}/" + "".join(
         random.choice(string.ascii_lowercase) for i in range(16)
     )
     gfile.mkdir(path)
@@ -33,14 +39,91 @@ def _get_temp_gcs_path():
     gfile.rmtree(path)
 
 
+@contextlib.contextmanager
+def _get_temp_as_path():
+    random_id = "".join(random.choice(string.ascii_lowercase) for i in range(16))
+    path = f"as://{AS_TEST_ACCOUNT}/{AS_TEST_CONTAINER}/" + random_id
+    yield path + "/name"
+    sp.run(
+        [
+            "az",
+            "storage",
+            "blob",
+            "delete-batch",
+            "--account-name",
+            AS_TEST_ACCOUNT,
+            "--source",
+            AS_TEST_CONTAINER,
+            "--pattern",
+            f"{random_id}/*",
+        ],
+        check=True,
+        shell=platform.system() == "Windows",
+    )
+
+
 def _write_contents(path, contents):
-    with gfile.GFile(path, "wb") as f:
-        f.write(contents)
+    if path.startswith("as://"):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            account, container, blob = bf._split_azure_url(path)
+            filepath = os.path.join(tmpdir, "tmp")
+            with open(filepath, "wb") as f:
+                f.write(contents)
+            sp.run(
+                [
+                    "az",
+                    "storage",
+                    "blob",
+                    "upload",
+                    "--account-name",
+                    account,
+                    "--container-name",
+                    container,
+                    "--name",
+                    blob,
+                    "--file",
+                    filepath,
+                ],
+                check=True,
+                shell=platform.system() == "Windows",
+                stdout=sp.DEVNULL,
+                stderr=sp.DEVNULL,
+            )
+    else:
+        with gfile.GFile(path, "wb") as f:
+            f.write(contents)
 
 
 def _read_contents(path):
-    with gfile.GFile(path, "rb") as f:
-        return f.read()
+    if path.startswith("as://"):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            account, container, blob = bf._split_azure_url(path)
+            filepath = os.path.join(tmpdir, "tmp")
+            sp.run(
+                [
+                    "az",
+                    "storage",
+                    "blob",
+                    "download",
+                    "--account-name",
+                    account,
+                    "--container-name",
+                    container,
+                    "--name",
+                    blob,
+                    "--file",
+                    filepath,
+                ],
+                check=True,
+                shell=platform.system() == "Windows",
+                stdout=sp.DEVNULL,
+                stderr=sp.DEVNULL,
+            )
+            with open(filepath, "rb") as f:
+                return f.read()
+    else:
+        with gfile.GFile(path, "rb") as f:
+            return f.read()
 
 
 def test_basename():
@@ -132,7 +215,7 @@ def test_stat(ctx):
         _write_contents(path, contents)
         s = bf.stat(path)
         assert s.size == len(contents)
-        assert 0 < time.time() - s.mtime < 5
+        assert 0 <= abs(time.time() - s.mtime) <= 5
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
@@ -238,7 +321,9 @@ def test_copy():
             assert _read_contents(dst) == contents
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_exists(ctx):
     contents = b"meow!"
     with ctx() as path:

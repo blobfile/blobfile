@@ -14,6 +14,7 @@ import glob as local_glob
 import fnmatch
 import collections
 import threading
+import ssl
 
 import urllib3
 import xmltodict
@@ -33,7 +34,31 @@ GCS_PATH = "gcs"
 
 Stat = collections.namedtuple("Stat", "size, mtime")
 
-http = urllib3.PoolManager()
+# tensorflow imports requests with calls
+#   import urllib3.contrib.pyopenssl
+#   urllib3.contrib.pyopenssl.inject_into_urllib3()
+# which will monkey patch urllib3 to use pyopenssl and sometimes break things
+# with errors such as "certificate verify failed"
+# https://github.com/pyca/pyopenssl/issues/823
+# in order to fix this here are a couple of options:
+
+# method 1
+# from urllib3.util import ssl_
+
+# if ssl_.IS_PYOPENSSL:
+#     import urllib3.contrib.pyopenssl
+
+#     urllib3.contrib.pyopenssl.extract_from_urllib3()
+# http = urllib3.PoolManager()
+
+# method 2
+# build a context based on https://github.com/urllib3/urllib3/blob/edc3ddb3d1cbc5871df4a17a53ca53be7b37facc/src/urllib3/util/ssl_.py#L220
+# this exists because there's no obvious way to cause that function to use the ssl.SSLContext except for un-monkey-patching urllib3
+context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+context.verify_mode = ssl.CERT_REQUIRED
+context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_COMPRESSION
+context.load_default_certs()
+http = urllib3.PoolManager(ssl_context=context)
 
 
 def __log_callback(msg):
@@ -137,7 +162,7 @@ def _is_gcs_path(path):
 
 def _is_azure_path(path):
     url = urllib.parse.urlparse(path)
-    return url.scheme == "az"
+    return url.scheme == "as"
 
 
 def _get_path_type(path):
@@ -230,10 +255,11 @@ def _gcs_get_blob_metadata(path):
         return resp, json.load(resp)
 
 
+# TODO:
 def _todo_az_list_containers(path):
-    _scheme, storage_account, path = _split_url(path)
+    _scheme, account, path = _split_url(path)
     req = _create_azure_api_request(
-        url=common.build_url(f"https://{storage_account}.blob.core.windows.net", "/"),
+        url=common.build_url(f"https://{account}.blob.core.windows.net", "/"),
         method="GET",
         params=dict(comp="list"),
     )
@@ -277,6 +303,9 @@ def _azure_exists(path):
 
 
 def exists(path):
+    """
+    TODO: docs + tests
+    """
     if _is_local_path(path):
         return os.path.exists(path)
     elif _is_gcs_path(path):
@@ -286,19 +315,21 @@ def exists(path):
     elif _is_azure_path(path):
         if _azure_exists(path):
             return True
+        # TODO: return isdir(path)
         return False
-        # TODO:
-        # return isdir(path)
     else:
         raise Exception("unrecognized path")
 
 
 def glob(pattern):
+    """
+    TODO: docs + tests
+    """
+    assert "?" not in pattern and "[" not in pattern and "]" not in pattern
     if _is_local_path(pattern):
         for filepath in local_glob.glob(pattern):
             yield filepath
     elif _is_gcs_path(pattern):
-        assert "?" not in pattern and "[" not in pattern and "]" not in pattern
         if "*" in pattern:
             assert pattern.count("*") == 1
             prefix, _sep, _suffix = pattern.partition("*")
@@ -329,6 +360,9 @@ def glob(pattern):
 
 
 def isdir(path):
+    """
+    TODO: docs + tests
+    """
     if _is_local_path(path):
         return os.path.isdir(path)
     elif _is_gcs_path(path):
@@ -429,6 +463,9 @@ def makedirs(path):
 
 
 def remove(path):
+    """
+    TODO: docs + tests
+    """
     if not exists(path):
         raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
     if isdir(path):
@@ -450,6 +487,9 @@ def remove(path):
 
 
 def rename(src, dst, overwrite=False):
+    """
+    TODO: docs + tests
+    """
     assert _get_path_type(src) == _get_path_type(
         dst
     ), f"src and dst must both be the same type of paths: '{src}' -> '{dst}'"
@@ -479,6 +519,9 @@ def rename(src, dst, overwrite=False):
 
 
 def stat(path):
+    """
+    TODO: docs + tests
+    """
     if _is_local_path(path):
         s = os.stat(path)
         return Stat(size=s.st_size, mtime=s.st_mtime)
@@ -494,6 +537,9 @@ def stat(path):
 
 
 def copytree(src, dst):
+    """
+    TODO: docs + tests
+    """
     if not isdir(src):
         raise NotADirectoryError(f"The directory name is invalid: '{src}'")
     if exists(dst):
@@ -524,6 +570,9 @@ def copytree(src, dst):
 
 
 def rmtree(path):
+    """
+    TODO: docs + tests
+    """
     if not isdir(path):
         raise NotADirectoryError(f"The directory name is invalid: '{path}'")
 
@@ -555,6 +604,9 @@ def rmtree(path):
 
 
 def walk(top, topdown=True, onerror=None):
+    """
+    TODO: docs + tests
+    """
     if not isdir(top):
         return
 
@@ -651,6 +703,7 @@ def cache_key(path):
     """
     Get a cache key for a file
     """
+    # TODO: Content-MD5 https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
     if _is_local_path(path):
         key_parts = [path, os.path.getmtime(path), os.path.getsize(path)]
     elif _is_gcs_path(path):
@@ -1086,7 +1139,7 @@ class BlobFile:
     Open a local or remote file for reading or writing
 
     Args:
-        streaming: set to False to do a single copy instead of streaming reads/writes
+        streaming: set to True to do streaming reads/writes instead of copying the entire file
     """
 
     def __init__(self, path, mode="r", streaming=False):

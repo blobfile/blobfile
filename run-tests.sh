@@ -1,3 +1,3 @@
 set -eux
 pip install -e .
-pytest .
+pytest . #-s -k test_exists

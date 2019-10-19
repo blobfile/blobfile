@@ -19,13 +19,14 @@ import ssl
 import urllib3
 import xmltodict
 
-from . import google, azure, common
+from . import google, azure
 from .common import Request, create_authenticated_request
 
 
 DEFAULT_TIMEOUT = 60
 HASH_CHUNK_SIZE = 65536
 STREAMING_CHUNK_SIZE = 2 ** 20
+AZURE_MAX_CHUNK_SIZE = 4 * 2 ** 20
 # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
 assert STREAMING_CHUNK_SIZE % (256 * 1024) == 0
 
@@ -74,43 +75,64 @@ def set_log_callback(fn):
     _log_callback = fn
 
 
-class AccessTokenManager:
+class TokenManager:
     """
-    Automatically refresh an access token when it expires
+    Automatically refresh a token when it expires
     """
 
-    def __init__(self, create_request_fn):
-        self._create_request_fn = create_request_fn
-        self._access_token = None
+    def __init__(self, get_token_fn):
+        self._get_token_fn = get_token_fn
+        self._tokens = {}
         self._lock = threading.Lock()
         self._expiration = None
 
-    def get_token(self):
+    def get_token(self, *args):
         with self._lock:
             now = time.time()
             if self._expiration is None or now > self._expiration:
-                self._access_token = None
+                if args in self._tokens:
+                    del self._tokens[args]
 
-            if self._access_token is None:
-                req = self._create_request_fn()
-                with _execute_request(req) as resp:
-                    assert resp.status == 200
-                    result = json.load(resp)
-                    self._access_token = result["access_token"]
-                    self._expiration = now + float(result["expires_in"])
-        return self._access_token
+            if args not in self._tokens:
+                self._tokens[args], self._expiration = self._get_token_fn(*args)
+        return self._tokens[args]
 
 
-global_google_access_token_manager = AccessTokenManager(
-    lambda: google.create_access_token_request(
+def _gcs_get_access_token():
+    now = time.time()
+    req = google.create_access_token_request(
         ["https://www.googleapis.com/auth/devstorage.full_control"]
     )
-)
+    with _execute_request(req) as resp:
+        assert resp.status == 200
+        result = json.load(resp)
+        return result["access_token"], now + float(result["expires_in"])
 
-# TODO: token cache should probably be per account
-global_azure_access_token_manager = AccessTokenManager(
-    lambda: azure.create_access_token_request("https://storage.azure.com/")
-)
+
+def _azure_get_access_token():
+    now = time.time()
+    req = azure.create_access_token_request("https://storage.azure.com/")
+    with _execute_request(req) as resp:
+        assert resp.status == 200
+        result = json.load(resp)
+        return result["access_token"], now + float(result["expires_in"])
+
+
+def _azure_get_sas_token(account):
+    req, expiration = azure.create_user_delegation_sas_request(
+        access_token=global_azure_access_token_manager.get_token(), account=account
+    )
+    resp = _execute_request(req)
+    assert resp.status == 200
+    out = xmltodict.parse(resp)
+    return out["UserDelegationKey"], expiration
+
+
+global_google_access_token_manager = TokenManager(_gcs_get_access_token)
+
+global_azure_access_token_manager = TokenManager(_azure_get_access_token)
+
+global_azure_sas_token_manager = TokenManager(_azure_get_sas_token)
 
 
 def _exponential_sleep_generator(initial, maximum, multiplier=2):
@@ -255,18 +277,17 @@ def _gcs_get_blob_metadata(path):
         return resp, json.load(resp)
 
 
-# TODO:
-def _todo_az_list_containers(path):
-    _scheme, account, path = _split_url(path)
-    req = _create_azure_api_request(
-        url=common.build_url(f"https://{account}.blob.core.windows.net", "/"),
-        method="GET",
-        params=dict(comp="list"),
-    )
-    with _execute_request(req) as resp:
-        assert resp.status == 200
-        assert resp.headers["Content-Type"] == "application/xml"
-        return xmltodict.parse(resp)
+# def _todo_az_list_containers(path):
+#     _scheme, account, path = _split_url(path)
+#     req = _create_azure_api_request(
+#         url=common.build_url(f"https://{account}.blob.core.windows.net", "/"),
+#         method="GET",
+#         params=dict(comp="list"),
+#     )
+#     with _execute_request(req) as resp:
+#         assert resp.status == 200
+#         assert resp.headers["Content-Type"] == "application/xml"
+#         return xmltodict.parse(resp)
 
 
 def _split_azure_url(path):
@@ -275,14 +296,25 @@ def _split_azure_url(path):
     return account, container, blob
 
 
-def _az_get_blob_metadata(path):
+def _set_range(req, start=None, end=None):
+    # https://cloud.google.com/storage/docs/xml-api/get-object-download
+    # oddly range requests are not mentioned in the JSON API, only in the XML api
+    if start is not None and end is not None:
+        req.headers["Range"] = f"bytes={start}-{end-1}"
+    elif start is not None:
+        req.headers["Range"] = f"bytes={start}-"
+    elif end is not None:
+        if end > 0:
+            req.headers["Range"] = f"bytes=0-{end-1}"
+        else:
+            req.headers["Range"] = f"bytes=-{-int(end)}"
+
+
+def _azure_get_blob_metadata(path):
     account, container, blob = _split_azure_url(path)
     req = _create_azure_api_request(
-        url=common.build_url(
-            f"https://{account}.blob.core.windows.net",
-            "/{container}/{blob}",
-            container=container,
-            blob=blob,
+        url=azure.build_url(
+            account, "/{container}/{blob}", container=container, blob=blob
         ),
         method="HEAD",
     )
@@ -298,13 +330,13 @@ def _gcs_exists(path):
 
 
 def _azure_exists(path):
-    resp = _az_get_blob_metadata(path)
+    resp = _azure_get_blob_metadata(path)
     return resp.status == 200
 
 
 def exists(path):
     """
-    TODO: docs + tests
+    Return true if that path exists (either as a file or a directory)
     """
     if _is_local_path(path):
         return os.path.exists(path)
@@ -323,7 +355,7 @@ def exists(path):
 
 def glob(pattern):
     """
-    TODO: docs + tests
+    Find files matching a pattern, only supports the "*" operator
     """
     assert "?" not in pattern and "[" not in pattern and "]" not in pattern
     if _is_local_path(pattern):
@@ -361,7 +393,7 @@ def glob(pattern):
 
 def isdir(path):
     """
-    TODO: docs + tests
+    Return true if a path is an existing directory
     """
     if _is_local_path(path):
         return os.path.isdir(path)
@@ -464,7 +496,7 @@ def makedirs(path):
 
 def remove(path):
     """
-    TODO: docs + tests
+    Remove a file at the given path
     """
     if not exists(path):
         raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
@@ -488,7 +520,8 @@ def remove(path):
 
 def rename(src, dst, overwrite=False):
     """
-    TODO: docs + tests
+    Rename a file or directory, this is not guaranteed to be atomic.  For remote filesystems
+    it will do a copy followed by a delete.
     """
     assert _get_path_type(src) == _get_path_type(
         dst
@@ -520,7 +553,7 @@ def rename(src, dst, overwrite=False):
 
 def stat(path):
     """
-    TODO: docs + tests
+    Stat a file or object representing a directory, returns a Stat object
     """
     if _is_local_path(path):
         s = os.stat(path)
@@ -538,7 +571,7 @@ def stat(path):
 
 def copytree(src, dst):
     """
-    TODO: docs + tests
+    Copy a directory tree from one location to another
     """
     if not isdir(src):
         raise NotADirectoryError(f"The directory name is invalid: '{src}'")
@@ -571,7 +604,7 @@ def copytree(src, dst):
 
 def rmtree(path):
     """
-    TODO: docs + tests
+    Delete a directory tree
     """
     if not isdir(path):
         raise NotADirectoryError(f"The directory name is invalid: '{path}'")
@@ -605,7 +638,7 @@ def rmtree(path):
 
 def walk(top, topdown=True, onerror=None):
     """
-    TODO: docs + tests
+    Walk a directory tree in a similar manner to os.walk
     """
     if not isdir(top):
         return
@@ -703,10 +736,9 @@ def cache_key(path):
     """
     Get a cache key for a file
     """
-    # TODO: Content-MD5 https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
     if _is_local_path(path):
         key_parts = [path, os.path.getmtime(path), os.path.getsize(path)]
-    elif _is_gcs_path(path):
+    elif _is_gcs_path(path) or _is_azure_path(path):
         return md5(path)
     else:
         raise Exception("unrecognized path")
@@ -728,15 +760,11 @@ def get_url(path):
         )
     elif _is_azure_path(path):
         account, container, blob = _split_azure_url(path)
-        url = f"https://{account}.blob.core.windows.net/{container}/{blob}"
-        # TODO: cache sas request (per account?)
-        req, expiration = azure.create_user_delegation_sas_request(
-            access_token=global_azure_access_token_manager.get_token(), account=account
+        url = azure.build_url(
+            account, "/{container}/{blob}", container=container, blob=blob
         )
-        resp = _execute_request(req)
-        assert resp.status == 200
-        out = xmltodict.parse(resp)
-        return azure.generate_signed_url(key=out["UserDelegationKey"], url=url)
+        token = global_azure_sas_token_manager.get_token(account)
+        return azure.generate_signed_url(key=token, url=url)
     elif _is_local_path(path):
         return f"file://{path}"
     else:
@@ -751,6 +779,13 @@ def md5(path):
         resp, metadata = _gcs_get_blob_metadata(path)
         assert resp.status == 200
         return binascii.hexlify(base64.b64decode(metadata["md5Hash"])).decode("utf8")
+    elif _is_azure_path(path):
+        resp = _azure_get_blob_metadata(path)
+        assert resp.status == 200
+        # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
+        return binascii.hexlify(base64.b64decode(resp.headers["Content-MD5"])).decode(
+            "utf8"
+        )
     else:
         m = hashlib.md5()
         with BlobFile(path, "rb") as f:
@@ -1021,12 +1056,39 @@ class _GCSStreamingReadFile(_StreamingReadFile):
         super().__init__(path, mode, int(self._metadata["size"]))
 
     def _get_file(self, offset):
-        req = google.create_read_blob_request(
-            access_token=global_google_access_token_manager.get_token(),
-            bucket=self._metadata["bucket"],
-            name=self._metadata["name"],
-            start=offset,
+        req = _create_google_api_request(
+            url=google.build_url(
+                "/storage/v1/b/{bucket}/o/{name}",
+                bucket=self._metadata["bucket"],
+                name=self._metadata["name"],
+            ),
+            method="GET",
+            params=dict(alt="media"),
         )
+        _set_range(req, start=offset)
+        resp = _execute_request(req)
+        assert resp.status == 206
+        return resp
+
+
+class _AzureStreamingReadFile(_StreamingReadFile):
+    def __init__(self, path, mode):
+        resp = _azure_get_blob_metadata(path)
+        self._metadata = resp.headers
+        if resp.status == 404:
+            raise FileNotFoundError(f"No such file or directory: '{path}'")
+        assert resp.status == 200
+        super().__init__(path, mode, int(self._metadata["Content-Length"]))
+
+    def _get_file(self, offset):
+        account, container, blob = _split_azure_url(self._path)
+        req = _create_azure_api_request(
+            url=azure.build_url(
+                account, "/{container}/{blob}", container=container, blob=blob
+            ),
+            method="GET",
+        )
+        _set_range(req, start=offset)
         resp = _execute_request(req)
         assert resp.status == 206
         return resp
@@ -1098,11 +1160,14 @@ class _StreamingWriteFile(_BaseFile):
 class _GCSStreamingWriteFile(_StreamingWriteFile):
     def __init__(self, path, mode):
         _scheme, bucket, name = _split_url(path)
-        req = google.create_resumable_upload_request(
-            access_token=global_google_access_token_manager.get_token(),
-            bucket=bucket,
-            name=name,
+        req = _create_google_api_request(
+            url=google.build_url(
+                "/upload/storage/v1/b/{bucket}/o?uploadType=resumable", bucket=bucket
+            ),
+            method="POST",
+            data=dict(name=name),
         )
+        req.headers["Content-Type"] = "application/json; charset=UTF-8"
         with _execute_request(req) as resp:
             assert resp.status == 200
             self._upload_url = resp.headers["Location"]
@@ -1134,6 +1199,40 @@ class _GCSStreamingWriteFile(_StreamingWriteFile):
                 assert resp.status == 308
 
 
+class _AzureStreamingWriteFile(_StreamingWriteFile):
+    def __init__(self, path, mode):
+        account, container, blob = _split_azure_url(path)
+        self._url = azure.build_url(
+            account, "/{container}/{blob}", container=container, blob=blob
+        )
+        req = _create_azure_api_request(url=self._url, method="PUT")
+        req.headers["x-ms-blob-type"] = "AppendBlob"
+        with _execute_request(req) as resp:
+            assert resp.status == 201
+        super().__init__(mode)
+
+    def _upload_chunk(self, chunk, start, end, finalize):
+        if len(chunk) == 0:
+            return
+
+        # max 4MB https://docs.microsoft.com/en-us/rest/api/storageservices/append-block#remarks
+        start = 0
+        while start < len(chunk):
+            end = start + AZURE_MAX_CHUNK_SIZE
+            data = chunk[start:end]
+            req = _create_azure_api_request(
+                url=self._url, method="PUT", params=dict(comp="appendblock"), data=data
+            )
+            req.headers["x-ms-blob-condition-appendpos"] = self._offset + start
+
+            with _execute_request(req) as resp:
+                print(resp.status, len(chunk))
+                print(resp.read())
+                # https://docs.microsoft.com/en-us/rest/api/storageservices/append-block#remarks
+                assert resp.status in (201, 412)
+            start += AZURE_MAX_CHUNK_SIZE
+
+
 class BlobFile:
     """
     Open a local or remote file for reading or writing
@@ -1154,6 +1253,19 @@ class BlobFile:
             elif self._mode in ("r", "rb"):
                 if streaming:
                     self._f = _GCSStreamingReadFile(path, self._mode)
+                else:
+                    self._f = _LocalFile(path, self._mode)
+            else:
+                raise Exception(f"unsupported mode {self._mode}")
+        elif _is_azure_path(path):
+            if self._mode in ("w", "wb"):
+                if streaming:
+                    self._f = _AzureStreamingWriteFile(path, self._mode)
+                else:
+                    self._f = _LocalFile(path, self._mode)
+            elif self._mode in ("r", "rb"):
+                if streaming:
+                    self._f = _AzureStreamingReadFile(path, self._mode)
                 else:
                     self._f = _LocalFile(path, self._mode)
             else:

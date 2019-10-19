@@ -189,7 +189,9 @@ def test_cache_key(ctx):
         assert first_key != second_key
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_get_url(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -198,7 +200,9 @@ def test_get_url(ctx):
         assert urllib.request.urlopen(url).read() == contents
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_read_write(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -334,7 +338,9 @@ def test_exists(ctx):
 
 @pytest.mark.parametrize("binary", [True, False])
 @pytest.mark.parametrize("streaming", [True, False])
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_more_read_write(binary, streaming, ctx):
     rng = np.random.RandomState(0)
 
@@ -409,7 +415,9 @@ def test_more_read_write(binary, streaming, ctx):
 
 
 @pytest.mark.parametrize("streaming", [True, False])
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_video(streaming, ctx):
     rng = np.random.RandomState(0)
     shape = (256, 64, 64, 3)
@@ -436,7 +444,9 @@ def test_video(streaming, ctx):
                     assert np.array_equal(frame, video_data[idx])
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_md5(ctx):
     contents = b"meow!"
     meow_hash = hashlib.md5(contents).hexdigest()

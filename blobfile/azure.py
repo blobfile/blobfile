@@ -70,9 +70,14 @@ def _load_credentials():
     #                     best_token = token
     #         if best_token is not None:
     #             return best_token
-    # TODO: link to setup instructions for azure accounts
     raise Exception(
         "credentials not found, please create an account with 'az ad sp create-for-rbac --name <name>' and set the 'AZURE_APPLICATION_CREDENTIALS' environment variable to the path of the output from that command"
+    )
+
+
+def build_url(account, template, **data):
+    return common.build_url(
+        f"https://{account}.blob.core.windows.net", template, **data
     )
 
 
@@ -106,7 +111,7 @@ def create_user_delegation_sas_request(access_token, account):
             method="POST",
             data={"KeyInfo": {"Start": start, "Expiry": expiry}},
         ),
-        expiration,
+        expiration.timestamp(),
     )
 
 

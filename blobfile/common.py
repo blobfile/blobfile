@@ -23,13 +23,14 @@ def create_authenticated_request(
         if len(params) > 0:
             url += "?" + urllib.parse.urlencode(params)
     if data is not None:
-        if encoding == "json":
-            data = json.dumps(data)
-        elif encoding == "xml":
-            data = xmltodict.unparse(data)
-        else:
-            raise Exception("invalid encoding")
-        data = data.encode("utf8")
+        if not isinstance(data, (bytes, bytearray)):
+            if encoding == "json":
+                data = json.dumps(data)
+            elif encoding == "xml":
+                data = xmltodict.unparse(data)
+            else:
+                raise Exception("invalid encoding")
+            data = data.encode("utf8")
     return Request(url=url, method=method, headers=headers, data=data)
 
 

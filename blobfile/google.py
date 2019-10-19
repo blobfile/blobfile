@@ -124,45 +124,9 @@ def build_url(template, **data):
     return common.build_url("https://www.googleapis.com", template, **data)
 
 
-def create_read_blob_request(access_token, bucket, name, start=None, end=None):
-    req = common.create_authenticated_request(
-        access_token=access_token,
-        url=build_url("/storage/v1/b/{bucket}/o/{name}", bucket=bucket, name=name),
-        method="GET",
-        params=dict(alt="media"),
-        encoding="json",
-    )
-    # https://cloud.google.com/storage/docs/xml-api/get-object-download
-    # oddly range requests are not mentioned in the JSON API, only in the XML api
-    if start is not None and end is not None:
-        req.headers["Range"] = f"bytes={start}-{end-1}"
-    elif start is not None:
-        req.headers["Range"] = f"bytes={start}-"
-    elif end is not None:
-        if end > 0:
-            req.headers["Range"] = f"bytes=0-{end-1}"
-        else:
-            req.headers["Range"] = f"bytes=-{-int(end)}"
-    return req
-
-
-def create_resumable_upload_request(access_token, bucket, name):
-    req = common.create_authenticated_request(
-        access_token=access_token,
-        url=build_url(
-            "/upload/storage/v1/b/{bucket}/o?uploadType=resumable", bucket=bucket
-        ),
-        method="POST",
-        data=dict(name=name),
-        encoding="json",
-    )
-    req.headers["Content-Type"] = "application/json; charset=UTF-8"
-    return req
-
-
 def create_api_request(access_token, **kwargs):
     return common.create_authenticated_request(
-        access_token=access_token, encoding="xml", **kwargs
+        access_token=access_token, encoding="json", **kwargs
     )
 
 

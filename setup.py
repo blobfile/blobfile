@@ -7,7 +7,7 @@ README = open(os.path.join(SCRIPT_DIR, "README.md")).read()
 
 setup_dict = dict(
     name="blobfile",
-    version="0.3.2",
+    version="0.3.3",
     description="Read GCS and local paths with the same interface, clone of tensorflow.io.gfile",
     long_description=README,
     long_description_content_type="text/markdown",

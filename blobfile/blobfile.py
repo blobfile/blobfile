@@ -165,9 +165,10 @@ def _execute_request(req, retry_statuses=(500,), timeout=DEFAULT_TIMEOUT):
         except (
             urllib3.exceptions.ConnectTimeoutError,
             urllib3.exceptions.ReadTimeoutError,
+            urllib3.exceptions.ProtocolError,
         ) as e:
             err = e
-        if attempt > 3:
+        if attempt >= 3:
             _log_callback(f"error {err} when executing http request {req}")
         time.sleep(backoff)
     return None  # unreachable, for pylint
@@ -272,18 +273,20 @@ def _gcs_get_blob_metadata(path):
         return resp, json.load(resp)
 
 
-def _set_range(req, start=None, end=None):
+def _calc_range(start=None, end=None):
     # https://cloud.google.com/storage/docs/xml-api/get-object-download
     # oddly range requests are not mentioned in the JSON API, only in the XML api
     if start is not None and end is not None:
-        req.headers["Range"] = f"bytes={start}-{end-1}"
+        return f"bytes={start}-{end-1}"
     elif start is not None:
-        req.headers["Range"] = f"bytes={start}-"
+        return f"bytes={start}-"
     elif end is not None:
         if end > 0:
-            req.headers["Range"] = f"bytes=0-{end-1}"
+            return f"bytes=0-{end-1}"
         else:
-            req.headers["Range"] = f"bytes=-{-int(end)}"
+            return f"bytes=-{-int(end)}"
+    else:
+        raise Exception("invalid range")
 
 
 def _azure_get_blob_metadata(path):
@@ -1043,7 +1046,7 @@ class _GCSStreamingReadFile(_StreamingReadFile):
             method="GET",
             params=dict(alt="media"),
         )
-        _set_range(req, start=offset)
+        req.headers["Range"] = _calc_range(start=offset)
         resp = _execute_request(req)
         assert resp.status == 206
         return resp
@@ -1066,7 +1069,7 @@ class _AzureStreamingReadFile(_StreamingReadFile):
             ),
             method="GET",
         )
-        _set_range(req, start=offset)
+        req.headers["Range"] = _calc_range(start=offset)
         resp = _execute_request(req)
         assert resp.status == 206
         return resp
@@ -1083,7 +1086,7 @@ class _StreamingWriteFile(_BaseFile):
         self._buf = self._empty
         super().__init__()
 
-    def _upload_chunk(self, chunk, start, end, finalize):
+    def _upload_chunk(self, chunk, finalize):
         raise NotImplementedError
 
     def _upload_buf(self, finalize=False):
@@ -1095,9 +1098,7 @@ class _StreamingWriteFile(_BaseFile):
         chunk = self._buf[:size]
         self._buf = self._buf[size:]
 
-        start = self._offset
-        end = self._offset + len(chunk) - 1
-        self._upload_chunk(chunk, start, end, finalize)
+        self._upload_chunk(chunk, finalize)
         self._offset += len(chunk)
 
     def close(self):
@@ -1151,23 +1152,29 @@ class _GCSStreamingWriteFile(_StreamingWriteFile):
             self._upload_url = resp.headers["Location"]
         super().__init__(mode)
 
-    def _upload_chunk(self, chunk, start, end, finalize):
+    def _upload_chunk(self, chunk, finalize):
+        start = self._offset
+        end = self._offset + len(chunk) - 1
+
         total_size = "*"
         if finalize:
             total_size = self._offset + len(chunk)
             assert len(self._buf) == 0
-        content_range = f"bytes {start}-{end}/{total_size}"
 
         req = Request(
             url=self._upload_url,
             data=chunk,
-            headers={"Content-Type": "application/octet-stream"},
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Content-Range": f"bytes {start}-{end}/{total_size}",
+            },
             method="PUT",
         )
 
-        if not (finalize and len(chunk) == 0):
-            # not clear what the correct content-range is for a zero length file, so just don't include the header
-            req.headers["Content-Range"] = content_range
+        if len(chunk) == 0 and finalize:
+            # this is not mentioned in the docs but appears to be allowed
+            # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
+            req.headers["Content-Range"] = f"bytes */{total_size}"
 
         with _execute_request(req) as resp:
             if finalize:
@@ -1189,7 +1196,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             assert resp.status == 201
         super().__init__(mode)
 
-    def _upload_chunk(self, chunk, start, end, finalize):
+    def _upload_chunk(self, chunk, finalize):
         if len(chunk) == 0:
             return
 
@@ -1204,8 +1211,6 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             req.headers["x-ms-blob-condition-appendpos"] = self._offset + start
 
             with _execute_request(req) as resp:
-                print(resp.status, len(chunk))
-                print(resp.read())
                 # https://docs.microsoft.com/en-us/rest/api/storageservices/append-block#remarks
                 assert resp.status in (201, 412)
             start += AZURE_MAX_CHUNK_SIZE

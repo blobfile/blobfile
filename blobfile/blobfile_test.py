@@ -388,20 +388,21 @@ def test_more_read_write(binary, streaming, ctx):
             assert [line for line in r] == lines
 
         if binary:
-            contents = rng.randint(0, 256, size=12_345_678, dtype=np.uint8).tobytes()
+            for size in [2 * 2 ** 20, 12_345_678]:
+                contents = rng.randint(0, 256, size=size, dtype=np.uint8).tobytes()
 
-            with bf.BlobFile(path, write_mode, streaming=streaming) as w:
-                w.write(contents)
+                with bf.BlobFile(path, write_mode, streaming=streaming) as w:
+                    w.write(contents)
 
-            with bf.BlobFile(path, read_mode, streaming=streaming) as r:
-                size = rng.randint(0, 1_000_000)
-                buf = b""
-                while True:
-                    b = r.read(size)
-                    if b == b"":
-                        break
-                    buf += b
-                assert buf == contents
+                with bf.BlobFile(path, read_mode, streaming=streaming) as r:
+                    size = rng.randint(0, 1_000_000)
+                    buf = b""
+                    while True:
+                        b = r.read(size)
+                        if b == b"":
+                            break
+                        buf += b
+                    assert buf == contents
         else:
             obj = {"a": 1}
 

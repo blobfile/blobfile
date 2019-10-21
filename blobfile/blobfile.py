@@ -831,8 +831,7 @@ def _check_closed(method):
     return wrapped
 
 
-# https://docs.python.org/3/library/io.html#io.IOBase
-class _BaseFile:
+class _BaseFile(io.IOBase):
     def __init__(self):
         self.closed = False
 

@@ -831,10 +831,10 @@ def _check_closed(method):
     return wrapped
 
 
-class _BaseFile(io.IOBase):
+class _BaseFile(io.RawIOBase):
     def __init__(self):
         super().__init__()
-        self.closed = False
+        self._closed = False
 
     def __enter__(self):
         return self
@@ -843,10 +843,14 @@ class _BaseFile(io.IOBase):
         self.close()
 
     def close(self):
-        if not hasattr(self, "closed") or self.closed:
+        if not hasattr(self, "_closed") or self._closed:
             return
 
-        self.closed = True
+        self._closed = True
+
+    @property
+    def closed(self):
+        return self._closed
 
     @_check_closed
     def read(self, size=-1):
@@ -933,15 +937,6 @@ class _StreamingReadFile(_BaseFile):
         self._f = None
         super().__init__()
 
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        line = self.readline()
-        if len(line) == 0:
-            raise StopIteration
-        return line
-
     def _get_file(self, offset):
         raise NotImplementedError
 
@@ -1023,9 +1018,14 @@ class _StreamingReadFile(_BaseFile):
         return self._offset
 
     def close(self):
-        super().close()
+        if not hasattr(self, "_closed") or self.closed:
+            return
+
         if hasattr(self, "_f") and self._f is not None:
             self._f.close()
+            self._f = None
+
+        super().close()
 
 
 class _GCSStreamingReadFile(_StreamingReadFile):
@@ -1102,12 +1102,12 @@ class _StreamingWriteFile(_BaseFile):
         self._offset += len(chunk)
 
     def close(self):
-        if not hasattr(self, "closed") or self.closed:
+        if not hasattr(self, "_closed") or self.closed:
             return
 
         # we will have a partial remaining buffer at this point
         self._upload_buf(finalize=True)
-        self.closed = True
+        super().close()
 
     @_check_closed
     def tell(self):

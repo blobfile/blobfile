@@ -204,12 +204,15 @@ def test_get_url(ctx):
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_read_write(ctx):
-    contents = b"meow!"
+    contents = b"meow!\npurr\n"
     with ctx() as path:
         with bf.BlobFile(path, "wb") as w:
             w.write(contents)
         with bf.BlobFile(path, "rb") as r:
             assert r.read() == contents
+        with bf.BlobFile(path, "rb") as r:
+            lines = list(r)
+            assert b"".join(lines) == contents
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])

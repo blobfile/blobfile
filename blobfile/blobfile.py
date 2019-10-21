@@ -833,6 +833,7 @@ def _check_closed(method):
 
 class _BaseFile(io.IOBase):
     def __init__(self):
+        super().__init__()
         self.closed = False
 
     def __enter__(self):

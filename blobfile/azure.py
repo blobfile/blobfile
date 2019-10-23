@@ -10,13 +10,14 @@ from . import common
 
 def _create_token_request(creds, scope):
     if "refreshToken" in creds:
+        assert False, "refresh token not supported currently"
         # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-protocols-oauth-code#refreshing-the-access-tokens
-        data = {
-            "grant_type": "refresh_token",
-            "refresh_token": creds["refreshToken"],
-            "resource": scope,
-        }
-        tenant = "common"
+        # data = {
+        #     "grant_type": "refresh_token",
+        #     "refresh_token": creds["refreshToken"],
+        #     "resource": scope,
+        # }
+        # tenant = "common"
     else:
         # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-oauth2-client-creds-grant-flow#request-an-access-token
         # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-protocols-oauth-code
@@ -25,7 +26,7 @@ def _create_token_request(creds, scope):
         # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory
         # az ad sp create-for-rbac --name <name>
         # az account list
-        # az role assignment create --role "Storage Blob Data Contributor" --assignee <appid> --scope "/subscriptions/<sub id>"
+        # az role assignment create --role "Storage Blob Data Contributor" --assignee <appid> --scope "/subscriptions/<account id>"
         data = {
             "grant_type": "client_credentials",
             "client_id": creds["appId"],

@@ -242,9 +242,7 @@ def copy(src, dst, overwrite=False):
                 token = result["rewriteToken"]
         return
 
-    with BlobFile(src, "rb", streaming=True) as src_f, BlobFile(
-        dst, "wb", streaming=True
-    ) as dst_f:
+    with BlobFile(src, "rb") as src_f, BlobFile(dst, "wb") as dst_f:
         shutil.copyfileobj(src_f, dst_f, length=STREAMING_CHUNK_SIZE)
 
 
@@ -778,7 +776,7 @@ def md5(path):
         return m.hexdigest()
 
 
-class _LocalFile:
+class _ProxyFile:
     def __init__(self, path, mode):
         self._mode = mode
         self._remote_path = path
@@ -788,7 +786,7 @@ class _LocalFile:
             if not exists(path):
                 raise FileNotFoundError(f"file '{path}' not found")
             with open(self._local_path, "wb") as f:
-                with BlobFile(self._remote_path, "rb", streaming=True) as src_f:
+                with BlobFile(self._remote_path, "rb") as src_f:
                     shutil.copyfileobj(src_f, f, length=STREAMING_CHUNK_SIZE)
         self._f = open(self._local_path, self._mode)
         self._closed = False
@@ -814,7 +812,7 @@ class _LocalFile:
         self._f.close()
         if self._mode in ("w", "wb"):
             with open(self._local_path, "rb") as f:
-                with BlobFile(self._remote_path, "wb", streaming=True) as dst_f:
+                with BlobFile(self._remote_path, "wb") as dst_f:
                     shutil.copyfileobj(f, dst_f, length=STREAMING_CHUNK_SIZE)
         os.remove(self._local_path)
         os.rmdir(self._local_dir)
@@ -1219,40 +1217,58 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
 class BlobFile:
     """
     Open a local or remote file for reading or writing
-
-    Args:
-        streaming: set to True to do streaming reads/writes instead of copying the entire file
     """
 
-    def __init__(self, path, mode="r", streaming=False):
+    def __init__(self, path, mode="r"):
         assert not path.endswith("/")
         self._mode = mode
+        assert self._mode in ("w", "wb", "r", "rb")
         if _is_gcs_path(path):
             if self._mode in ("w", "wb"):
-                if streaming:
-                    self._f = _GCSStreamingWriteFile(path, self._mode)
-                else:
-                    self._f = _LocalFile(path, self._mode)
+                self._f = _GCSStreamingWriteFile(path, self._mode)
             elif self._mode in ("r", "rb"):
-                if streaming:
-                    self._f = _GCSStreamingReadFile(path, self._mode)
-                else:
-                    self._f = _LocalFile(path, self._mode)
+                self._f = _GCSStreamingReadFile(path, self._mode)
             else:
                 raise Exception(f"unsupported mode {self._mode}")
         elif _is_azure_path(path):
             if self._mode in ("w", "wb"):
-                if streaming:
-                    self._f = _AzureStreamingWriteFile(path, self._mode)
-                else:
-                    self._f = _LocalFile(path, self._mode)
+                self._f = _AzureStreamingWriteFile(path, self._mode)
             elif self._mode in ("r", "rb"):
-                if streaming:
-                    self._f = _AzureStreamingReadFile(path, self._mode)
-                else:
-                    self._f = _LocalFile(path, self._mode)
+                self._f = _AzureStreamingReadFile(path, self._mode)
             else:
                 raise Exception(f"unsupported mode {self._mode}")
+        elif _is_local_path(path):
+            self._f = open(file=path, mode=self._mode)
+        else:
+            raise Exception("unrecognized path")
+
+    def __enter__(self):
+        return self._f.__enter__()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return self._f.__exit__(exc_type, exc_val, exc_tb)
+
+    def __getattr__(self, attr):
+        if attr == "_f":
+            raise AttributeError(attr)
+        return getattr(self._f, attr)
+
+
+class LocalBlobFile:
+    """
+    Like BlobFile() but in the case that the path is a remote file, all operations take place
+    on a local copy of that file.
+
+    When reading this is done by downloading the file during the constructor, for writing this
+    means uploading the file on `close()` or during destruction.
+    """
+
+    def __init__(self, path, mode="r"):
+        assert not path.endswith("/")
+        self._mode = mode
+        assert self._mode in ("w", "wb", "r", "rb")
+        if _is_gcs_path(path) or _is_azure_path(path):
+            self._f = _ProxyFile(path, self._mode)
         elif _is_local_path(path):
             self._f = open(file=path, mode=self._mode)
         else:

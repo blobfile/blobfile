@@ -35,31 +35,47 @@ GCS_PATH = "gcs"
 
 Stat = collections.namedtuple("Stat", "size, mtime")
 
-# tensorflow imports requests with calls
-#   import urllib3.contrib.pyopenssl
-#   urllib3.contrib.pyopenssl.inject_into_urllib3()
-# which will monkey patch urllib3 to use pyopenssl and sometimes break things
-# with errors such as "certificate verify failed"
-# https://github.com/pyca/pyopenssl/issues/823
-# in order to fix this here are a couple of options:
+_http = None
+_http_pid = None
+_http_lock = threading.Lock()
 
-# method 1
-# from urllib3.util import ssl_
 
-# if ssl_.IS_PYOPENSSL:
-#     import urllib3.contrib.pyopenssl
+def _get_http_pool():
+    # ssl is not fork safe https://docs.python.org/2/library/ssl.html#multi-processing
+    # urllib3 may not be fork safe https://github.com/urllib3/urllib3/issues/1179
+    # both are supposedly threadsafe though, so we shouldn't need a thread-local one
+    global _http, _http_pid
+    with _http_lock:
+        if _http is None or _http_pid != os.getpid():
+            # tensorflow imports requests with calls
+            #   import urllib3.contrib.pyopenssl
+            #   urllib3.contrib.pyopenssl.inject_into_urllib3()
+            # which will monkey patch urllib3 to use pyopenssl and sometimes break things
+            # with errors such as "certificate verify failed"
+            # https://github.com/pyca/pyopenssl/issues/823
+            # https://github.com/psf/requests/issues/5238
+            # in order to fix this here are a couple of options:
 
-#     urllib3.contrib.pyopenssl.extract_from_urllib3()
-# http = urllib3.PoolManager()
+            # method 1
+            # from urllib3.util import ssl_
 
-# method 2
-# build a context based on https://github.com/urllib3/urllib3/blob/edc3ddb3d1cbc5871df4a17a53ca53be7b37facc/src/urllib3/util/ssl_.py#L220
-# this exists because there's no obvious way to cause that function to use the ssl.SSLContext except for un-monkey-patching urllib3
-context = ssl.SSLContext(ssl.PROTOCOL_TLS)
-context.verify_mode = ssl.CERT_REQUIRED
-context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_COMPRESSION
-context.load_default_certs()
-http = urllib3.PoolManager(ssl_context=context)
+            # if ssl_.IS_PYOPENSSL:
+            #     import urllib3.contrib.pyopenssl
+
+            #     urllib3.contrib.pyopenssl.extract_from_urllib3()
+            # http = urllib3.PoolManager()
+
+            # method 2
+            # build a context based on https://github.com/urllib3/urllib3/blob/edc3ddb3d1cbc5871df4a17a53ca53be7b37facc/src/urllib3/util/ssl_.py#L220
+            # this exists because there's no obvious way to cause that function to use the ssl.SSLContext except for un-monkey-patching urllib3
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+            context.verify_mode = ssl.CERT_REQUIRED
+            context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_COMPRESSION
+            context.load_default_certs()
+            _http_pid = os.getpid()
+            _http = urllib3.PoolManager(ssl_context=context)
+
+        return _http
 
 
 def __log_callback(msg):
@@ -104,7 +120,7 @@ def _gcs_get_access_token():
         ["https://www.googleapis.com/auth/devstorage.full_control"]
     )
     with _execute_request(req) as resp:
-        assert resp.status == 200
+        assert resp.status == 200, f"unexpected status {resp.status}"
         result = json.load(resp)
         return result["access_token"], now + float(result["expires_in"])
 
@@ -113,7 +129,7 @@ def _azure_get_access_token():
     now = time.time()
     req = azure.create_access_token_request("https://storage.azure.com/")
     with _execute_request(req) as resp:
-        assert resp.status == 200
+        assert resp.status == 200, f"unexpected status {resp.status}"
         result = json.load(resp)
         return result["access_token"], now + float(result["expires_in"])
 
@@ -123,7 +139,7 @@ def _azure_get_sas_token(account):
         access_token=global_azure_access_token_manager.get_token(), account=account
     )
     resp = _execute_request(req)
-    assert resp.status == 200
+    assert resp.status == 200, f"unexpected status {resp.status}"
     out = xmltodict.parse(resp)
     return out["UserDelegationKey"], expiration
 
@@ -148,7 +164,7 @@ def _execute_request(req, retry_statuses=(500,), timeout=DEFAULT_TIMEOUT):
     for attempt, backoff in enumerate(_exponential_sleep_generator(1.0, maximum=60.0)):
         err = None
         try:
-            resp = http.request(
+            resp = _get_http_pool().request(
                 method=req.method,
                 url=req.url,
                 headers=req.headers,
@@ -235,7 +251,7 @@ def copy(src, dst, overwrite=False):
             with _execute_request(req) as resp:
                 if resp.status == 404:
                     raise FileNotFoundError(f"src file '{src}' not found")
-                assert resp.status == 200
+                assert resp.status == 200, f"unexpected status {resp.status}"
                 result = json.load(resp)
                 if result["done"]:
                     break
@@ -267,7 +283,7 @@ def _gcs_get_blob_metadata(path):
         method="GET",
     )
     with _execute_request(req) as resp:
-        assert resp.status in (200, 404)
+        assert resp.status in (200, 404), f"unexpected status {resp.status}"
         return resp, json.load(resp)
 
 
@@ -296,13 +312,13 @@ def _azure_get_blob_metadata(path):
         method="HEAD",
     )
     with _execute_request(req) as resp:
-        assert resp.status in (200, 404)
+        assert resp.status in (200, 404), f"unexpected status {resp.status}"
         return resp
 
 
 def _gcs_exists(path):
     resp, _metadata = _gcs_get_blob_metadata(path)
-    assert resp.status in (200, 404)
+    assert resp.status in (200, 404), f"unexpected status {resp.status}"
     return resp.status == 200
 
 
@@ -468,7 +484,7 @@ def makedirs(path):
             params=dict(uploadType="media", name=blob),
         )
         with _execute_request(req) as resp:
-            assert resp.status == 200
+            assert resp.status == 200, f"unexpected status {resp.status}"
     else:
         raise Exception("unrecognized path")
 
@@ -492,7 +508,7 @@ def remove(path):
             method="DELETE",
         )
         with _execute_request(req) as resp:
-            assert resp.status == 204
+            assert resp.status == 204, f"unexpected status {resp.status}"
     else:
         raise Exception("unrecognized path")
 
@@ -610,7 +626,7 @@ def rmtree(path):
                     method="DELETE",
                 )
                 with _execute_request(req) as resp:
-                    assert resp.status == 204
+                    assert resp.status == 204, f"unexpected status {resp.status}"
     else:
         raise Exception("unrecognized path")
 
@@ -758,13 +774,13 @@ def md5(path):
         resp, metadata = _gcs_get_blob_metadata(path)
         if resp.status == 404:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
-        assert resp.status == 200
+        assert resp.status == 200, f"unexpected status {resp.status}"
         return binascii.hexlify(base64.b64decode(metadata["md5Hash"])).decode("utf8")
     elif _is_azure_path(path):
         resp = _azure_get_blob_metadata(path)
         if resp.status == 404:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
-        assert resp.status == 200
+        assert resp.status == 200, f"unexpected status {resp.status}"
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
         return binascii.hexlify(base64.b64decode(resp.headers["Content-MD5"])).decode(
             "utf8"
@@ -1035,7 +1051,7 @@ class _GCSStreamingReadFile(_StreamingReadFile):
         resp, self._metadata = _gcs_get_blob_metadata(path)
         if resp.status == 404:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
-        assert resp.status == 200
+        assert resp.status == 200, f"unexpected status {resp.status}"
         super().__init__(path, mode, int(self._metadata["size"]))
 
     def _get_file(self, offset):
@@ -1050,7 +1066,7 @@ class _GCSStreamingReadFile(_StreamingReadFile):
         )
         req.headers["Range"] = _calc_range(start=offset)
         resp = _execute_request(req)
-        assert resp.status == 206
+        assert resp.status == 206, f"unexpected status {resp.status}"
         return resp
 
 
@@ -1060,7 +1076,7 @@ class _AzureStreamingReadFile(_StreamingReadFile):
         self._metadata = resp.headers
         if resp.status == 404:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
-        assert resp.status == 200
+        assert resp.status == 200, f"unexpected status {resp.status}"
         super().__init__(path, mode, int(self._metadata["Content-Length"]))
 
     def _get_file(self, offset):
@@ -1073,7 +1089,7 @@ class _AzureStreamingReadFile(_StreamingReadFile):
         )
         req.headers["Range"] = _calc_range(start=offset)
         resp = _execute_request(req)
-        assert resp.status == 206
+        assert resp.status == 206, f"unexpected status {resp.status}"
         return resp
 
 
@@ -1150,7 +1166,7 @@ class _GCSStreamingWriteFile(_StreamingWriteFile):
         )
         req.headers["Content-Type"] = "application/json; charset=UTF-8"
         with _execute_request(req) as resp:
-            assert resp.status == 200
+            assert resp.status == 200, f"unexpected status {resp.status}"
             self._upload_url = resp.headers["Location"]
         super().__init__(mode)
 
@@ -1180,7 +1196,7 @@ class _GCSStreamingWriteFile(_StreamingWriteFile):
 
         with _execute_request(req) as resp:
             if finalize:
-                assert resp.status in (200, 201)
+                assert resp.status in (200, 201), f"unexpected status {resp.status}"
             else:
                 # 308 is the expected response
                 assert (
@@ -1197,7 +1213,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         req = _create_azure_api_request(url=self._url, method="PUT")
         req.headers["x-ms-blob-type"] = "AppendBlob"
         with _execute_request(req) as resp:
-            assert resp.status == 201
+            assert resp.status == 201, f"unexpected status {resp.status}"
         super().__init__(mode)
 
     def _upload_chunk(self, chunk, finalize):
@@ -1216,7 +1232,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
 
             with _execute_request(req) as resp:
                 # https://docs.microsoft.com/en-us/rest/api/storageservices/append-block#remarks
-                assert resp.status in (201, 412)
+                assert resp.status in (201, 412), f"unexpected status {resp.status}"
             start += AZURE_MAX_CHUNK_SIZE
 
 

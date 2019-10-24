@@ -8,6 +8,7 @@ import urllib.request
 import hashlib
 import time
 import subprocess as sp
+import multiprocessing as mp
 import platform
 
 import pytest
@@ -456,3 +457,24 @@ def test_md5(ctx):
     with ctx() as path:
         _write_contents(path, contents)
         assert bf.md5(path) == meow_hash
+
+
+def _get_http_pool_id(q):
+    q.put(id(bf._get_http_pool()))  # pylint: disable=protected-access
+
+
+def test_fork():
+    q = mp.Queue()
+    # this reference should keep the old http client alive in the child process
+    # to ensure that a new one does not recycle the memory address
+    http1 = bf._get_http_pool()  # pylint: disable=protected-access
+    parent1 = id(http1)
+    p = mp.Process(target=_get_http_pool_id, args=(q,))
+    p.start()
+    p.join()
+    http2 = bf._get_http_pool()  # pylint: disable=protected-access
+    parent2 = id(http2)
+
+    child = q.get()
+    assert parent1 == parent2
+    assert child != parent1

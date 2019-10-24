@@ -756,10 +756,14 @@ def md5(path):
     """
     if _is_gcs_path(path):
         resp, metadata = _gcs_get_blob_metadata(path)
+        if resp.status == 404:
+            raise FileNotFoundError(f"No such file or directory: '{path}'")
         assert resp.status == 200
         return binascii.hexlify(base64.b64decode(metadata["md5Hash"])).decode("utf8")
     elif _is_azure_path(path):
         resp = _azure_get_blob_metadata(path)
+        if resp.status == 404:
+            raise FileNotFoundError(f"No such file or directory: '{path}'")
         assert resp.status == 200
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
         return binascii.hexlify(base64.b64decode(resp.headers["Content-MD5"])).decode(
@@ -1179,7 +1183,9 @@ class _GCSStreamingWriteFile(_StreamingWriteFile):
                 assert resp.status in (200, 201)
             else:
                 # 308 is the expected response
-                assert resp.status == 308
+                assert (
+                    resp.status == 308
+                ), f"unexpected status {resp.status} at offset {self._offset}"
 
 
 class _AzureStreamingWriteFile(_StreamingWriteFile):

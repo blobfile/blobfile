@@ -185,7 +185,9 @@ def _execute_request(req, retry_statuses=(500,), timeout=DEFAULT_TIMEOUT):
         ) as e:
             err = e
         if attempt >= 3:
-            _log_callback(f"error {err} when executing http request {req}")
+            _log_callback(
+                f"error {err} when executing http request {req}, sleeping {backoff} seconds"
+            )
         time.sleep(backoff)
     return None  # unreachable, for pylint
 
@@ -860,23 +862,32 @@ class _StreamingReadFile(io.RawIOBase):
         if self._size == self._offset:
             return 0
 
-        if self._f is None:
-            self._f = self._get_file(self._offset)
-
         for attempt, backoff in enumerate(
             _exponential_sleep_generator(0.1, maximum=60.0)
         ):
-            n = self._f.readinto(b)
-            break
-            # TODO: what errors are raised by a failure here?
-            # try:
-            # except (
-            #     urllib3.exceptions.ConnectTimeoutError,
-            #     urllib3.exceptions.ReadTimeoutError,
-            #     urllib3.exceptions.ProtocolError,
-            # ) as e:
-            # if attempt >= 3:
-            # _log_callback(f"error {e} when executing readinto() at offset {self._offset} on file {self._path}")
+            if self._f is None:
+                self._f = self._get_file(self._offset)
+
+            err = None
+            try:
+                n = self._f.readinto(b)
+                if n == 0:
+                    # assume that the connection has died
+                    self._f.close()
+                    self._f = None
+                    err = "failed to read from connection"
+                else:
+                    # only break out of we successfully read at least one byte
+                    break
+            except (
+                urllib3.exceptions.ReadTimeoutError,  # haven't seen this error here, but seems possible
+                urllib3.exceptions.ProtocolError,
+            ) as e:
+                err = e
+            if attempt >= 3:
+                _log_callback(
+                    f"error {err} when executing readinto({len(b)}) at offset {self._offset} on file {self._path}, sleeping for {backoff} seconds"
+                )
             time.sleep(backoff)
         self._offset += n
         return n
@@ -902,7 +913,6 @@ class _StreamingReadFile(io.RawIOBase):
             return
 
         if hasattr(self, "_f") and self._f is not None:
-            # TODO: close?
             self._f.close()
             self._f = None
 

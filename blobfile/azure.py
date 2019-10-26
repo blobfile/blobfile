@@ -184,5 +184,5 @@ def generate_signed_url(key, url):
 def split_url(path):
     url = urllib.parse.urlparse(path)
     assert url.scheme == "as"
-    container, _sep, blob = url.path[1:].partition("/")
-    return url.netloc, container, blob
+    account, _sep, container = url.netloc.partition("-")
+    return account, container, url.path[1:]

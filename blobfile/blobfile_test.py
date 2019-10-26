@@ -19,8 +19,7 @@ import numpy as np
 from . import blobfile as bf, azure
 
 GCS_TEST_BUCKET = "csh-test-2"
-AS_TEST_ACCOUNT = "cshteststorage2"
-AS_TEST_CONTAINER = "testcontainer"
+AS_TEST_BUCKET = "cshteststorage2-testcontainer"
 
 
 @contextlib.contextmanager
@@ -43,7 +42,8 @@ def _get_temp_gcs_path():
 @contextlib.contextmanager
 def _get_temp_as_path():
     random_id = "".join(random.choice(string.ascii_lowercase) for i in range(16))
-    path = f"as://{AS_TEST_ACCOUNT}/{AS_TEST_CONTAINER}/" + random_id
+    path = f"as://{AS_TEST_BUCKET}/" + random_id
+    account, _sep, container = AS_TEST_BUCKET.partition("-")
     yield path + "/name"
     sp.run(
         [
@@ -52,9 +52,9 @@ def _get_temp_as_path():
             "blob",
             "delete-batch",
             "--account-name",
-            AS_TEST_ACCOUNT,
+            account,
             "--source",
-            AS_TEST_CONTAINER,
+            container,
             "--pattern",
             f"{random_id}/*",
         ],

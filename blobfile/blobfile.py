@@ -161,7 +161,7 @@ def _exponential_sleep_generator(initial, maximum, multiplier=2):
 
 
 def _execute_request(req, retry_statuses=(500,), timeout=DEFAULT_TIMEOUT):
-    for attempt, backoff in enumerate(_exponential_sleep_generator(1.0, maximum=60.0)):
+    for attempt, backoff in enumerate(_exponential_sleep_generator(0.1, maximum=60.0)):
         err = None
         try:
             resp = _get_http_pool().request(
@@ -839,181 +839,48 @@ class _ProxyFile:
         self._closed = True
 
 
-def _check_closed(method):
-    @functools.wraps(method)
-    def wrapped(self, *args, **kwargs):
-        if self.closed:
-            raise ValueError("I/O operation on closed file")
-        return method(self, *args, **kwargs)
-
-    return wrapped
-
-
-class _BaseFile(io.RawIOBase):
-    def __init__(self):
-        super().__init__()
-        self._closed = False
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-
-    def close(self):
-        if not hasattr(self, "_closed") or self._closed:
-            return
-
-        self._closed = True
-
-    @property
-    def closed(self):
-        return self._closed
-
-    @_check_closed
-    def read(self, size=-1):
-        raise io.UnsupportedOperation("not readable")
-
-    @_check_closed
-    def readall(self):
-        raise io.UnsupportedOperation("not readable")
-
-    @_check_closed
-    def readinto(self, b):
-        raise io.UnsupportedOperation("not readable")
-
-    @_check_closed
-    def fileno(self):
-        raise io.UnsupportedOperation("operation not supported")
-
-    @_check_closed
-    def flush(self):
-        # none of the objects support flushing
-        pass
-
-    @_check_closed
-    def isatty(self):
-        return False
-
-    @_check_closed
-    def readable(self):
-        return False
-
-    @_check_closed
-    def readline(self, size=-1):
-        raise io.UnsupportedOperation("not readable")
-
-    @_check_closed
-    def readlines(self, hint=-1):
-        raise io.UnsupportedOperation("not readable")
-
-    @_check_closed
-    def seek(self, offset, whence=io.SEEK_SET):
-        raise io.UnsupportedOperation("operation not supported")
-
-    @_check_closed
-    def seekable(self):
-        return False
-
-    @_check_closed
-    def tell(self):
-        raise io.UnsupportedOperation("operation not supported")
-
-    @_check_closed
-    def truncate(self):
-        raise io.UnsupportedOperation("File not open for writing")
-
-    @_check_closed
-    def writable(self):
-        return False
-
-    @_check_closed
-    def write(self, b):
-        raise io.UnsupportedOperation("not writable")
-
-    @_check_closed
-    def writelines(self, lines):
-        raise io.UnsupportedOperation("not writable")
-
-    def __del__(self):
-        self.close()
-
-
-class _StreamingReadFile(_BaseFile):
+class _StreamingReadFile(io.RawIOBase):
     def __init__(self, path, mode, size):
+        super().__init__()
         self._size = size
         self._path = path
-        self._text_mode = "b" not in mode
-        if "b" in mode:
-            self._newline = b"\n"
-            self._empty = b""
-        else:
-            self._newline = "\n"
-            self._empty = ""
         # current reading byte offset in the file
         self._offset = 0
         self._f = None
-        super().__init__()
 
     def _get_file(self, offset):
         raise NotImplementedError
 
-    def _call_file_method(self, method, *args):
-        # this should catch exceptions and get a new file pointer, but it's not clear what recoverable exceptions will occur here
-        if self._f is None:
-            self._f = self._get_file(self._offset)
-        return getattr(self._f, method)(*args)
+    # we could define readall() here to handle the case of calling
+    # read() with no arguments efficiently, but with the retry logic
+    # we wouldn't want to get in a loop retrying a large file
+    # so only define readinto() which will be used for all reading operations
 
-    # according to https://docs.python.org/3/library/io.html#io.RawIOBase.read this should be size=-1, but that doesn't work with HTTPResponse files
-    @_check_closed
-    def read(self, size=None):
-        if self._size == self._offset:
-            return self._empty
-        buf = self._call_file_method("read", size)
-        self._offset += len(buf)
-        if self._text_mode:
-            buf = buf.decode("utf8")
-        return buf
-
-    @_check_closed
-    def readall(self):
-        return self.read()
-
-    @_check_closed
     def readinto(self, b):
-        if self._text_mode:
-            raise io.UnsupportedOperation("operation not supported")
         if self._size == self._offset:
             return 0
-        n = self._call_file_method("readinto", b)
+
+        if self._f is None:
+            self._f = self._get_file(self._offset)
+
+        for attempt, backoff in enumerate(
+            _exponential_sleep_generator(0.1, maximum=60.0)
+        ):
+            n = self._f.readinto(b)
+            break
+            # TODO: what errors are raised by a failure here?
+            # try:
+            # except (
+            #     urllib3.exceptions.ConnectTimeoutError,
+            #     urllib3.exceptions.ReadTimeoutError,
+            #     urllib3.exceptions.ProtocolError,
+            # ) as e:
+            # if attempt >= 3:
+            # _log_callback(f"error {e} when executing readinto() at offset {self._offset} on file {self._path}")
+            time.sleep(backoff)
         self._offset += n
         return n
 
-    @_check_closed
-    def readable(self):
-        return True
-
-    @_check_closed
-    def readline(self, size=-1):
-        if self._size == self._offset:
-            return self._empty
-        buf = self._call_file_method("readline", size)
-        self._offset += len(buf)
-        if self._text_mode:
-            buf = buf.decode("utf8")
-        return buf
-
-    @_check_closed
-    def readlines(self, hint=-1):
-        if self._size == self._offset:
-            return []
-        lines = self._call_file_method("readlines", hint)
-        self._offset += sum([len(l) for l in lines])
-        if self._text_mode:
-            lines = [l.decode("utf8") for l in lines]
-        return lines
-
-    @_check_closed
     def seek(self, offset, whence=io.SEEK_SET):
         if whence == io.SEEK_SET:
             new_offset = offset
@@ -1027,23 +894,25 @@ class _StreamingReadFile(_BaseFile):
             self._offset = new_offset
             self._f = None
 
-    @_check_closed
-    def seekable(self):
-        return True
-
-    @_check_closed
     def tell(self):
         return self._offset
 
     def close(self):
-        if not hasattr(self, "_closed") or self.closed:
+        if self.closed:
             return
 
         if hasattr(self, "_f") and self._f is not None:
+            # TODO: close?
             self._f.close()
             self._f = None
 
         super().close()
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
 
 
 class _GCSStreamingReadFile(_StreamingReadFile):
@@ -1093,7 +962,7 @@ class _AzureStreamingReadFile(_StreamingReadFile):
         return resp
 
 
-class _StreamingWriteFile(_BaseFile):
+class _StreamingWriteFile(io.RawIOBase):
     def __init__(self, mode):
         self._text_mode = "b" not in mode
         self._newline = b"\n"
@@ -1120,26 +989,19 @@ class _StreamingWriteFile(_BaseFile):
         self._offset += len(chunk)
 
     def close(self):
-        if not hasattr(self, "_closed") or self.closed:
+        if self.closed:
             return
 
         # we will have a partial remaining buffer at this point
         self._upload_buf(finalize=True)
         super().close()
 
-    @_check_closed
     def tell(self):
         return self._offset
 
-    @_check_closed
-    def truncate(self):
-        raise io.UnsupportedOperation("operation not supported")
-
-    @_check_closed
     def writable(self):
         return True
 
-    @_check_closed
     def write(self, b):
         if self._text_mode:
             b = b.encode("utf8")
@@ -1148,10 +1010,8 @@ class _StreamingWriteFile(_BaseFile):
         while len(self._buf) > STREAMING_CHUNK_SIZE:
             self._upload_buf()
 
-    @_check_closed
-    def writelines(self, lines):
-        for line in lines:
-            self.write(line)
+    def readinto(self, b):
+        raise io.UnsupportedOperation("not readable")
 
 
 class _GCSStreamingWriteFile(_StreamingWriteFile):
@@ -1236,44 +1096,38 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             start += AZURE_MAX_CHUNK_SIZE
 
 
-class BlobFile:
+def BlobFile(path, mode="r"):
     """
     Open a local or remote file for reading or writing
     """
+    assert not path.endswith("/")
+    mode = mode
+    assert mode in ("w", "wb", "r", "rb")
+    if _is_local_path(path):
+        return open(file=path, mode=mode)
 
-    def __init__(self, path, mode="r"):
-        assert not path.endswith("/")
-        self._mode = mode
-        assert self._mode in ("w", "wb", "r", "rb")
-        if _is_gcs_path(path):
-            if self._mode in ("w", "wb"):
-                self._f = _GCSStreamingWriteFile(path, self._mode)
-            elif self._mode in ("r", "rb"):
-                self._f = _GCSStreamingReadFile(path, self._mode)
-            else:
-                raise Exception(f"unsupported mode {self._mode}")
-        elif _is_azure_path(path):
-            if self._mode in ("w", "wb"):
-                self._f = _AzureStreamingWriteFile(path, self._mode)
-            elif self._mode in ("r", "rb"):
-                self._f = _AzureStreamingReadFile(path, self._mode)
-            else:
-                raise Exception(f"unsupported mode {self._mode}")
-        elif _is_local_path(path):
-            self._f = open(file=path, mode=self._mode)
+    if _is_gcs_path(path):
+        if mode in ("w", "wb"):
+            f = _GCSStreamingWriteFile(path, mode)
+        elif mode in ("r", "rb"):
+            f = _GCSStreamingReadFile(path, mode)
         else:
-            raise Exception("unrecognized path")
+            raise Exception(f"unsupported mode {mode}")
+    elif _is_azure_path(path):
+        if mode in ("w", "wb"):
+            f = _AzureStreamingWriteFile(path, mode)
+        elif mode in ("r", "rb"):
+            f = _AzureStreamingReadFile(path, mode)
+        else:
+            raise Exception(f"unsupported mode {mode}")
+    else:
+        raise Exception("unrecognized path")
 
-    def __enter__(self):
-        return self._f.__enter__()
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        return self._f.__exit__(exc_type, exc_val, exc_tb)
-
-    def __getattr__(self, attr):
-        if attr == "_f":
-            raise AttributeError(attr)
-        return getattr(self._f, attr)
+    if "r" in mode:
+        f = io.BufferedReader(f, buffer_size=STREAMING_CHUNK_SIZE)
+        if "b" not in mode:
+            f = io.TextIOWrapper(f, encoding="utf8")
+    return f
 
 
 class LocalBlobFile:

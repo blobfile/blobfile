@@ -6,7 +6,6 @@ import hashlib
 import base64
 import binascii
 import io
-import functools
 import urllib.parse
 import time
 import json

@@ -903,6 +903,7 @@ class _StreamingReadFile(io.RawIOBase):
         if new_offset != self._offset:
             self._offset = new_offset
             self._f = None
+        return self._offset
 
     def tell(self):
         return self._offset

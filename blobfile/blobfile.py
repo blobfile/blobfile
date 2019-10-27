@@ -1105,7 +1105,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             start += AZURE_MAX_CHUNK_SIZE
 
 
-def BlobFile(path, mode="r"):
+def BlobFile(path, mode="r", buffer_size=STREAMING_CHUNK_SIZE):
     """
     Open a local or remote file for reading or writing
     """
@@ -1133,7 +1133,7 @@ def BlobFile(path, mode="r"):
         raise Exception("unrecognized path")
 
     if "r" in mode:
-        f = io.BufferedReader(f, buffer_size=STREAMING_CHUNK_SIZE)
+        f = io.BufferedReader(f, buffer_size=buffer_size)
         if "b" not in mode:
             f = io.TextIOWrapper(f, encoding="utf8")
     return f

@@ -339,6 +339,36 @@ def test_exists(ctx):
         assert bf.exists(path)
 
 
+@pytest.mark.parametrize("buffer_size", [1, 100])
+@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])
+def test_read_stats(buffer_size, ctx):
+    with ctx() as path:
+        contents = b"meow!"
+
+        with bf.BlobFile(path, "wb") as w:
+            w.write(contents)
+
+        with bf.BlobFile(path, "rb", buffer_size=buffer_size) as r:
+            r.read(1)
+
+        if buffer_size == 1:
+            assert r.raw.stats.bytes_read == 1
+        else:
+            assert r.raw.stats.bytes_read == len(contents)
+
+        with bf.BlobFile(path, "rb", buffer_size=buffer_size) as r:
+            r.read(1)
+            r.seek(4)
+            r.read(1)
+
+        if buffer_size == 1:
+            assert r.raw.stats.requests == 2
+            assert r.raw.stats.bytes_read == 2
+        else:
+            assert r.raw.stats.requests == 1
+            assert r.raw.stats.bytes_read == len(contents)
+
+
 @pytest.mark.parametrize("binary", [True, False])
 @pytest.mark.parametrize("blobfile", [bf.BlobFile, bf.LocalBlobFile])
 @pytest.mark.parametrize(

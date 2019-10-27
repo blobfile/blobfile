@@ -14,6 +14,7 @@ import fnmatch
 import collections
 import threading
 import ssl
+from dataclasses import dataclass
 
 import urllib3
 import xmltodict
@@ -33,6 +34,16 @@ LOCAL_PATH = "local"
 GCS_PATH = "gcs"
 
 Stat = collections.namedtuple("Stat", "size, mtime")
+
+
+@dataclass
+class ReadStats:
+    """Track read stats"""
+
+    bytes_read: int = 0
+    requests: int = 0
+    failures: int = 0
+
 
 _http = None
 _http_pid = None
@@ -848,6 +859,7 @@ class _StreamingReadFile(io.RawIOBase):
         # current reading byte offset in the file
         self._offset = 0
         self._f = None
+        self.stats = ReadStats()
 
     def _get_file(self, offset):
         raise NotImplementedError
@@ -866,6 +878,7 @@ class _StreamingReadFile(io.RawIOBase):
         ):
             if self._f is None:
                 self._f = self._get_file(self._offset)
+                self.stats.requests += 1
 
             err = None
             try:
@@ -876,19 +889,21 @@ class _StreamingReadFile(io.RawIOBase):
                     self._f = None
                     err = "failed to read from connection"
                 else:
-                    # only break out of we successfully read at least one byte
+                    # only break out if we successfully read at least one byte
                     break
             except (
                 urllib3.exceptions.ReadTimeoutError,  # haven't seen this error here, but seems possible
                 urllib3.exceptions.ProtocolError,
             ) as e:
                 err = e
+            self.stats.failures += 1
             if attempt >= 3:
                 _log_callback(
                     f"error {err} when executing readinto({len(b)}) at offset {self._offset} on file {self._path}, sleeping for {backoff} seconds"
                 )
             time.sleep(backoff)
         self._offset += n
+        self.stats.bytes_read += n
         return n
 
     def seek(self, offset, whence=io.SEEK_SET):

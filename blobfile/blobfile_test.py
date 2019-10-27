@@ -10,6 +10,7 @@ import time
 import subprocess as sp
 import multiprocessing as mp
 import platform
+import av
 
 import pytest
 from tensorflow.io import gfile  # pylint: disable=import-error
@@ -445,6 +446,12 @@ def test_video(blobfile, ctx):
             ) as r:
                 for idx, frame in enumerate(r):
                     assert np.array_equal(frame, video_data[idx])
+
+        with blobfile(path, mode="rb") as rf:
+            container = av.open(rf)
+            stream = container.streams.video[0]
+            for idx, frame in enumerate(container.decode(stream)):
+                assert np.array_equal(frame.to_image(), video_data[idx])
 
 
 @pytest.mark.parametrize(

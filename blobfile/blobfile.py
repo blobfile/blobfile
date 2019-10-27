@@ -1081,6 +1081,8 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             account, "/{container}/{blob}", container=container, blob=blob
         )
         req = _create_azure_api_request(url=self._url, method="PUT")
+        # premium block blob storage supports block blobs and append blobs
+        # https://azure.microsoft.com/en-us/blog/azure-premium-block-blob-storage-is-now-generally-available/
         req.headers["x-ms-blob-type"] = "AppendBlob"
         with _execute_request(req) as resp:
             assert resp.status == 201, f"unexpected status {resp.status}"

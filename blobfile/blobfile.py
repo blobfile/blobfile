@@ -231,6 +231,7 @@ def _get_head(path):
         return resp
 
 
+# TODO: https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob
 def copy(src, dst, overwrite=False):
     if not overwrite:
         if exists(dst):
@@ -328,6 +329,69 @@ def _azure_get_blob_metadata(path):
         return resp
 
 
+def _create_google_page_iterator(url, method, data=None, params=None):
+    if params is not None:
+        params = params.copy()
+        msg = params
+    if data is not None:
+        data = data.copy()
+        msg = data
+    while True:
+        req = _create_google_api_request(
+            url=url, method=method, params=params, data=data
+        )
+        with _execute_request(req) as resp:
+            result = json.load(resp)
+            yield result
+            if "nextPageToken" not in result:
+                break
+        msg["pageToken"] = result["nextPageToken"]
+
+
+def _create_azure_page_iterator(url, method, data=None, params=None):
+    if params is not None:
+        params = params.copy()
+    if data is not None:
+        data = data.copy()
+    while True:
+        req = _create_azure_api_request(
+            url=url, method=method, params=params, data=data
+        )
+        with _execute_request(req) as resp:
+            result = xmltodict.parse(resp)["EnumerationResults"]
+            yield result
+            if result["NextMarker"] is None:
+                break
+        params["marker"] = result["NextMarker"]
+
+
+def _gcs_get_names(result, skip_item_name):
+    if "prefixes" in result:
+        for p in result["prefixes"]:
+            yield p
+    if "items" in result:
+        for item in result["items"]:
+            if item["name"] == skip_item_name:
+                continue
+            yield item["name"]
+
+
+def _azure_get_names(result, skip_item_name):
+    blobs = result["Blobs"]
+    if "Blob" in blobs:
+        if isinstance(blobs["Blob"], dict):
+            blobs["Blob"] = [blobs["Blob"]]
+        for b in blobs["Blob"]:
+            if b["Name"] == skip_item_name:
+                continue
+            yield b["Name"]
+    if "BlobPrefix" in result:
+        if isinstance(blobs["BlobPrefix"], dict):
+            blobs["BlobPrefix"] = [blobs["BlobPrefix"]]
+        for bp in blobs["BlobPrefix"]:
+            yield bp["Name"]
+
+
 def _gcs_exists(path):
     resp, _metadata = _gcs_get_blob_metadata(path)
     assert resp.status in (200, 404), f"unexpected status {resp.status}"
@@ -357,6 +421,7 @@ def exists(path):
         raise Exception("unrecognized path")
 
 
+# TODO:
 def glob(pattern):
     """
     Find files matching a pattern, only supports the "*" operator
@@ -365,32 +430,56 @@ def glob(pattern):
     if _is_local_path(pattern):
         for filepath in local_glob.glob(pattern):
             yield filepath
-    elif _is_gcs_path(pattern):
+    elif _is_gcs_path(pattern) or _is_azure_path(pattern):
         if "*" in pattern:
             assert pattern.count("*") == 1
             prefix, _sep, _suffix = pattern.partition("*")
-            bucket, blob_prefix = google.split_url(prefix)
-            assert "*" not in bucket
-            params = dict(prefix=blob_prefix)
-            if "/" in blob_prefix:
-                params["delimiter"] = "/"
-            it = _create_google_page_iterator(
-                url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
-                method="GET",
-                params=params,
-            )
-            for name in _gcs_get_names(it, blob_prefix):
-                filepath = join("gs://" + bucket, name)
-                if basename(filepath).startswith(".") and not basename(
-                    pattern
-                ).startswith("."):
-                    # don't find hidden files
-                    continue
-                if fnmatch.fnmatch(filepath, pattern):
-                    yield filepath
+            if _is_gcs_path(pattern):
+                bucket, blob_prefix = google.split_url(prefix)
+                assert "*" not in bucket
+                params = dict(prefix=blob_prefix)
+                if "/" in blob_prefix:
+                    params["delimiter"] = "/"
+                it = _create_google_page_iterator(
+                    url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+                    method="GET",
+                    params=params,
+                )
+                root = f"gs://{bucket}"
+                get_names = _gcs_get_names
+            else:
+                account, container, blob_prefix = azure.split_url(prefix)
+                assert "*" not in account and "*" not in container
+                params = dict(comp="list", restype="container", prefix=blob_prefix)
+                if "/" in blob_prefix:
+                    params["delimiter"] = "/"
+                it = _create_azure_page_iterator(
+                    url=azure.build_url(account, "/{container}", container=container),
+                    method="GET",
+                    params=params,
+                )
+                root = f"as://{account}-{container}"
+                get_names = _azure_get_names
+
+            for result in it:
+                for name in get_names(result, blob_prefix):
+                    filepath = join(root, name)
+                    if basename(filepath).startswith(".") and not basename(
+                        pattern
+                    ).startswith("."):
+                        # don't find hidden files
+                        continue
+                    if fnmatch.fnmatch(filepath, pattern):
+                        yield filepath
         else:
-            if _gcs_exists(pattern):
-                yield pattern
+            if _is_gcs_path(pattern):
+                if _gcs_exists(pattern):
+                    yield pattern
+            elif _is_azure_path(pattern):
+                if _azure_exists(pattern):
+                    yield pattern
+            else:
+                raise Exception("unrecognized path")
     else:
         raise Exception("unrecognized path")
 
@@ -413,45 +502,29 @@ def isdir(path):
         )
         with _execute_request(req) as resp:
             result = json.load(resp)
-            if "items" in result or "prefixes" in result:
-                return True
-        return False
+            return "items" in result or "prefixes" in result
     elif _is_azure_path(path):
-        # we don't have directory existence checking yet
-        return False
-    else:
-        raise Exception("unrecognized path")
-
-
-def _create_google_page_iterator(url, method, data=None, params=None):
-    if params is not None:
-        params = params.copy()
-        msg = params
-    if data is not None:
-        data = data.copy()
-        msg = data
-    while True:
-        req = _create_google_api_request(
-            url=url, method=method, params=params, data=data
+        if not path.endswith("/"):
+            path += "/"
+        account, container, blob = azure.split_url(path)
+        req = _create_azure_api_request(
+            url=azure.build_url(account, "/{container}", container=container),
+            method="GET",
+            params=dict(
+                comp="list",
+                restype="container",
+                prefix=blob,
+                delimiter="/",
+                maxresults=1,
+            ),
         )
         with _execute_request(req) as resp:
-            result = json.load(resp)
-            yield result
-            if "nextPageToken" not in result:
-                break
-        msg["pageToken"] = result["nextPageToken"]
-
-
-def _gcs_get_names(it, skip_item_name):
-    for result in it:
-        if "prefixes" in result:
-            for p in result["prefixes"]:
-                yield p
-        if "items" in result:
-            for item in result["items"]:
-                if item["name"] == skip_item_name:
-                    continue
-                yield item["name"]
+            result = xmltodict.parse(resp)["EnumerationResults"]
+            return result["Blobs"] is not None and (
+                "BlobPrefix" in result["Blobs"] or "Blob" in result["Blobs"]
+            )
+    else:
+        raise Exception("unrecognized path")
 
 
 def listdir(path):
@@ -474,8 +547,19 @@ def listdir(path):
             method="GET",
             params=dict(delimiter="/", prefix=blob),
         )
-        for name in _gcs_get_names(it, blob):
-            yield name[len(blob) :]
+        for result in it:
+            for name in _gcs_get_names(result, blob):
+                yield name[len(blob) :]
+    elif _is_azure_path(path):
+        account, container, blob = azure.split_url(path)
+        it = _create_azure_page_iterator(
+            url=azure.build_url(account, "/{container}", container=container),
+            method="GET",
+            params=dict(comp="list", restype="container", prefix=blob, delimiter="/"),
+        )
+        for result in it:
+            for name in _azure_get_names(result, blob):
+                yield name[len(blob) :]
     else:
         raise Exception("unrecognized path")
 
@@ -497,6 +581,17 @@ def makedirs(path):
         )
         with _execute_request(req) as resp:
             assert resp.status == 200, f"unexpected status {resp.status}"
+    elif _is_azure_path(path):
+        if not path.endswith("/"):
+            path += "/"
+        account, container, blob = azure.split_url(path)
+        req = _create_azure_api_request(
+            url=azure.build_url(account, "/{container}/{blob}", container=container, blob=blob),
+            method="PUT",
+        )
+        req.headers["x-ms-blob-type"] = "BlockBlob"
+        with _execute_request(req) as resp:
+            assert resp.status == 201, f"unexpected status {resp.status}"
     else:
         raise Exception("unrecognized path")
 
@@ -521,10 +616,19 @@ def remove(path):
         )
         with _execute_request(req) as resp:
             assert resp.status == 204, f"unexpected status {resp.status}"
+    elif _is_azure_path(path):
+        account, container, blob = azure.split_url(path)
+        req = _create_azure_api_request(
+            url=azure.build_url(account, "/{container}/{blob}", container=container, blob=blob),
+            method="DELETE",
+        )
+        with _execute_request(req) as resp:
+            assert resp.status == 202, f"unexpected status {resp.status}"
     else:
         raise Exception("unrecognized path")
 
 
+# TODO: needs copy,remove, copytree, rmtree
 def rename(src, dst, overwrite=False):
     """
     Rename a file or directory, this is not guaranteed to be atomic.  For remote filesystems
@@ -572,10 +676,16 @@ def stat(path):
         ts = time.strptime(result["updated"], "%Y-%m-%dT%H:%M:%S.%fZ")
         t = calendar.timegm(ts)
         return Stat(size=int(result["size"]), mtime=t)
+    elif _is_azure_path(path):
+        resp = _azure_get_blob_metadata(path)
+        ts = time.strptime(resp.headers["Last-Modified"], "%a, %d %b %Y %H:%M:%S GMT")
+        t = calendar.timegm(ts)
+        return Stat(size=int(resp.headers["Content-Length"]), mtime=t)
     else:
         raise Exception("unrecognized path")
 
 
+# TODO: probably just needs walk
 def copytree(src, dst):
     """
     Copy a directory tree from one location to another
@@ -609,6 +719,7 @@ def copytree(src, dst):
     return dst
 
 
+# TODO: why doesn't this use walk + remove?
 def rmtree(path):
     """
     Delete a directory tree
@@ -643,6 +754,7 @@ def rmtree(path):
         raise Exception("unrecognized path")
 
 
+# TODO:
 def walk(top, topdown=True, onerror=None):
     """
     Walk a directory tree in a similar manner to os.walk
@@ -669,12 +781,13 @@ def walk(top, topdown=True, onerror=None):
             )
             dirnames = []
             filenames = []
-            for name in _gcs_get_names(it, blob):
-                name = name[len(blob) :]
-                if name.endswith("/"):
-                    dirnames.append(name)
-                else:
-                    filenames.append(name)
+            for result in it:
+                for name in _gcs_get_names(result, blob):
+                    name = name[len(blob) :]
+                    if name.endswith("/"):
+                        dirnames.append(name)
+                    else:
+                        filenames.append(name)
             yield (cur, dirnames, filenames)
             dq.extend(join(cur, dirname) for dirname in dirnames)
     else:
@@ -687,9 +800,9 @@ def basename(path):
 
     For GCS, this is the part after the bucket
     """
-    if _is_gcs_path(path):
-        _netloc, path = google.split_url(path)
-        return path.split("/")[-1]
+    if _is_gcs_path(path) or _is_azure_path(path):
+        url = urllib.parse.urlparse(path)
+        return url.path[1:].split("/")[-1]
     else:
         return os.path.basename(path)
 
@@ -700,8 +813,9 @@ def dirname(path):
 
     If this is a GCS path, the root directory is gs://<bucket name>/
     """
-    if _is_gcs_path(path):
-        netloc, urlpath = google.split_url(path)
+    if _is_gcs_path(path) or _is_azure_path(path):
+        url = urllib.parse.urlparse(path)
+        urlpath = url.path[1:]
         if urlpath.endswith("/"):
             urlpath = urlpath[:-1]
 
@@ -709,7 +823,7 @@ def dirname(path):
             urlpath = "/".join(urlpath.split("/")[:-1]) + "/"
         else:
             urlpath = ""
-        return f"gs://{netloc}/{urlpath}"
+        return f"{url.scheme}://{url.netloc}/{urlpath}"
     else:
         return os.path.dirname(path)
 
@@ -725,10 +839,7 @@ def join(a, *args):
 
 
 def _join2(a, b):
-    """
-    Join two file paths, if path `b` is an absolute path, it will replace the entire path component of a
-    """
-    if _is_gcs_path(a):
+    if _is_gcs_path(a) or _is_azure_path(a):
         if not a.endswith("/"):
             a += "/"
         assert "://" not in b

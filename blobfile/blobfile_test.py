@@ -137,6 +137,10 @@ def test_basename():
         ("gs://a/", ""),
         ("gs://a/b", "b"),
         ("gs://a/b/c/test.filename", "test.filename"),
+        ("as://a", ""),
+        ("as://a/", ""),
+        ("as://a/b", "b"),
+        ("as://a/b/c/test.filename", "test.filename"),
     ]
     for input_, desired_output in testcases:
         actual_output = bf.basename(input_)
@@ -155,6 +159,11 @@ def test_dirname():
         ("gs://a/b", "gs://a/"),
         ("gs://a/b/c/test.filename", "gs://a/b/c/"),
         ("gs://a/b/c/", "gs://a/b/"),
+        ("as://a", "as://a/"),
+        ("as://a/", "as://a/"),
+        ("as://a/b", "as://a/"),
+        ("as://a/b/c/test.filename", "as://a/b/c/"),
+        ("as://a/b/c/", "as://a/b/"),
     ]
     for input_, desired_output in testcases:
         actual_output = bf.dirname(input_)
@@ -174,13 +183,20 @@ def test_join():
         ("gs://a/b/", "c", "gs://a/b/c"),
         ("gs://a/b/", "c/", "gs://a/b/c/"),
         ("gs://a/b/", "/c/", "gs://a/c/"),
+        ("as://a", "b", "as://a/b"),
+        ("as://a/b", "c", "as://a/b/c"),
+        ("as://a/b/", "c", "as://a/b/c"),
+        ("as://a/b/", "c/", "as://a/b/c/"),
+        ("as://a/b/", "/c/", "as://a/c/"),
     ]
     for input_a, input_b, desired_output in testcases:
         actual_output = bf.join(input_a, input_b)
         assert desired_output == actual_output, f"{input_a} {input_b}"
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_cache_key(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -217,7 +233,9 @@ def test_read_write(ctx):
             assert b"".join(lines) == contents
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_stat(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -238,7 +256,9 @@ def test_rename(ctx):
             assert f.read() == contents
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_remove(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -248,7 +268,9 @@ def test_remove(ctx):
         assert not bf.exists(path)
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_makedirs(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -258,7 +280,9 @@ def test_makedirs(ctx):
         _write_contents(bf.join(dirpath, "testfile"), contents)
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_isdir(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -268,9 +292,12 @@ def test_isdir(ctx):
         dirpath = path + ".dir"
         bf.makedirs(dirpath)
         assert bf.isdir(dirpath)
+        assert not bf.isdir(dirpath[:-1])
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_listdir(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -284,7 +311,9 @@ def test_listdir(ctx):
         assert sorted(list(bf.listdir(dirpath))) == ["a", "b"]
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_glob(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -330,7 +359,9 @@ def test_copy():
             assert _read_contents(dst) == contents
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_exists(ctx):
     contents = b"meow!"
     with ctx() as path:

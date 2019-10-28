@@ -864,10 +864,8 @@ class _StreamingReadFile(io.RawIOBase):
     def _get_file(self, offset):
         raise NotImplementedError
 
-    # we could define readall() here to handle the case of calling
-    # read() with no arguments efficiently, but with the retry logic
-    # we wouldn't want to get in a loop retrying a large file
-    # so only define readinto() which will be used for all reading operations
+    def readall(self):
+        return self.read(self._size - self._offset)
 
     def readinto(self, b):
         if self._size == self._offset:

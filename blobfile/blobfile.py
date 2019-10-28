@@ -31,7 +31,8 @@ AZURE_MAX_CHUNK_SIZE = 4 * 2 ** 20
 assert STREAMING_CHUNK_SIZE % (256 * 1024) == 0
 
 LOCAL_PATH = "local"
-GCS_PATH = "gcs"
+GOOGLE_PATH = "google"
+AZURE_PATH = "azure"
 
 Stat = collections.namedtuple("Stat", "size, mtime")
 
@@ -124,7 +125,7 @@ class TokenManager:
         return self._tokens[args]
 
 
-def _gcs_get_access_token():
+def _google_get_access_token():
     now = time.time()
     req = google.create_access_token_request(
         ["https://www.googleapis.com/auth/devstorage.full_control"]
@@ -154,7 +155,7 @@ def _azure_get_sas_token(account):
     return out["UserDelegationKey"], expiration
 
 
-global_google_access_token_manager = TokenManager(_gcs_get_access_token)
+global_google_access_token_manager = TokenManager(_google_get_access_token)
 
 global_azure_access_token_manager = TokenManager(_azure_get_access_token)
 
@@ -203,10 +204,10 @@ def _execute_request(req, retry_statuses=(500,), timeout=DEFAULT_TIMEOUT):
 
 
 def _is_local_path(path):
-    return not _is_gcs_path(path) and not _is_azure_path(path)
+    return not _is_google_path(path) and not _is_azure_path(path)
 
 
-def _is_gcs_path(path):
+def _is_google_path(path):
     url = urllib.parse.urlparse(path)
     return url.scheme == "gs"
 
@@ -219,8 +220,10 @@ def _is_azure_path(path):
 def _get_path_type(path):
     if _is_local_path(path):
         return LOCAL_PATH
-    elif _is_gcs_path(path):
-        return GCS_PATH
+    elif _is_google_path(path):
+        return GOOGLE_PATH
+    elif _is_azure_path(path):
+        return AZURE_PATH
     else:
         raise Exception("unrecognized path")
 
@@ -240,7 +243,7 @@ def copy(src, dst, overwrite=False):
             )
 
     # special case gcs to gcs copy, don't download the file
-    if _is_gcs_path(src) and _is_gcs_path(dst):
+    if _is_google_path(src) and _is_google_path(dst):
         srcbucket, srcname = google.split_url(src)
         dstbucket, dstname = google.split_url(dst)
         token = None
@@ -287,7 +290,7 @@ def _create_azure_api_request(**kwargs):
     )
 
 
-def _gcs_get_blob_metadata(path):
+def _google_get_blob_metadata(path):
     bucket, blob = google.split_url(path)
     req = _create_google_api_request(
         url=google.build_url(
@@ -365,7 +368,7 @@ def _create_azure_page_iterator(url, method, data=None, params=None):
         params["marker"] = result["NextMarker"]
 
 
-def _gcs_get_names(result, skip_item_name):
+def _google_get_names(result, skip_item_name):
     if "prefixes" in result:
         for p in result["prefixes"]:
             yield p
@@ -392,8 +395,8 @@ def _azure_get_names(result, skip_item_name):
             yield bp["Name"]
 
 
-def _gcs_exists(path):
-    resp, _metadata = _gcs_get_blob_metadata(path)
+def _google_exists(path):
+    resp, _metadata = _google_get_blob_metadata(path)
     assert resp.status in (200, 404), f"unexpected status {resp.status}"
     return resp.status == 200
 
@@ -409,8 +412,8 @@ def exists(path):
     """
     if _is_local_path(path):
         return os.path.exists(path)
-    elif _is_gcs_path(path):
-        if _gcs_exists(path):
+    elif _is_google_path(path):
+        if _google_exists(path):
             return True
         return isdir(path)
     elif _is_azure_path(path):
@@ -430,11 +433,11 @@ def glob(pattern):
     if _is_local_path(pattern):
         for filepath in local_glob.glob(pattern):
             yield filepath
-    elif _is_gcs_path(pattern) or _is_azure_path(pattern):
+    elif _is_google_path(pattern) or _is_azure_path(pattern):
         if "*" in pattern:
             assert pattern.count("*") == 1
             prefix, _sep, _suffix = pattern.partition("*")
-            if _is_gcs_path(pattern):
+            if _is_google_path(pattern):
                 bucket, blob_prefix = google.split_url(prefix)
                 assert "*" not in bucket
                 params = dict(prefix=blob_prefix)
@@ -446,7 +449,7 @@ def glob(pattern):
                     params=params,
                 )
                 root = f"gs://{bucket}"
-                get_names = _gcs_get_names
+                get_names = _google_get_names
             else:
                 account, container, blob_prefix = azure.split_url(prefix)
                 assert "*" not in account and "*" not in container
@@ -472,8 +475,8 @@ def glob(pattern):
                     if fnmatch.fnmatch(filepath, pattern):
                         yield filepath
         else:
-            if _is_gcs_path(pattern):
-                if _gcs_exists(pattern):
+            if _is_google_path(pattern):
+                if _google_exists(pattern):
                     yield pattern
             elif _is_azure_path(pattern):
                 if _azure_exists(pattern):
@@ -490,7 +493,7 @@ def isdir(path):
     """
     if _is_local_path(path):
         return os.path.isdir(path)
-    elif _is_gcs_path(path):
+    elif _is_google_path(path):
         if not path.endswith("/"):
             path += "/"
         bucket, blob_prefix = google.split_url(path)
@@ -538,7 +541,7 @@ def listdir(path):
     if _is_local_path(path):
         for d in os.listdir(path):
             yield d
-    elif _is_gcs_path(path):
+    elif _is_google_path(path):
         if not path.endswith("/"):
             path += "/"
         bucket, blob = google.split_url(path)
@@ -548,7 +551,7 @@ def listdir(path):
             params=dict(delimiter="/", prefix=blob),
         )
         for result in it:
-            for name in _gcs_get_names(result, blob):
+            for name in _google_get_names(result, blob):
                 yield name[len(blob) :]
     elif _is_azure_path(path):
         account, container, blob = azure.split_url(path)
@@ -570,7 +573,7 @@ def makedirs(path):
     """
     if _is_local_path(path):
         os.makedirs(path, exist_ok=True)
-    elif _is_gcs_path(path):
+    elif _is_google_path(path):
         if not path.endswith("/"):
             path += "/"
         bucket, blob = google.split_url(path)
@@ -606,7 +609,7 @@ def remove(path):
         raise IsADirectoryError(f"Is a directory: '{path}'")
     if _is_local_path(path):
         os.remove(path)
-    elif _is_gcs_path(path):
+    elif _is_google_path(path):
         bucket, blob = google.split_url(path)
         req = _create_google_api_request(
             url=google.build_url(
@@ -651,7 +654,7 @@ def rename(src, dst, overwrite=False):
         raise IsADirectoryError(f"Is a directory: '{dst}'")
     if _is_local_path(src):
         os.replace(src, dst)
-    elif _is_gcs_path(src):
+    elif _is_google_path(src):
         if src_is_dir:
             copytree(src, dst)
             rmtree(src)
@@ -669,8 +672,8 @@ def stat(path):
     if _is_local_path(path):
         s = os.stat(path)
         return Stat(size=s.st_size, mtime=s.st_mtime)
-    elif _is_gcs_path(path):
-        resp, result = _gcs_get_blob_metadata(path)
+    elif _is_google_path(path):
+        resp, result = _google_get_blob_metadata(path)
         if resp.status == 404:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         ts = time.strptime(result["updated"], "%Y-%m-%dT%H:%M:%S.%fZ")
@@ -729,7 +732,7 @@ def rmtree(path):
 
     if _is_local_path(path):
         shutil.rmtree(path)
-    elif _is_gcs_path(path):
+    elif _is_google_path(path):
         if not path.endswith("/"):
             path += "/"
         bucket, blob = google.split_url(path)
@@ -765,7 +768,7 @@ def walk(top, topdown=True, onerror=None):
     if _is_local_path(top):
         for result in os.walk(top=top, topdown=topdown, onerror=onerror):
             yield result
-    elif _is_gcs_path(top):
+    elif _is_google_path(top):
         assert topdown
         if not top.endswith("/"):
             top = top + "/"
@@ -782,7 +785,7 @@ def walk(top, topdown=True, onerror=None):
             dirnames = []
             filenames = []
             for result in it:
-                for name in _gcs_get_names(result, blob):
+                for name in _google_get_names(result, blob):
                     name = name[len(blob) :]
                     if name.endswith("/"):
                         dirnames.append(name)
@@ -800,7 +803,7 @@ def basename(path):
 
     For GCS, this is the part after the bucket
     """
-    if _is_gcs_path(path) or _is_azure_path(path):
+    if _is_google_path(path) or _is_azure_path(path):
         url = urllib.parse.urlparse(path)
         return url.path[1:].split("/")[-1]
     else:
@@ -813,7 +816,7 @@ def dirname(path):
 
     If this is a GCS path, the root directory is gs://<bucket name>/
     """
-    if _is_gcs_path(path) or _is_azure_path(path):
+    if _is_google_path(path) or _is_azure_path(path):
         url = urllib.parse.urlparse(path)
         urlpath = url.path[1:]
         if urlpath.endswith("/"):
@@ -839,7 +842,7 @@ def join(a, *args):
 
 
 def _join2(a, b):
-    if _is_gcs_path(a) or _is_azure_path(a):
+    if _is_google_path(a) or _is_azure_path(a):
         if not a.endswith("/"):
             a += "/"
         assert "://" not in b
@@ -856,7 +859,7 @@ def cache_key(path):
     """
     if _is_local_path(path):
         key_parts = [path, os.path.getmtime(path), os.path.getsize(path)]
-    elif _is_gcs_path(path) or _is_azure_path(path):
+    elif _is_google_path(path) or _is_azure_path(path):
         return md5(path)
     else:
         raise Exception("unrecognized path")
@@ -871,7 +874,7 @@ def get_url(path):
     """
     Get a URL for the given path that a browser could open
     """
-    if _is_gcs_path(path):
+    if _is_google_path(path):
         bucket, blob = google.split_url(path)
         return google.generate_signed_url(
             bucket, blob, expiration=google.MAX_EXPIRATION
@@ -893,8 +896,8 @@ def md5(path):
     """
     Get the MD5 hash for a file
     """
-    if _is_gcs_path(path):
-        resp, metadata = _gcs_get_blob_metadata(path)
+    if _is_google_path(path):
+        resp, metadata = _google_get_blob_metadata(path)
         if resp.status == 404:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         assert resp.status == 200, f"unexpected status {resp.status}"
@@ -1049,9 +1052,9 @@ class _StreamingReadFile(io.RawIOBase):
         return True
 
 
-class _GCSStreamingReadFile(_StreamingReadFile):
+class _GoogleStreamingReadFile(_StreamingReadFile):
     def __init__(self, path, mode):
-        resp, self._metadata = _gcs_get_blob_metadata(path)
+        resp, self._metadata = _google_get_blob_metadata(path)
         if resp.status == 404:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         assert resp.status == 200, f"unexpected status {resp.status}"
@@ -1148,7 +1151,7 @@ class _StreamingWriteFile(io.RawIOBase):
         raise io.UnsupportedOperation("not readable")
 
 
-class _GCSStreamingWriteFile(_StreamingWriteFile):
+class _GoogleStreamingWriteFile(_StreamingWriteFile):
     def __init__(self, path, mode):
         bucket, name = google.split_url(path)
         req = _create_google_api_request(
@@ -1242,11 +1245,11 @@ def BlobFile(path, mode="r", buffer_size=STREAMING_CHUNK_SIZE):
     if _is_local_path(path):
         return open(file=path, mode=mode)
 
-    if _is_gcs_path(path):
+    if _is_google_path(path):
         if mode in ("w", "wb"):
-            f = _GCSStreamingWriteFile(path, mode)
+            f = _GoogleStreamingWriteFile(path, mode)
         elif mode in ("r", "rb"):
-            f = _GCSStreamingReadFile(path, mode)
+            f = _GoogleStreamingReadFile(path, mode)
         else:
             raise Exception(f"unsupported mode {mode}")
     elif _is_azure_path(path):
@@ -1279,7 +1282,7 @@ class LocalBlobFile:
         assert not path.endswith("/")
         self._mode = mode
         assert self._mode in ("w", "wb", "r", "rb")
-        if _is_gcs_path(path) or _is_azure_path(path):
+        if _is_google_path(path) or _is_azure_path(path):
             self._f = _ProxyFile(path, self._mode)
         elif _is_local_path(path):
             self._f = open(file=path, mode=self._mode)

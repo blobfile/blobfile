@@ -245,17 +245,17 @@ def test_stat(ctx):
         assert 0 <= abs(time.time() - s.mtime) <= 5
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
-def test_rename(ctx):
-    contents = b"meow!"
-    with ctx() as path:
-        _write_contents(path, contents)
-        new_path = path + ".new"
-        bf.rename(path, new_path)
-        with bf.BlobFile(new_path, "rb") as f:
-            assert f.read() == contents
+# @pytest.mark.parametrize(
+#     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+# )
+# def test_rename(ctx):
+#     contents = b"meow!"
+#     with ctx() as path:
+#         _write_contents(path, contents)
+#         new_path = path + ".new"
+#         bf.rename(path, new_path)
+#         with bf.BlobFile(new_path, "rb") as f:
+#             assert f.read() == contents
 
 
 @pytest.mark.parametrize(
@@ -357,6 +357,38 @@ def test_glob(ctx):
         assert_listing_equal(bf.join(dirpath, "a*"), ["ab"])
         assert_listing_equal(bf.join(dirpath, "*"), ["ab", "bb"])
         assert_listing_equal(bf.join(dirpath, "bb"), ["bb"])
+
+
+# @pytest.mark.parametrize(
+#     "src_ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+# )
+# @pytest.mark.parametrize(
+#     "dst_ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+# )
+# def test_copytree(src_ctx, dst_ctx):
+#     contents = b"meow!"
+#     with src_ctx() as src_path, dst_ctx() as dst_path:
+#         src_dirpath = bf.dirname(src_path)
+#         a_path = bf.join(src_dirpath, "a")
+#         with bf.BlobFile(a_path, "wb") as w:
+#             w.write(contents)
+#         bf.makedirs(bf.join(src_dirpath, "c/d"))
+#         with bf.BlobFile(bf.join(src_dirpath, "c/d/b"), "wb") as w:
+#             w.write(contents)
+#         if "://" in src_path:
+#             # for remote filesystems, create a file without intermediate dirs
+#             with bf.BlobFile(bf.join(src_dirpath, "c/e/f"), "wb") as w:
+#                 w.write(contents)
+
+#         dst_dirpath = bf.join(bf.dirname(dst_path), "target")
+#         bf.copytree(bf.join(src_dirpath, "c"), dst_dirpath)
+#         assert bf.exists(bf.join(dst_dirpath, "d"))
+#         assert bf.isdir(bf.join(dst_dirpath, "d"))
+#         assert bf.exists(bf.join(dst_dirpath, "d/b"))
+#         if "://" in src_path:
+#             assert bf.exists(bf.join(dst_dirpath, "e"))
+#             assert bf.isdir(bf.join(dst_dirpath, "e"))
+#             assert bf.exists(bf.join(dst_dirpath, "e/f"))
 
 
 def test_copy():

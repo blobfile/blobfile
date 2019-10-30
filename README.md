@@ -33,9 +33,6 @@ Some are inspired by existing `os.path` and `shutil` functions:
 * `listdir` - list contents of a directory
 * `makedirs` - ensure that a directory and all parent directories exist
 * `remove` - remove a file
-* `rename` - move a file from one path to another (source and destination must be both local or both on GCS), not atomic on GCS
-* `copytree` - copy a directory tree from one path to another
-* `rmtree` - remove a directory tree
 * `stat` - get the size and modification time of a file
 * `walk` - walk a directory tree, yielding `(dirpath, dirnames, filenames)` tuples
 * `basename` - get the final component of a path

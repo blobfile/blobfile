@@ -1301,7 +1301,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             start += AZURE_MAX_CHUNK_SIZE
 
 
-def BlobFile(path, mode="r", buffer_size=STREAMING_CHUNK_SIZE):
+def BlobFile(path, mode="r", buffer_size=1):
     """
     Open a local or remote file for reading or writing
     """

@@ -234,7 +234,6 @@ def _get_head(path):
         return resp
 
 
-# TODO: https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob
 def copy(src, dst, overwrite=False):
     if not overwrite:
         if exists(dst):
@@ -242,7 +241,7 @@ def copy(src, dst, overwrite=False):
                 f"destination '{dst}' already exists and overwrite is disabled"
             )
 
-    # special case gcs to gcs copy, don't download the file
+    # special case cloud to cloud copy, don't download the file
     if _is_google_path(src) and _is_google_path(dst):
         srcbucket, srcname = google.split_url(src)
         dstbucket, dstname = google.split_url(dst)
@@ -272,6 +271,50 @@ def copy(src, dst, overwrite=False):
                 if result["done"]:
                     break
                 token = result["rewriteToken"]
+        return
+
+    if _is_azure_path(src) and _is_azure_path(dst):
+        # https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob
+        dst_account, dst_container, dst_blob = azure.split_url(dst)
+        req = _create_azure_api_request(
+            url=azure.build_url(
+                dst_account,
+                "/{container}/{blob}",
+                container=dst_container,
+                blob=dst_blob,
+            ),
+            method="PUT",
+        )
+
+        src_account, src_container, src_blob = azure.split_url(src)
+        req.headers["x-ms-copy-source"] = azure.build_url(
+            src_account, "/{container}/{blob}", container=src_container, blob=src_blob
+        )
+        with _execute_request(req) as resp:
+            if resp.status == 404:
+                raise FileNotFoundError(f"src file '{src}' not found")
+            assert resp.status == 202, f"unexpected status {resp.status}"
+            copy_id = resp.headers["x-ms-copy-id"]
+            copy_status = resp.headers["x-ms-copy-status"]
+
+        # wait for potentially async copy operation to finish
+        # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob
+        # pending, success, aborted failed
+        while copy_status == "pending":
+            req = _create_azure_api_request(
+                url=azure.build_url(
+                    dst_account,
+                    "/{container}/{blob}",
+                    container=dst_container,
+                    blob=dst_blob,
+                ),
+                method="GET",
+            )
+            with _execute_request(req) as resp:
+                assert resp.status == 200, f"unexpected status {resp.status}"
+                assert resp.headers["x-ms-copy-id"] == copy_id
+                copy_status = resp.headers["x-ms-copy-status"]
+        assert copy_status == "success"
         return
 
     with BlobFile(src, "rb") as src_f, BlobFile(dst, "wb") as dst_f:
@@ -388,7 +431,7 @@ def _azure_get_names(result, skip_item_name):
             if b["Name"] == skip_item_name:
                 continue
             yield b["Name"]
-    if "BlobPrefix" in result:
+    if "BlobPrefix" in blobs:
         if isinstance(blobs["BlobPrefix"], dict):
             blobs["BlobPrefix"] = [blobs["BlobPrefix"]]
         for bp in blobs["BlobPrefix"]:
@@ -424,7 +467,6 @@ def exists(path):
         raise Exception("unrecognized path")
 
 
-# TODO:
 def glob(pattern):
     """
     Find files matching a pattern, only supports the "*" operator
@@ -540,7 +582,10 @@ def listdir(path):
         raise NotADirectoryError(f"The directory name is invalid: '{path}'")
     if _is_local_path(path):
         for d in os.listdir(path):
-            yield d
+            if os.path.isdir(os.path.join(path, d)):
+                yield d + "/"
+            else:
+                yield d
     elif _is_google_path(path):
         if not path.endswith("/"):
             path += "/"
@@ -589,7 +634,9 @@ def makedirs(path):
             path += "/"
         account, container, blob = azure.split_url(path)
         req = _create_azure_api_request(
-            url=azure.build_url(account, "/{container}/{blob}", container=container, blob=blob),
+            url=azure.build_url(
+                account, "/{container}/{blob}", container=container, blob=blob
+            ),
             method="PUT",
         )
         req.headers["x-ms-blob-type"] = "BlockBlob"
@@ -622,7 +669,9 @@ def remove(path):
     elif _is_azure_path(path):
         account, container, blob = azure.split_url(path)
         req = _create_azure_api_request(
-            url=azure.build_url(account, "/{container}/{blob}", container=container, blob=blob),
+            url=azure.build_url(
+                account, "/{container}/{blob}", container=container, blob=blob
+            ),
             method="DELETE",
         )
         with _execute_request(req) as resp:
@@ -631,7 +680,6 @@ def remove(path):
         raise Exception("unrecognized path")
 
 
-# TODO: needs copy,remove, copytree, rmtree
 def rename(src, dst, overwrite=False):
     """
     Rename a file or directory, this is not guaranteed to be atomic.  For remote filesystems
@@ -654,7 +702,7 @@ def rename(src, dst, overwrite=False):
         raise IsADirectoryError(f"Is a directory: '{dst}'")
     if _is_local_path(src):
         os.replace(src, dst)
-    elif _is_google_path(src):
+    elif _is_google_path(src) or _is_azure_path(src):
         if src_is_dir:
             copytree(src, dst)
             rmtree(src)
@@ -688,7 +736,6 @@ def stat(path):
         raise Exception("unrecognized path")
 
 
-# TODO: probably just needs walk
 def copytree(src, dst):
     """
     Copy a directory tree from one location to another
@@ -722,7 +769,6 @@ def copytree(src, dst):
     return dst
 
 
-# TODO: why doesn't this use walk + remove?
 def rmtree(path):
     """
     Delete a directory tree
@@ -757,7 +803,6 @@ def rmtree(path):
         raise Exception("unrecognized path")
 
 
-# TODO:
 def walk(top, topdown=True, onerror=None):
     """
     Walk a directory tree in a similar manner to os.walk
@@ -766,9 +811,13 @@ def walk(top, topdown=True, onerror=None):
         return
 
     if _is_local_path(top):
-        for result in os.walk(top=top, topdown=topdown, onerror=onerror):
-            yield result
-    elif _is_google_path(top):
+        for (dirpath, dirnames, filenames) in os.walk(
+            top=top, topdown=topdown, onerror=onerror
+        ):
+            if not dirpath.endswith(os.sep):
+                dirpath += os.sep
+            yield (dirpath, [d + os.sep for d in dirnames], filenames)
+    elif _is_google_path(top) or _is_azure_path(top):
         assert topdown
         if not top.endswith("/"):
             top = top + "/"
@@ -776,16 +825,30 @@ def walk(top, topdown=True, onerror=None):
         dq.append(top)
         while len(dq) > 0:
             cur = dq.popleft()
-            bucket, blob = google.split_url(cur)
-            it = _create_google_page_iterator(
-                url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
-                method="GET",
-                params=dict(delimiter="/", prefix=blob),
-            )
+            if _is_google_path(top):
+                bucket, blob = google.split_url(cur)
+                it = _create_google_page_iterator(
+                    url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+                    method="GET",
+                    params=dict(delimiter="/", prefix=blob),
+                )
+                get_names = _google_get_names
+            elif _is_azure_path(top):
+                account, container, blob = azure.split_url(cur)
+                it = _create_azure_page_iterator(
+                    url=azure.build_url(account, "/{container}", container=container),
+                    method="GET",
+                    params=dict(
+                        comp="list", restype="container", delimiter="/", prefix=blob
+                    ),
+                )
+                get_names = _azure_get_names
+            else:
+                raise Exception("unrecognized path")
             dirnames = []
             filenames = []
             for result in it:
-                for name in _google_get_names(result, blob):
+                for name in get_names(result, blob):
                     name = name[len(blob) :]
                     if name.endswith("/"):
                         dirnames.append(name)
@@ -828,7 +891,10 @@ def dirname(path):
             urlpath = ""
         return f"{url.scheme}://{url.netloc}/{urlpath}"
     else:
-        return os.path.dirname(path)
+        dn = os.path.dirname(path)
+        if dn != "":
+            dn += os.sep
+        return dn
 
 
 def join(a, *args):

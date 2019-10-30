@@ -150,9 +150,9 @@ def test_basename():
 def test_dirname():
     testcases = [
         ("a", ""),
-        ("a/b", "a"),
-        ("a/b/c", "a/b"),
-        ("a/b/c/", "a/b/c"),
+        ("a/b", "a/"),
+        ("a/b/c", "a/b/"),
+        ("a/b/c/", "a/b/c/"),
         ("", ""),
         ("gs://a", "gs://a/"),
         ("gs://a/", "gs://a/"),
@@ -245,7 +245,9 @@ def test_stat(ctx):
         assert 0 <= abs(time.time() - s.mtime) <= 5
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path])
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_rename(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -308,7 +310,29 @@ def test_listdir(ctx):
         b_path = bf.join(dirpath, "b")
         with bf.BlobFile(b_path, "wb") as w:
             w.write(contents)
-        assert sorted(list(bf.listdir(dirpath))) == ["a", "b"]
+        bf.makedirs(bf.join(dirpath, "c"))
+        assert sorted(list(bf.listdir(dirpath))) == ["a", "b", "c/"]
+
+
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
+def test_walk(ctx):
+    contents = b"meow!"
+    with ctx() as path:
+        dirpath = bf.dirname(path)
+        a_path = bf.join(dirpath, "a")
+        with bf.BlobFile(a_path, "wb") as w:
+            w.write(contents)
+        bf.makedirs(bf.join(dirpath, "c/d"))
+        b_path = bf.join(dirpath, "c/d/b")
+        with bf.BlobFile(b_path, "wb") as w:
+            w.write(contents)
+        assert list(bf.walk(dirpath)) == [
+            (dirpath, ["c/"], ["a"]),
+            (bf.join(dirpath, "c/"), ["d/"], []),
+            (bf.join(dirpath, "c", "d/"), [], ["b"]),
+        ]
 
 
 @pytest.mark.parametrize(
@@ -337,9 +361,11 @@ def test_glob(ctx):
 
 def test_copy():
     contents = b"meow!"
-    with _get_temp_local_path() as local_path1, _get_temp_local_path() as local_path2, _get_temp_local_path() as local_path3, _get_temp_gcs_path() as gcs_path1, _get_temp_gcs_path() as gcs_path2:
+    with _get_temp_local_path() as local_path1, _get_temp_local_path() as local_path2, _get_temp_local_path() as local_path3, _get_temp_gcs_path() as gcs_path1, _get_temp_gcs_path() as gcs_path2, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2:
         with pytest.raises(FileNotFoundError):
             bf.copy(gcs_path1, gcs_path2)
+        with pytest.raises(FileNotFoundError):
+            bf.copy(as_path1, as_path2)
 
         _write_contents(local_path1, contents)
 
@@ -347,7 +373,9 @@ def test_copy():
             (local_path1, local_path2),
             (local_path1, gcs_path1),
             (gcs_path1, gcs_path2),
-            (gcs_path2, local_path3),
+            (gcs_path2, as_path1),
+            (as_path1, as_path2),
+            (as_path2, local_path3),
         ]
 
         for src, dst in testcases:

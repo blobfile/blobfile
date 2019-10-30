@@ -96,7 +96,7 @@ def __log_callback(msg):
     print(msg)
 
 
-# pytest can't figure this out when it's a def
+# pylint can't figure this out when it's a def
 _log_callback = __log_callback
 
 

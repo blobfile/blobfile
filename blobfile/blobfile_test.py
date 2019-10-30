@@ -358,6 +358,17 @@ def test_glob(ctx):
         assert_listing_equal(bf.join(dirpath, "*"), ["ab", "bb"])
         assert_listing_equal(bf.join(dirpath, "bb"), ["bb"])
 
+        path = bf.join(dirpath, "subdir", "test.txt")
+        bf.makedirs(bf.dirname(path))
+        with bf.BlobFile(path, "wb") as f:
+            f.write(contents)
+        path = bf.join(dirpath, "subdir", "subsubdir", "test.txt")
+        bf.makedirs(bf.dirname(path))
+        with bf.BlobFile(path, "wb") as f:
+            f.write(contents)
+
+        assert_listing_equal(bf.join(dirpath, "*/test.txt"), ["test.txt"])
+
 
 # @pytest.mark.parametrize(
 #     "src_ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]

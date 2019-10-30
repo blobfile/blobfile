@@ -10,7 +10,7 @@ import urllib.parse
 import time
 import json
 import glob as local_glob
-import fnmatch
+import re
 import collections
 import functools
 import threading
@@ -501,7 +501,7 @@ def exists(path):
 
 def glob(pattern):
     """
-    Find files matching a pattern, only supports the "*" operator
+    Find files matching a pattern, only supports a single "*" operator
     """
     assert "?" not in pattern and "[" not in pattern and "]" not in pattern
     if _is_local_path(pattern):
@@ -510,43 +510,34 @@ def glob(pattern):
     elif _is_google_path(pattern) or _is_azure_path(pattern):
         if "*" in pattern:
             assert pattern.count("*") == 1
-            prefix, _sep, _suffix = pattern.partition("*")
+            prefix, _sep, suffix = pattern.partition("*")
             if _is_google_path(pattern):
                 bucket, blob_prefix = google.split_url(prefix)
                 assert "*" not in bucket
-                params = dict(prefix=blob_prefix)
-                if "/" in blob_prefix:
-                    params["delimiter"] = "/"
                 it = _create_google_page_iterator(
                     url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
                     method="GET",
-                    params=params,
+                    params=dict(prefix=blob_prefix),
                 )
                 root = f"gs://{bucket}"
                 get_names = _google_get_names
             else:
                 account, container, blob_prefix = azure.split_url(prefix)
                 assert "*" not in account and "*" not in container
-                params = dict(comp="list", restype="container", prefix=blob_prefix)
-                if "/" in blob_prefix:
-                    params["delimiter"] = "/"
                 it = _create_azure_page_iterator(
                     url=azure.build_url(account, "/{container}", container=container),
                     method="GET",
-                    params=params,
+                    params=dict(comp="list", restype="container", prefix=blob_prefix),
                 )
                 root = f"as://{account}-{container}"
                 get_names = _azure_get_names
 
+            # * should not match /, but this is hard to do with fnmatch so use re
+            re_pattern = re.compile(re.escape(prefix) + r"[^/]*" + re.escape(suffix))
             for result in it:
                 for name in get_names(result, blob_prefix):
                     filepath = join(root, name)
-                    if basename(filepath).startswith(".") and not basename(
-                        pattern
-                    ).startswith("."):
-                        # don't find hidden files
-                        continue
-                    if fnmatch.fnmatch(filepath, pattern):
+                    if bool(re_pattern.match(filepath)):
                         yield filepath
         else:
             if _is_google_path(pattern):

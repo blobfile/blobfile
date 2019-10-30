@@ -1276,20 +1276,16 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
             total_size = self._offset + len(chunk)
             assert len(self._buf) == 0
 
-        req = Request(
-            url=self._upload_url,
-            data=chunk,
-            headers={
-                "Content-Type": "application/octet-stream",
-                "Content-Range": f"bytes {start}-{end}/{total_size}",
-            },
-            method="PUT",
-        )
-
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "Content-Range": f"bytes {start}-{end}/{total_size}",
+        }
         if len(chunk) == 0 and finalize:
             # this is not mentioned in the docs but appears to be allowed
             # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
-            req.headers["Content-Range"] = f"bytes */{total_size}"
+            headers["Content-Range"] = f"bytes */{total_size}"
+
+        req = Request(url=self._upload_url, data=chunk, headers=headers, method="PUT")
 
         with _execute_google_api_request(req) as resp:
             if finalize:

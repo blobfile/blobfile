@@ -25,7 +25,8 @@ from .common import Request
 
 
 EARLY_EXPIRATION_SECONDS = 30 * 60
-DEFAULT_TIMEOUT_SECONDS = 60
+CONNECT_TIMEOUT = 10
+READ_TIMEOUT = 30
 HASH_CHUNK_SIZE = 65536
 STREAMING_CHUNK_SIZE = 2 ** 20
 AZURE_MAX_CHUNK_SIZE = 4 * 2 ** 20
@@ -230,7 +231,7 @@ def _execute_request(build_req, retry_statuses=(500, 504)):
                 url=url,
                 headers=req.headers,
                 body=data,
-                timeout=DEFAULT_TIMEOUT_SECONDS,
+                timeout=urllib3.Timeout(connect=CONNECT_TIMEOUT, read=READ_TIMEOUT),
                 preload_content=False,
                 retries=False,
                 redirect=False,
@@ -1326,7 +1327,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             start += AZURE_MAX_CHUNK_SIZE
 
 
-def BlobFile(path, mode="r", buffer_size=1):
+def BlobFile(path, mode="r", buffer_size=io.DEFAULT_BUFFER_SIZE):
     """
     Open a local or remote file for reading or writing
     """

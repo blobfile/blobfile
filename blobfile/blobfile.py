@@ -12,6 +12,7 @@ import json
 import glob as local_glob
 import fnmatch
 import collections
+import functools
 import threading
 import ssl
 from dataclasses import dataclass
@@ -20,10 +21,11 @@ import urllib3
 import xmltodict
 
 from . import google, azure
-from .common import Request, create_authenticated_request
+from .common import Request
 
 
-DEFAULT_TIMEOUT = 60
+EARLY_EXPIRATION_SECONDS = 30 * 60
+DEFAULT_TIMEOUT_SECONDS = 60
 HASH_CHUNK_SIZE = 65536
 STREAMING_CHUNK_SIZE = 2 ** 20
 AZURE_MAX_CHUNK_SIZE = 4 * 2 ** 20
@@ -116,7 +118,10 @@ class TokenManager:
     def get_token(self, *args):
         with self._lock:
             now = time.time()
-            if self._expiration is None or now > self._expiration:
+            if (
+                self._expiration is None
+                or (now + EARLY_EXPIRATION_SECONDS) > self._expiration
+            ):
                 if args in self._tokens:
                     del self._tokens[args]
 
@@ -127,10 +132,11 @@ class TokenManager:
 
 def _google_get_access_token():
     now = time.time()
-    req = google.create_access_token_request(
-        ["https://www.googleapis.com/auth/devstorage.full_control"]
+    build_req = functools.partial(
+        google.create_access_token_request,
+        ["https://www.googleapis.com/auth/devstorage.full_control"],
     )
-    with _execute_request(req) as resp:
+    with _execute_request(build_req) as resp:
         assert resp.status == 200, f"unexpected status {resp.status}"
         result = json.load(resp)
         return result["access_token"], now + float(result["expires_in"])
@@ -138,21 +144,32 @@ def _google_get_access_token():
 
 def _azure_get_access_token():
     now = time.time()
-    req = azure.create_access_token_request("https://storage.azure.com/")
-    with _execute_request(req) as resp:
+    build_req = functools.partial(
+        azure.create_access_token_request, "https://storage.azure.com/"
+    )
+    with _execute_request(build_req) as resp:
         assert resp.status == 200, f"unexpected status {resp.status}"
         result = json.load(resp)
         return result["access_token"], now + float(result["expires_in"])
 
 
 def _azure_get_sas_token(account):
-    req, expiration = azure.create_user_delegation_sas_request(
-        access_token=global_azure_access_token_manager.get_token(), account=account
-    )
-    resp = _execute_request(req)
+    def build_req():
+        req = azure.create_user_delegation_sas_request(account=account)
+        return azure.make_api_request(
+            req, access_token=global_azure_access_token_manager.get_token()
+        )
+
+    resp = _execute_request(build_req)
     assert resp.status == 200, f"unexpected status {resp.status}"
     out = xmltodict.parse(resp)
-    return out["UserDelegationKey"], expiration
+    # convert to a utc struct_time by replacing the timezone
+    ts = time.strptime(
+        out["UserDelegationKey"]["SignedExpiry"].replace("Z", "GMT"),
+        "%Y-%m-%dT%H:%M:%S%Z",
+    )
+    t = calendar.timegm(ts)
+    return out["UserDelegationKey"], t
 
 
 global_google_access_token_manager = TokenManager(_google_get_access_token)
@@ -171,16 +188,49 @@ def _exponential_sleep_generator(initial, maximum, multiplier=2):
             value = maximum
 
 
-def _execute_request(req, retry_statuses=(500, 504), timeout=DEFAULT_TIMEOUT):
+def _execute_azure_api_request(req):
+    def build_req():
+        return azure.make_api_request(
+            req, access_token=global_azure_access_token_manager.get_token()
+        )
+
+    return _execute_request(build_req)
+
+
+def _execute_google_api_request(req):
+    def build_req():
+        return google.make_api_request(
+            req, access_token=global_google_access_token_manager.get_token()
+        )
+
+    return _execute_request(build_req)
+
+
+def _execute_request(build_req, retry_statuses=(500, 504)):
     for attempt, backoff in enumerate(_exponential_sleep_generator(0.1, maximum=60.0)):
         err = None
         try:
+            req = build_req()
+            url = req.url
+            if req.params is not None:
+                if len(req.params) > 0:
+                    url += "?" + urllib.parse.urlencode(req.params)
+            data = req.data
+            if data is not None:
+                if not isinstance(data, (bytes, bytearray)):
+                    if req.encoding == "json":
+                        data = json.dumps(data)
+                    elif req.encoding == "xml":
+                        data = xmltodict.unparse(data)
+                    else:
+                        raise Exception("invalid encoding")
+                    data = data.encode("utf8")
             resp = _get_http_pool().request(
                 method=req.method,
-                url=req.url,
+                url=url,
                 headers=req.headers,
-                body=req.data,
-                timeout=timeout,
+                body=data,
+                timeout=DEFAULT_TIMEOUT_SECONDS,
                 preload_content=False,
                 retries=False,
                 redirect=False,
@@ -228,12 +278,6 @@ def _get_path_type(path):
         raise Exception("unrecognized path")
 
 
-def _get_head(path):
-    req = Request(url=path, method="HEAD")
-    with _execute_request(req) as resp:
-        return resp
-
-
 def copy(src, dst, overwrite=False):
     if not overwrite:
         if exists(dst):
@@ -250,8 +294,7 @@ def copy(src, dst, overwrite=False):
             params = None
             if token is not None:
                 params = {"rewriteToken": token}
-            req = create_authenticated_request(
-                access_token=global_google_access_token_manager.get_token(),
+            req = Request(
                 url=google.build_url(
                     "/storage/v1/b/{sourceBucket}/o/{sourceObject}/rewriteTo/b/{destinationBucket}/o/{destinationObject}",
                     sourceBucket=srcbucket,
@@ -263,7 +306,7 @@ def copy(src, dst, overwrite=False):
                 params=params,
                 encoding="json",
             )
-            with _execute_request(req) as resp:
+            with _execute_google_api_request(req) as resp:
                 if resp.status == 404:
                     raise FileNotFoundError(f"src file '{src}' not found")
                 assert resp.status == 200, f"unexpected status {resp.status}"
@@ -276,7 +319,8 @@ def copy(src, dst, overwrite=False):
     if _is_azure_path(src) and _is_azure_path(dst):
         # https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob
         dst_account, dst_container, dst_blob = azure.split_url(dst)
-        req = _create_azure_api_request(
+        src_account, src_container, src_blob = azure.split_url(src)
+        req = Request(
             url=azure.build_url(
                 dst_account,
                 "/{container}/{blob}",
@@ -284,13 +328,17 @@ def copy(src, dst, overwrite=False):
                 blob=dst_blob,
             ),
             method="PUT",
+            headers={
+                "x-ms-copy-source": azure.build_url(
+                    src_account,
+                    "/{container}/{blob}",
+                    container=src_container,
+                    blob=src_blob,
+                )
+            },
         )
 
-        src_account, src_container, src_blob = azure.split_url(src)
-        req.headers["x-ms-copy-source"] = azure.build_url(
-            src_account, "/{container}/{blob}", container=src_container, blob=src_blob
-        )
-        with _execute_request(req) as resp:
+        with _execute_azure_api_request(req) as resp:
             if resp.status == 404:
                 raise FileNotFoundError(f"src file '{src}' not found")
             assert resp.status == 202, f"unexpected status {resp.status}"
@@ -301,7 +349,7 @@ def copy(src, dst, overwrite=False):
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob
         # pending, success, aborted failed
         while copy_status == "pending":
-            req = _create_azure_api_request(
+            req = Request(
                 url=azure.build_url(
                     dst_account,
                     "/{container}/{blob}",
@@ -310,7 +358,7 @@ def copy(src, dst, overwrite=False):
                 ),
                 method="GET",
             )
-            with _execute_request(req) as resp:
+            with _execute_azure_api_request(req) as resp:
                 assert resp.status == 200, f"unexpected status {resp.status}"
                 assert resp.headers["x-ms-copy-id"] == copy_id
                 copy_status = resp.headers["x-ms-copy-status"]
@@ -321,27 +369,15 @@ def copy(src, dst, overwrite=False):
         shutil.copyfileobj(src_f, dst_f, length=STREAMING_CHUNK_SIZE)
 
 
-def _create_google_api_request(**kwargs):
-    return google.create_api_request(
-        access_token=global_google_access_token_manager.get_token(), **kwargs
-    )
-
-
-def _create_azure_api_request(**kwargs):
-    return azure.create_api_request(
-        access_token=global_azure_access_token_manager.get_token(), **kwargs
-    )
-
-
 def _google_get_blob_metadata(path):
     bucket, blob = google.split_url(path)
-    req = _create_google_api_request(
+    req = Request(
         url=google.build_url(
             "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
         ),
         method="GET",
     )
-    with _execute_request(req) as resp:
+    with _execute_google_api_request(req) as resp:
         assert resp.status in (200, 404), f"unexpected status {resp.status}"
         return resp, json.load(resp)
 
@@ -364,13 +400,13 @@ def _calc_range(start=None, end=None):
 
 def _azure_get_blob_metadata(path):
     account, container, blob = azure.split_url(path)
-    req = _create_azure_api_request(
+    req = Request(
         url=azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
         ),
         method="HEAD",
     )
-    with _execute_request(req) as resp:
+    with _execute_azure_api_request(req) as resp:
         assert resp.status in (200, 404), f"unexpected status {resp.status}"
         return resp
 
@@ -383,10 +419,8 @@ def _create_google_page_iterator(url, method, data=None, params=None):
         data = data.copy()
         msg = data
     while True:
-        req = _create_google_api_request(
-            url=url, method=method, params=params, data=data
-        )
-        with _execute_request(req) as resp:
+        req = Request(url=url, method=method, params=params, data=data)
+        with _execute_google_api_request(req) as resp:
             result = json.load(resp)
             yield result
             if "nextPageToken" not in result:
@@ -400,10 +434,8 @@ def _create_azure_page_iterator(url, method, data=None, params=None):
     if data is not None:
         data = data.copy()
     while True:
-        req = _create_azure_api_request(
-            url=url, method=method, params=params, data=data
-        )
-        with _execute_request(req) as resp:
+        req = Request(url=url, method=method, params=params, data=data)
+        with _execute_azure_api_request(req) as resp:
             result = xmltodict.parse(resp)["EnumerationResults"]
             yield result
             if result["NextMarker"] is None:
@@ -540,19 +572,19 @@ def isdir(path):
             path += "/"
         bucket, blob_prefix = google.split_url(path)
         params = dict(prefix=blob_prefix, delimiter="/", maxResults=1)
-        req = _create_google_api_request(
+        req = Request(
             url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
             method="GET",
             params=params,
         )
-        with _execute_request(req) as resp:
+        with _execute_google_api_request(req) as resp:
             result = json.load(resp)
             return "items" in result or "prefixes" in result
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
         account, container, blob = azure.split_url(path)
-        req = _create_azure_api_request(
+        req = Request(
             url=azure.build_url(account, "/{container}", container=container),
             method="GET",
             params=dict(
@@ -563,7 +595,7 @@ def isdir(path):
                 maxresults=1,
             ),
         )
-        with _execute_request(req) as resp:
+        with _execute_azure_api_request(req) as resp:
             result = xmltodict.parse(resp)["EnumerationResults"]
             return result["Blobs"] is not None and (
                 "BlobPrefix" in result["Blobs"] or "Blob" in result["Blobs"]
@@ -622,25 +654,25 @@ def makedirs(path):
         if not path.endswith("/"):
             path += "/"
         bucket, blob = google.split_url(path)
-        req = _create_google_api_request(
+        req = Request(
             url=google.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
             method="POST",
             params=dict(uploadType="media", name=blob),
         )
-        with _execute_request(req) as resp:
+        with _execute_google_api_request(req) as resp:
             assert resp.status == 200, f"unexpected status {resp.status}"
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
         account, container, blob = azure.split_url(path)
-        req = _create_azure_api_request(
+        req = Request(
             url=azure.build_url(
                 account, "/{container}/{blob}", container=container, blob=blob
             ),
             method="PUT",
+            headers={"x-ms-blob-type": "BlockBlob"},
         )
-        req.headers["x-ms-blob-type"] = "BlockBlob"
-        with _execute_request(req) as resp:
+        with _execute_azure_api_request(req) as resp:
             assert resp.status == 201, f"unexpected status {resp.status}"
     else:
         raise Exception("unrecognized path")
@@ -658,23 +690,23 @@ def remove(path):
         os.remove(path)
     elif _is_google_path(path):
         bucket, blob = google.split_url(path)
-        req = _create_google_api_request(
+        req = Request(
             url=google.build_url(
                 "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
             ),
             method="DELETE",
         )
-        with _execute_request(req) as resp:
+        with _execute_google_api_request(req) as resp:
             assert resp.status == 204, f"unexpected status {resp.status}"
     elif _is_azure_path(path):
         account, container, blob = azure.split_url(path)
-        req = _create_azure_api_request(
+        req = Request(
             url=azure.build_url(
                 account, "/{container}/{blob}", container=container, blob=blob
             ),
             method="DELETE",
         )
-        with _execute_request(req) as resp:
+        with _execute_azure_api_request(req) as resp:
             assert resp.status == 202, f"unexpected status {resp.status}"
     else:
         raise Exception("unrecognized path")
@@ -724,12 +756,14 @@ def stat(path):
         resp, result = _google_get_blob_metadata(path)
         if resp.status == 404:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
-        ts = time.strptime(result["updated"], "%Y-%m-%dT%H:%M:%S.%fZ")
+        ts = time.strptime(
+            result["updated"].replace("Z", "GMT"), "%Y-%m-%dT%H:%M:%S.%f%Z"
+        )
         t = calendar.timegm(ts)
         return Stat(size=int(result["size"]), mtime=t)
     elif _is_azure_path(path):
         resp = _azure_get_blob_metadata(path)
-        ts = time.strptime(resp.headers["Last-Modified"], "%a, %d %b %Y %H:%M:%S GMT")
+        ts = time.strptime(resp.headers["Last-Modified"], "%a, %d %b %Y %H:%M:%S %Z")
         t = calendar.timegm(ts)
         return Stat(size=int(resp.headers["Content-Length"]), mtime=t)
     else:
@@ -789,7 +823,7 @@ def rmtree(path):
         )
         for result in it:
             for item in result["items"]:
-                req = _create_google_api_request(
+                req = Request(
                     url=google.build_url(
                         "/storage/v1/b/{bucket}/o/{object}",
                         bucket=bucket,
@@ -797,7 +831,7 @@ def rmtree(path):
                     ),
                     method="DELETE",
                 )
-                with _execute_request(req) as resp:
+                with _execute_google_api_request(req) as resp:
                     assert resp.status == 204, f"unexpected status {resp.status}"
     else:
         raise Exception("unrecognized path")
@@ -1127,7 +1161,7 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
         super().__init__(path, mode, int(self._metadata["size"]))
 
     def _get_file(self, offset):
-        req = _create_google_api_request(
+        req = Request(
             url=google.build_url(
                 "/storage/v1/b/{bucket}/o/{name}",
                 bucket=self._metadata["bucket"],
@@ -1135,9 +1169,9 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
             ),
             method="GET",
             params=dict(alt="media"),
+            headers={"Range": _calc_range(start=offset)},
         )
-        req.headers["Range"] = _calc_range(start=offset)
-        resp = _execute_request(req)
+        resp = _execute_google_api_request(req)
         assert resp.status == 206, f"unexpected status {resp.status}"
         return resp
 
@@ -1153,14 +1187,14 @@ class _AzureStreamingReadFile(_StreamingReadFile):
 
     def _get_file(self, offset):
         account, container, blob = azure.split_url(self._path)
-        req = _create_azure_api_request(
+        req = Request(
             url=azure.build_url(
                 account, "/{container}/{blob}", container=container, blob=blob
             ),
             method="GET",
+            headers={"Range": _calc_range(start=offset)},
         )
-        req.headers["Range"] = _calc_range(start=offset)
-        resp = _execute_request(req)
+        resp = _execute_azure_api_request(req)
         assert resp.status == 206, f"unexpected status {resp.status}"
         return resp
 
@@ -1220,15 +1254,15 @@ class _StreamingWriteFile(io.RawIOBase):
 class _GoogleStreamingWriteFile(_StreamingWriteFile):
     def __init__(self, path, mode):
         bucket, name = google.split_url(path)
-        req = _create_google_api_request(
+        req = Request(
             url=google.build_url(
                 "/upload/storage/v1/b/{bucket}/o?uploadType=resumable", bucket=bucket
             ),
             method="POST",
             data=dict(name=name),
+            headers={"Content-Type": "application/json; charset=UTF-8"},
         )
-        req.headers["Content-Type"] = "application/json; charset=UTF-8"
-        with _execute_request(req) as resp:
+        with _execute_google_api_request(req) as resp:
             assert resp.status == 200, f"unexpected status {resp.status}"
             self._upload_url = resp.headers["Location"]
         super().__init__(mode)
@@ -1257,7 +1291,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
             # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
             req.headers["Content-Range"] = f"bytes */{total_size}"
 
-        with _execute_request(req) as resp:
+        with _execute_google_api_request(req) as resp:
             if finalize:
                 assert resp.status in (200, 201), f"unexpected status {resp.status}"
             else:
@@ -1273,11 +1307,12 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         self._url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
         )
-        req = _create_azure_api_request(url=self._url, method="PUT")
         # premium block blob storage supports block blobs and append blobs
         # https://azure.microsoft.com/en-us/blog/azure-premium-block-blob-storage-is-now-generally-available/
-        req.headers["x-ms-blob-type"] = "AppendBlob"
-        with _execute_request(req) as resp:
+        req = Request(
+            url=self._url, method="PUT", headers={"x-ms-blob-type": "AppendBlob"}
+        )
+        with _execute_azure_api_request(req) as resp:
             assert resp.status == 201, f"unexpected status {resp.status}"
         super().__init__(mode)
 
@@ -1290,12 +1325,15 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         while start < len(chunk):
             end = start + AZURE_MAX_CHUNK_SIZE
             data = chunk[start:end]
-            req = _create_azure_api_request(
-                url=self._url, method="PUT", params=dict(comp="appendblock"), data=data
+            req = Request(
+                url=self._url,
+                method="PUT",
+                params=dict(comp="appendblock"),
+                data=data,
+                headers={"x-ms-blob-condition-appendpos": self._offset + start},
             )
-            req.headers["x-ms-blob-condition-appendpos"] = self._offset + start
 
-            with _execute_request(req) as resp:
+            with _execute_azure_api_request(req) as resp:
                 # https://docs.microsoft.com/en-us/rest/api/storageservices/append-block#remarks
                 assert resp.status in (201, 412), f"unexpected status {resp.status}"
             start += AZURE_MAX_CHUNK_SIZE

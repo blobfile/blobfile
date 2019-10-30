@@ -3,6 +3,7 @@ import os
 import json
 import hmac
 import base64
+import dataclasses
 import datetime
 
 from . import common
@@ -87,32 +88,30 @@ def create_access_token_request(scope):
     return _create_token_request(creds=creds, scope=scope)
 
 
-def create_api_request(access_token, **kwargs):
-    req = common.create_authenticated_request(
-        access_token=access_token, encoding="xml", **kwargs
-    )
+def make_api_request(req, access_token):
+    if req.headers is None:
+        headers = {}
+    else:
+        headers = req.headers.copy()
+    headers["Authorization"] = f"Bearer {access_token}"
     # https://docs.microsoft.com/en-us/rest/api/storageservices/previous-azure-storage-service-versions
-    req.headers["x-ms-version"] = "2019-02-02"
-    req.headers["x-ms-date"] = datetime.datetime.utcnow().strftime(
+    headers["x-ms-version"] = "2019-02-02"
+    headers["x-ms-date"] = datetime.datetime.utcnow().strftime(
         "%a, %d %b %Y %H:%M:%S GMT"
     )
-    return req
+    return dataclasses.replace(req, encoding="xml", headers=headers)
 
 
-def create_user_delegation_sas_request(access_token, account):
+def create_user_delegation_sas_request(account):
     # https://docs.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas
     now = datetime.datetime.utcnow()
     start = (now + datetime.timedelta(hours=-1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     expiration = now + datetime.timedelta(days=6)
     expiry = expiration.strftime("%Y-%m-%dT%H:%M:%SZ")
-    return (
-        create_api_request(
-            access_token=access_token,
-            url=f"https://{account}.blob.core.windows.net/?restype=service&comp=userdelegationkey",
-            method="POST",
-            data={"KeyInfo": {"Start": start, "Expiry": expiry}},
-        ),
-        expiration.timestamp(),
+    return common.Request(
+        url=f"https://{account}.blob.core.windows.net/?restype=service&comp=userdelegationkey",
+        method="POST",
+        data={"KeyInfo": {"Start": start, "Expiry": expiry}},
     )
 
 

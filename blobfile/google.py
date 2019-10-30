@@ -6,6 +6,7 @@ import time
 import platform
 import datetime
 import hashlib
+import dataclasses
 import binascii
 
 from Cryptodome.Signature import pkcs1_15
@@ -124,10 +125,13 @@ def build_url(template, **data):
     return common.build_url("https://www.googleapis.com", template, **data)
 
 
-def create_api_request(access_token, **kwargs):
-    return common.create_authenticated_request(
-        access_token=access_token, encoding="json", **kwargs
-    )
+def make_api_request(req, access_token):
+    if req.headers is None:
+        headers = {}
+    else:
+        headers = req.headers.copy()
+    headers["Authorization"] = f"Bearer {access_token}"
+    return dataclasses.replace(req, encoding="json", headers=headers)
 
 
 def generate_signed_url(

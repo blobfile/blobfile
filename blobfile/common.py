@@ -1,37 +1,16 @@
 import urllib
-import json
+from dataclasses import dataclass
+from typing import Dict, Any, Optional
 
-import xmltodict
 
-
+@dataclass
 class Request:
-    def __init__(self, method, url, headers=None, data=None):
-        self.method = method
-        self.url = url
-        self.headers = headers
-        self.data = data
-
-    def __repr__(self):
-        return f"<Request method={self.method} url={self.url} headers={self.headers}>"
-
-
-def create_authenticated_request(
-    access_token, url, method, encoding, params=None, data=None
-):
-    headers = {"Authorization": f"Bearer {access_token}"}
-    if params is not None:
-        if len(params) > 0:
-            url += "?" + urllib.parse.urlencode(params)
-    if data is not None:
-        if not isinstance(data, (bytes, bytearray)):
-            if encoding == "json":
-                data = json.dumps(data)
-            elif encoding == "xml":
-                data = xmltodict.unparse(data)
-            else:
-                raise Exception("invalid encoding")
-            data = data.encode("utf8")
-    return Request(url=url, method=method, headers=headers, data=data)
+    method: str
+    url: str
+    params: Optional[Dict[str, Any]] = None
+    headers: Optional[Dict[str, str]] = None
+    data: Any = None
+    encoding: Optional[str] = None
 
 
 def build_url(base_url, template, **data):

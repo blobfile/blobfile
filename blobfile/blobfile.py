@@ -171,7 +171,7 @@ def _exponential_sleep_generator(initial, maximum, multiplier=2):
             value = maximum
 
 
-def _execute_request(req, retry_statuses=(500,), timeout=DEFAULT_TIMEOUT):
+def _execute_request(req, retry_statuses=(500, 504), timeout=DEFAULT_TIMEOUT):
     for attempt, backoff in enumerate(_exponential_sleep_generator(0.1, maximum=60.0)):
         err = None
         try:

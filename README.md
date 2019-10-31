@@ -26,7 +26,7 @@ Here are the functions:
 
 Some are inspired by existing `os.path` and `shutil` functions:
 
-* `copy` - copy a file from one path to another
+* `copyfile` - copy a file from one path to another
 * `exists` - returns `True` if the file or directory exists
 * `glob` - return files matching a pattern, on GCS this only supports the `*` operator and can be slow if the `*` appears early in the pattern since GCS can only do prefix matches, all additional filtering must happen locally
 * `isdir` - returns `True` if the path is a directory

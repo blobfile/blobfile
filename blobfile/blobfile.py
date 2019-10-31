@@ -279,7 +279,7 @@ def _get_path_type(path):
         raise Exception("unrecognized path")
 
 
-def copy(src, dst, overwrite=False):
+def copyfile(src, dst, overwrite=False):
     if not overwrite:
         if exists(dst):
             raise FileExistsError(

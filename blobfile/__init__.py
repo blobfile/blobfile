@@ -1,5 +1,5 @@
 from .blobfile import (
-    copy,
+    copyfile,
     exists,
     glob,
     isdir,
@@ -19,7 +19,7 @@ from .blobfile import (
 )
 
 __all__ = [
-    "copy",
+    "copyfile",
     "exists",
     "glob",
     "isdir",

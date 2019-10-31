@@ -32,6 +32,9 @@ STREAMING_CHUNK_SIZE = 2 ** 20
 AZURE_MAX_CHUNK_SIZE = 4 * 2 ** 20
 # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
 assert STREAMING_CHUNK_SIZE % (256 * 1024) == 0
+# it looks like azure signed urls cannot exceed the lifetime of the token used
+# to create them, so don't keep the key around too long
+AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
 
 LOCAL_PATH = "local"
 GOOGLE_PATH = "google"
@@ -164,12 +167,7 @@ def _azure_get_sas_token(account):
     resp = _execute_request(build_req)
     assert resp.status == 200, f"unexpected status {resp.status}"
     out = xmltodict.parse(resp)
-    # convert to a utc struct_time by replacing the timezone
-    ts = time.strptime(
-        out["UserDelegationKey"]["SignedExpiry"].replace("Z", "GMT"),
-        "%Y-%m-%dT%H:%M:%S%Z",
-    )
-    t = calendar.timegm(ts)
+    t = time.time() + AZURE_SAS_TOKEN_EXPIRATION_SECONDS
     return out["UserDelegationKey"], t
 
 
@@ -209,23 +207,24 @@ def _execute_google_api_request(req):
 
 def _execute_request(build_req, retry_statuses=(500, 504)):
     for attempt, backoff in enumerate(_exponential_sleep_generator(0.1, maximum=60.0)):
+        req = build_req()
+        url = req.url
+        if req.params is not None:
+            if len(req.params) > 0:
+                url += "?" + urllib.parse.urlencode(req.params)
+        data = req.data
+        if data is not None:
+            if not isinstance(data, (bytes, bytearray)):
+                if req.encoding == "json":
+                    data = json.dumps(data)
+                elif req.encoding == "xml":
+                    data = xmltodict.unparse(data)
+                else:
+                    raise Exception("invalid encoding")
+                data = data.encode("utf8")
+
         err = None
         try:
-            req = build_req()
-            url = req.url
-            if req.params is not None:
-                if len(req.params) > 0:
-                    url += "?" + urllib.parse.urlencode(req.params)
-            data = req.data
-            if data is not None:
-                if not isinstance(data, (bytes, bytearray)):
-                    if req.encoding == "json":
-                        data = json.dumps(data)
-                    elif req.encoding == "xml":
-                        data = xmltodict.unparse(data)
-                    else:
-                        raise Exception("invalid encoding")
-                    data = data.encode("utf8")
             resp = _get_http_pool().request(
                 method=req.method,
                 url=url,
@@ -979,7 +978,7 @@ def get_url(path):
         token = global_azure_sas_token_manager.get_token(account)
         return azure.generate_signed_url(key=token, url=url)
     elif _is_local_path(path):
-        return f"file://{path}"
+        return f"file://{path}", None
     else:
         raise Exception("unrecognized path")
 

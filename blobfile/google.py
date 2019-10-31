@@ -220,7 +220,7 @@ def generate_signed_url(
     ).decode("utf8")
     host_name = "https://storage.googleapis.com"
     signed_url = f"{host_name}{canonical_uri}?{canonical_query_string}&X-Goog-Signature={signature}"
-    return signed_url
+    return signed_url, expiration
 
 
 def split_url(path):

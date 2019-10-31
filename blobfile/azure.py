@@ -5,6 +5,8 @@ import hmac
 import base64
 import dataclasses
 import datetime
+import time
+import calendar
 
 from . import common
 
@@ -177,7 +179,10 @@ def generate_signed_url(key, url):
         )
     )
     query = urllib.parse.urlencode({k: v for k, v in params.items() if v != ""})
-    return url + "?" + query
+    # convert to a utc struct_time by replacing the timezone
+    ts = time.strptime(key["SignedExpiry"].replace("Z", "GMT"), "%Y-%m-%dT%H:%M:%S%Z")
+    t = calendar.timegm(ts)
+    return url + "?" + query, t
 
 
 def split_url(path):

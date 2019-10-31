@@ -57,7 +57,7 @@ _http_lock = threading.Lock()
 def _get_http_pool():
     # ssl is not fork safe https://docs.python.org/2/library/ssl.html#multi-processing
     # urllib3 may not be fork safe https://github.com/urllib3/urllib3/issues/1179
-    # both are supposedly threadsafe though, so we shouldn't need a thread-local one
+    # both are supposedly threadsafe though, so we shouldn't need a thread-local pool
     global _http, _http_pid
     with _http_lock:
         if _http is None or _http_pid != os.getpid():

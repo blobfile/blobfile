@@ -24,7 +24,7 @@ from . import google, azure
 from .common import Request
 
 
-EARLY_EXPIRATION_SECONDS = 30 * 60
+EARLY_EXPIRATION_SECONDS = 5 * 60
 CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 30
 HASH_CHUNK_SIZE = 65536

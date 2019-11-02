@@ -42,6 +42,6 @@ Some are inspired by existing `os.path` and `shutil` functions:
 There are a few bonus functions:
 
 * `cache_key` - returns a cache key that can be used for the path (this is not guaranteed to change when the content changes, but should hopefully do that)
-* `get_url` - returns a url for a path
+* `get_url` - returns a url for a path along with the expiration for that url (or None)
 * `md5` - get the md5 hash for a path, for GCS this is fast, but for other backends this may be slow
 * `set_log_callback` - set a log callback function `log(msg: string)` to use instead of printing to stdout

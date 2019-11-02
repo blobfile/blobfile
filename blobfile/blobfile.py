@@ -205,7 +205,7 @@ def _execute_google_api_request(req):
     return _execute_request(build_req)
 
 
-def _execute_request(build_req, retry_statuses=(500, 504)):
+def _execute_request(build_req, retry_statuses=(500, 502, 503, 504)):
     for attempt, backoff in enumerate(_exponential_sleep_generator(0.1, maximum=60.0)):
         req = build_req()
         url = req.url

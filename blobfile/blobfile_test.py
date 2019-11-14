@@ -406,9 +406,9 @@ def test_copy():
     contents = b"meow!"
     with _get_temp_local_path() as local_path1, _get_temp_local_path() as local_path2, _get_temp_local_path() as local_path3, _get_temp_gcs_path() as gcs_path1, _get_temp_gcs_path() as gcs_path2, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2:
         with pytest.raises(FileNotFoundError):
-            bf.copyfile(gcs_path1, gcs_path2)
+            bf.copy(gcs_path1, gcs_path2)
         with pytest.raises(FileNotFoundError):
-            bf.copyfile(as_path1, as_path2)
+            bf.copy(as_path1, as_path2)
 
         _write_contents(local_path1, contents)
 
@@ -422,11 +422,11 @@ def test_copy():
         ]
 
         for src, dst in testcases:
-            bf.copyfile(src, dst)
+            bf.copy(src, dst)
             assert _read_contents(dst) == contents
             with pytest.raises(FileExistsError):
-                bf.copyfile(src, dst)
-            bf.copyfile(src, dst, overwrite=True)
+                bf.copy(src, dst)
+            bf.copy(src, dst, overwrite=True)
             assert _read_contents(dst) == contents
 
 

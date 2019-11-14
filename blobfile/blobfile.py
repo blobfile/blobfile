@@ -278,7 +278,7 @@ def _get_path_type(path):
         raise Exception("unrecognized path")
 
 
-def copyfile(src, dst, overwrite=False):
+def copy(src, dst, overwrite=False):
     if not overwrite:
         if exists(dst):
             raise FileExistsError(
@@ -703,39 +703,6 @@ def remove(path):
         raise Exception("unrecognized path")
 
 
-# def rename(src, dst, overwrite=False):
-#     """
-#     Rename a file or directory, this is not guaranteed to be atomic.  For remote filesystems
-#     it will do a copy followed by a delete.
-#     """
-#     assert _get_path_type(src) == _get_path_type(
-#         dst
-#     ), f"src and dst must both be the same type of paths: '{src}' -> '{dst}'"
-#     if not exists(src):
-#         raise FileNotFoundError(f"No such file or directory: '{src}' -> '{dst}'")
-#     if not overwrite and exists(dst):
-#         raise FileExistsError(
-#             f"Cannot create a file when that file already exists: '{src}' -> '{dst}'"
-#         )
-#     src_is_dir = isdir(src)
-#     dst_is_dir = isdir(dst)
-#     if src_is_dir and not dst_is_dir:
-#         raise NotADirectoryError(f"Is not a directory: '{dst}'")
-#     if not src_is_dir and dst_is_dir:
-#         raise IsADirectoryError(f"Is a directory: '{dst}'")
-#     if _is_local_path(src):
-#         os.replace(src, dst)
-#     elif _is_google_path(src) or _is_azure_path(src):
-#         if src_is_dir:
-#             copytree(src, dst)
-#             rmtree(src)
-#         else:
-#             copy(src, dst)
-#             remove(src)
-#     else:
-#         raise Exception("unrecognized path")
-
-
 def stat(path):
     """
     Stat a file or object representing a directory, returns a Stat object
@@ -759,73 +726,6 @@ def stat(path):
         return Stat(size=int(resp.headers["Content-Length"]), mtime=t)
     else:
         raise Exception("unrecognized path")
-
-
-# def copytree(src, dst):
-#     """
-#     Copy a directory tree from one location to another
-#     """
-#     if not isdir(src):
-#         raise NotADirectoryError(f"The directory name is invalid: '{src}'")
-#     if exists(dst):
-#         raise NotADirectoryError(
-#             f"Cannot create a file when that file already exists: '{dst}'"
-#         )
-#     assert not dst.startswith(src), "cannot copytree to subdir"
-#     if not src.endswith("/"):
-#         src += "/"
-#     makedirs(dst)
-#     for dirpath, dirnames, filenames in walk(src):
-#         relpath = dirpath[len(src) :]
-#         # in blobstores we can have a directory name that has the same name as a file
-#         # if that's the case, skip it since that's too confusing
-#         skip_filenames = set()
-#         for dn in dirnames:
-#             dn = dn.replace("/", "")
-#             skip_filenames.add(dn)
-#             dst_dirpath = join(dst, relpath, dn)
-#             makedirs(dst_dirpath)
-#         for filename in filenames:
-#             if filename in skip_filenames:
-#                 continue
-#             src_path = join(src, relpath, filename)
-#             dst_path = join(dst, relpath, filename)
-#             copy(src_path, dst_path)
-#     return dst
-
-
-# def rmtree(path):
-#     """
-#     Delete a directory tree
-#     """
-#     if not isdir(path):
-#         raise NotADirectoryError(f"The directory name is invalid: '{path}'")
-
-#     if _is_local_path(path):
-#         shutil.rmtree(path)
-#     elif _is_google_path(path):
-#         if not path.endswith("/"):
-#             path += "/"
-#         bucket, blob = google.split_url(path)
-#         it = _create_google_page_iterator(
-#             url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
-#             method="GET",
-#             params=dict(prefix=blob),
-#         )
-#         for result in it:
-#             for item in result["items"]:
-#                 req = Request(
-#                     url=google.build_url(
-#                         "/storage/v1/b/{bucket}/o/{object}",
-#                         bucket=bucket,
-#                         object=item["name"],
-#                     ),
-#                     method="DELETE",
-#                 )
-#                 with _execute_google_api_request(req) as resp:
-#                     assert resp.status == 204, f"unexpected status {resp.status}"
-#     else:
-#         raise Exception("unrecognized path")
 
 
 def walk(top, topdown=True, onerror=None):

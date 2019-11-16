@@ -1,16 +1,16 @@
 import urllib
-from dataclasses import dataclass
-from typing import Dict, Any, Optional
 
 
-@dataclass
 class Request:
-    method: str
-    url: str
-    params: Optional[Dict[str, Any]] = None
-    headers: Optional[Dict[str, str]] = None
-    data: Any = None
-    encoding: Optional[str] = None
+    def __init__(
+        self, method, url, params=None, headers=None, data=None, encoding=None
+    ):
+        self.method = method
+        self.url = url
+        self.params = params
+        self.headers = headers
+        self.data = data
+        self.encoding = encoding
 
 
 def build_url(base_url, template, **data):

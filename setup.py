@@ -7,7 +7,7 @@ README = open(os.path.join(SCRIPT_DIR, "README.md")).read()
 
 setup_dict = dict(
     name="blobfile",
-    version="0.7.0",
+    version="0.8.0",
     description="Read GCS and local paths with the same interface, clone of tensorflow.io.gfile",
     long_description=README,
     long_description_content_type="text/markdown",
@@ -26,6 +26,7 @@ setup_dict = dict(
             "google-cloud-storage",
         ]
     },
+    python_requires=">=3.6.0",
 )
 
 if os.environ.get("USE_SCM_VERSION", "1") == "1":

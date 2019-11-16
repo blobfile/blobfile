@@ -454,9 +454,9 @@ def test_read_stats(buffer_size, ctx):
             r.read(1)
 
         if buffer_size == 1:
-            assert r.raw.stats.bytes_read == 1
+            assert r.raw.bytes_read == 1
         else:
-            assert r.raw.stats.bytes_read == len(contents)
+            assert r.raw.bytes_read == len(contents)
 
         with bf.BlobFile(path, "rb", buffer_size=buffer_size) as r:
             r.read(1)
@@ -464,11 +464,11 @@ def test_read_stats(buffer_size, ctx):
             r.read(1)
 
         if buffer_size == 1:
-            assert r.raw.stats.requests == 2
-            assert r.raw.stats.bytes_read == 2
+            assert r.raw.requests == 2
+            assert r.raw.bytes_read == 2
         else:
-            assert r.raw.stats.requests == 1
-            assert r.raw.stats.bytes_read == len(contents)
+            assert r.raw.requests == 1
+            assert r.raw.bytes_read == len(contents)
 
 
 @pytest.mark.parametrize("binary", [True, False])

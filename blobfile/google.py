@@ -6,8 +6,8 @@ import time
 import platform
 import datetime
 import hashlib
-import dataclasses
 import binascii
+import copy
 
 from Cryptodome.Signature import pkcs1_15
 from Cryptodome.Hash import SHA256
@@ -131,7 +131,10 @@ def make_api_request(req, access_token):
     else:
         headers = req.headers.copy()
     headers["Authorization"] = f"Bearer {access_token}"
-    return dataclasses.replace(req, encoding="json", headers=headers)
+    result = copy.copy(req)
+    result.encoding = "json"
+    result.headers = headers
+    return result
 
 
 def generate_signed_url(

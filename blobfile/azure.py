@@ -3,10 +3,10 @@ import os
 import json
 import hmac
 import base64
-import dataclasses
 import datetime
 import time
 import calendar
+import copy
 
 from . import common
 
@@ -101,7 +101,10 @@ def make_api_request(req, access_token):
     headers["x-ms-date"] = datetime.datetime.utcnow().strftime(
         "%a, %d %b %Y %H:%M:%S GMT"
     )
-    return dataclasses.replace(req, encoding="xml", headers=headers)
+    result = copy.copy(req)
+    result.encoding = "xml"
+    result.headers = headers
+    return result
 
 
 def create_user_delegation_sas_request(account):

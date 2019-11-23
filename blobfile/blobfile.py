@@ -1266,9 +1266,7 @@ def BlobFile(path, mode="r", buffer_size=io.DEFAULT_BUFFER_SIZE):
         f = io.BufferedReader(f, buffer_size=buffer_size)
         if "b" not in mode:
             # PR for type fix https://github.com/python/typeshed/pull/3485
-            f = io.TextIOWrapper(
-                f, encoding="utf8"
-            )
+            f = io.TextIOWrapper(f, encoding="utf8")
     return f
 
 

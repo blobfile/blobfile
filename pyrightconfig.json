@@ -2,6 +2,8 @@
     "include": [
         "blobfile"
     ],
+    "typeshedPath": "./typeshed",
+    "typingsPath ": "./typings",
     "reportUnusedVariable": true,
     "reportUnusedFunction": true,
     "reportUnusedImport": true,

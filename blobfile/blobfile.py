@@ -15,6 +15,10 @@ import collections
 import functools
 import threading
 import ssl
+from typing import overload, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing_extensions import Literal
 
 import urllib3
 import xmltodict
@@ -34,10 +38,6 @@ assert STREAMING_CHUNK_SIZE % (256 * 1024) == 0
 # it looks like azure signed urls cannot exceed the lifetime of the token used
 # to create them, so don't keep the key around too long
 AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
-
-LOCAL_PATH = "local"
-GOOGLE_PATH = "google"
-AZURE_PATH = "azure"
 
 Stat = collections.namedtuple("Stat", ["size", "mtime"])
 ReadStats = collections.namedtuple("ReadStats", ["bytes_read", "requests", "failures"])
@@ -255,17 +255,6 @@ def _is_google_path(path):
 def _is_azure_path(path):
     url = urllib.parse.urlparse(path)
     return url.scheme == "as"
-
-
-def _get_path_type(path):
-    if _is_local_path(path):
-        return LOCAL_PATH
-    elif _is_google_path(path):
-        return GOOGLE_PATH
-    elif _is_azure_path(path):
-        return AZURE_PATH
-    else:
-        raise Exception("unrecognized path")
 
 
 def copy(src, dst, overwrite=False):
@@ -725,6 +714,7 @@ def walk(top, topdown=True, onerror=None):
         for (dirpath, dirnames, filenames) in os.walk(
             top=top, topdown=topdown, onerror=onerror
         ):
+            assert isinstance(dirpath, str)
             if not dirpath.endswith(os.sep):
                 dirpath += os.sep
             yield (dirpath, [d + os.sep for d in dirnames], filenames)
@@ -943,7 +933,7 @@ class _ProxyFile:
 
 
 class _StreamingReadFile(io.RawIOBase):
-    def __init__(self, path, mode, size):
+    def __init__(self, path, size):
         super().__init__()
         self._size = size
         self._path = path
@@ -954,7 +944,7 @@ class _StreamingReadFile(io.RawIOBase):
         self.failures = 0
         self.bytes_read = 0
 
-    def _get_file(self, offset):
+    def _get_file(self, offset) -> io.RawIOBase:
         raise NotImplementedError
 
     def readall(self):
@@ -964,6 +954,7 @@ class _StreamingReadFile(io.RawIOBase):
         if self._size == self._offset:
             return 0
 
+        n = 0  # for pyright
         for attempt, backoff in enumerate(
             _exponential_sleep_generator(0.1, maximum=60.0)
         ):
@@ -1032,12 +1023,12 @@ class _StreamingReadFile(io.RawIOBase):
 
 
 class _GoogleStreamingReadFile(_StreamingReadFile):
-    def __init__(self, path, mode):
+    def __init__(self, path):
         resp, self._metadata = _google_get_blob_metadata(path)
         if resp.status == 404:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         assert resp.status == 200, f"unexpected status {resp.status}"
-        super().__init__(path, mode, int(self._metadata["size"]))
+        super().__init__(path, int(self._metadata["size"]))
 
     def _get_file(self, offset):
         req = Request(
@@ -1056,13 +1047,13 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
 
 
 class _AzureStreamingReadFile(_StreamingReadFile):
-    def __init__(self, path, mode):
+    def __init__(self, path):
         resp = _azure_get_blob_metadata(path)
         self._metadata = resp.headers
         if resp.status == 404:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         assert resp.status == 200, f"unexpected status {resp.status}"
-        super().__init__(path, mode, int(self._metadata["Content-Length"]))
+        super().__init__(path, int(self._metadata["Content-Length"]))
 
     def _get_file(self, offset):
         account, container, blob = azure.split_url(self._path)
@@ -1080,6 +1071,7 @@ class _AzureStreamingReadFile(_StreamingReadFile):
 
 class _StreamingWriteFile(io.RawIOBase):
     def __init__(self, mode):
+        # TODO: can I use a TextIOWrapper here and avoid text_mode?
         self._text_mode = "b" not in mode
         self._newline = b"\n"
         self._empty = b""
@@ -1214,6 +1206,35 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             start += AZURE_MAX_CHUNK_SIZE
 
 
+# https://github.com/microsoft/pyright/issues/354#issuecomment-557836876
+@overload
+def BlobFile(
+    path: str, mode: "Literal['rb']", buffer_size: int = ...
+) -> io.BufferedIOBase:
+    ...
+
+
+@overload
+def BlobFile(
+    path: str, mode: "Literal['wb']", buffer_size: int = ...
+) -> io.BufferedIOBase:
+    ...
+
+
+@overload
+def BlobFile(
+    path: str, mode: "Literal['r']", buffer_size: int = ...
+) -> io.TextIOWrapper:
+    ...
+
+
+@overload
+def BlobFile(
+    path: str, mode: "Literal['w']", buffer_size: int = ...
+) -> io.TextIOWrapper:
+    ...
+
+
 def BlobFile(path, mode="r", buffer_size=io.DEFAULT_BUFFER_SIZE):
     """
     Open a local or remote file for reading or writing
@@ -1222,20 +1243,20 @@ def BlobFile(path, mode="r", buffer_size=io.DEFAULT_BUFFER_SIZE):
     mode = mode
     assert mode in ("w", "wb", "r", "rb")
     if _is_local_path(path):
-        return open(file=path, mode=mode)
+        f = io.FileIO(path, mode=mode)
 
     if _is_google_path(path):
         if mode in ("w", "wb"):
             f = _GoogleStreamingWriteFile(path, mode)
         elif mode in ("r", "rb"):
-            f = _GoogleStreamingReadFile(path, mode)
+            f = _GoogleStreamingReadFile(path)
         else:
             raise Exception(f"unsupported mode {mode}")
     elif _is_azure_path(path):
         if mode in ("w", "wb"):
             f = _AzureStreamingWriteFile(path, mode)
         elif mode in ("r", "rb"):
-            f = _AzureStreamingReadFile(path, mode)
+            f = _AzureStreamingReadFile(path)
         else:
             raise Exception(f"unsupported mode {mode}")
     else:
@@ -1244,7 +1265,9 @@ def BlobFile(path, mode="r", buffer_size=io.DEFAULT_BUFFER_SIZE):
     if "r" in mode:
         f = io.BufferedReader(f, buffer_size=buffer_size)
         if "b" not in mode:
-            f = io.TextIOWrapper(f, encoding="utf8")
+            f = io.TextIOWrapper(
+                f, encoding="utf8"
+            )  # type: ignore  https://github.com/python/typeshed/pull/3485
     return f
 
 

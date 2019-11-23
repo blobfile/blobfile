@@ -13,7 +13,7 @@ import platform
 import av
 
 import pytest
-from tensorflow.io import gfile  # pylint: disable=import-error
+from tensorflow.io import gfile  # type: ignore
 import imageio
 import numpy as np
 
@@ -26,6 +26,7 @@ AS_TEST_BUCKET = "cshteststorage2-testcontainer"
 @contextlib.contextmanager
 def _get_temp_local_path():
     with tempfile.TemporaryDirectory() as tmpdir:
+        assert isinstance(tmpdir, str)
         path = os.path.join(tmpdir, "file.name")
         yield path
 
@@ -67,6 +68,7 @@ def _get_temp_as_path():
 def _write_contents(path, contents):
     if path.startswith("as://"):
         with tempfile.TemporaryDirectory() as tmpdir:
+            assert isinstance(tmpdir, str)
             account, container, blob = azure.split_url(path)
             filepath = os.path.join(tmpdir, "tmp")
             with open(filepath, "wb") as f:
@@ -99,6 +101,7 @@ def _write_contents(path, contents):
 def _read_contents(path):
     if path.startswith("as://"):
         with tempfile.TemporaryDirectory() as tmpdir:
+            assert isinstance(tmpdir, str)
             account, container, blob = azure.split_url(path)
             filepath = os.path.join(tmpdir, "tmp")
             sp.run(
@@ -454,9 +457,9 @@ def test_read_stats(buffer_size, ctx):
             r.read(1)
 
         if buffer_size == 1:
-            assert r.raw.bytes_read == 1
+            assert r.raw.bytes_read == 1  # type: ignore
         else:
-            assert r.raw.bytes_read == len(contents)
+            assert r.raw.bytes_read == len(contents)  # type: ignore
 
         with bf.BlobFile(path, "rb", buffer_size=buffer_size) as r:
             r.read(1)
@@ -464,11 +467,11 @@ def test_read_stats(buffer_size, ctx):
             r.read(1)
 
         if buffer_size == 1:
-            assert r.raw.requests == 2
-            assert r.raw.bytes_read == 2
+            assert r.raw.requests == 2  # type: ignore
+            assert r.raw.bytes_read == 2  # type: ignore
         else:
-            assert r.raw.requests == 1
-            assert r.raw.bytes_read == len(contents)
+            assert r.raw.requests == 1  # type: ignore
+            assert r.raw.bytes_read == len(contents)  # type: ignore
 
 
 @pytest.mark.parametrize("binary", [True, False])

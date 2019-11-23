@@ -39,8 +39,8 @@ LOCAL_PATH = "local"
 GOOGLE_PATH = "google"
 AZURE_PATH = "azure"
 
-Stat = collections.namedtuple("Stat", "size, mtime")
-ReadStats = collections.namedtuple("ReadStats", "bytes_read, requests, failures")
+Stat = collections.namedtuple("Stat", ["size", "mtime"])
+ReadStats = collections.namedtuple("ReadStats", ["bytes_read", "requests", "failures"])
 
 _http = None
 _http_pid = None
@@ -401,21 +401,17 @@ def _azure_get_blob_metadata(path):
         return resp
 
 
-def _create_google_page_iterator(url, method, data=None, params=None):
-    if params is not None:
-        params = params.copy()
-        msg = params
-    if data is not None:
-        data = data.copy()
-        msg = data
+def _create_google_page_iterator(url, method, params):
+    params = params.copy()
+
     while True:
-        req = Request(url=url, method=method, params=params, data=data)
+        req = Request(url=url, method=method, params=params)
         with _execute_google_api_request(req) as resp:
             result = json.load(resp)
             yield result
             if "nextPageToken" not in result:
                 break
-        msg["pageToken"] = result["nextPageToken"]
+        params["pageToken"] = result["nextPageToken"]
 
 
 def _create_azure_page_iterator(url, method, data=None, params=None):

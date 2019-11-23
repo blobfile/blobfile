@@ -1,0 +1,9 @@
+{
+    "include": [
+        "blobfile"
+    ],
+    "reportUnusedVariable": true,
+    "reportUnusedFunction": true,
+    "reportUnusedImport": true,
+    "reportUnusedClass": true
+}

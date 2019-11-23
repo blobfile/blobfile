@@ -1070,15 +1070,11 @@ class _AzureStreamingReadFile(_StreamingReadFile):
 
 
 class _StreamingWriteFile(io.RawIOBase):
-    def __init__(self, mode):
-        # TODO: can I use a TextIOWrapper here and avoid text_mode?
-        self._text_mode = "b" not in mode
-        self._newline = b"\n"
-        self._empty = b""
+    def __init__(self):
         # current writing byte offset in the file
         self._offset = 0
         # contents waiting to be uploaded
-        self._buf = self._empty
+        self._buf = b""
         super().__init__()
 
     def _upload_chunk(self, chunk, finalize):
@@ -1111,9 +1107,6 @@ class _StreamingWriteFile(io.RawIOBase):
         return True
 
     def write(self, b):
-        if self._text_mode:
-            b = b.encode("utf8")
-
         self._buf += b
         while len(self._buf) > STREAMING_CHUNK_SIZE:
             self._upload_buf()
@@ -1121,9 +1114,16 @@ class _StreamingWriteFile(io.RawIOBase):
     def readinto(self, b):
         raise io.UnsupportedOperation("not readable")
 
+    # BufferedWriter
+    # raw
+    # detach()
+    # read(size=-1)
+    # read1(size=None)
+    # readinto1(b)
+
 
 class _GoogleStreamingWriteFile(_StreamingWriteFile):
-    def __init__(self, path, mode):
+    def __init__(self, path):
         bucket, name = google.split_url(path)
         req = Request(
             url=google.build_url(
@@ -1136,7 +1136,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
         with _execute_google_api_request(req) as resp:
             assert resp.status == 200, f"unexpected status {resp.status}"
             self._upload_url = resp.headers["Location"]
-        super().__init__(mode)
+        super().__init__()
 
     def _upload_chunk(self, chunk, finalize):
         start = self._offset
@@ -1169,7 +1169,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
 
 
 class _AzureStreamingWriteFile(_StreamingWriteFile):
-    def __init__(self, path, mode):
+    def __init__(self, path):
         account, container, blob = azure.split_url(path)
         self._url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
@@ -1181,7 +1181,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         )
         with _execute_azure_api_request(req) as resp:
             assert resp.status == 201, f"unexpected status {resp.status}"
-        super().__init__(mode)
+        super().__init__()
 
     def _upload_chunk(self, chunk, finalize):
         if len(chunk) == 0:
@@ -1244,17 +1244,16 @@ def BlobFile(path, mode="r", buffer_size=io.DEFAULT_BUFFER_SIZE):
     assert mode in ("w", "wb", "r", "rb")
     if _is_local_path(path):
         f = io.FileIO(path, mode=mode)
-
-    if _is_google_path(path):
+    elif _is_google_path(path):
         if mode in ("w", "wb"):
-            f = _GoogleStreamingWriteFile(path, mode)
+            f = _GoogleStreamingWriteFile(path)
         elif mode in ("r", "rb"):
             f = _GoogleStreamingReadFile(path)
         else:
             raise Exception(f"unsupported mode {mode}")
     elif _is_azure_path(path):
         if mode in ("w", "wb"):
-            f = _AzureStreamingWriteFile(path, mode)
+            f = _AzureStreamingWriteFile(path)
         elif mode in ("r", "rb"):
             f = _AzureStreamingReadFile(path)
         else:
@@ -1264,9 +1263,16 @@ def BlobFile(path, mode="r", buffer_size=io.DEFAULT_BUFFER_SIZE):
 
     if "r" in mode:
         f = io.BufferedReader(f, buffer_size=buffer_size)
-        if "b" not in mode:
-            # PR for type fix https://github.com/python/typeshed/pull/3485
-            f = io.TextIOWrapper(f, encoding="utf8")
+    else:
+        # TODO: try normal buffer size but use write_through=True for TextIOWrapper?
+        # TODO: just pass a FileIO object and hope it works?  should StreamingWriteFile inherit from BufferedIOBase?
+        # f = io.BufferedWriter(f, buffer_size=buffer_size)
+        f = f
+
+    if "b" not in mode:
+        # PR for type fix https://github.com/python/typeshed/pull/3485
+        f = io.TextIOWrapper(f, encoding="utf8", write_through=True)  # type: ignore
+
     return f
 
 

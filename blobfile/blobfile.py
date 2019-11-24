@@ -1069,13 +1069,13 @@ class _AzureStreamingReadFile(_StreamingReadFile):
         return resp
 
 
-class _StreamingWriteFile(io.RawIOBase):
+class _StreamingWriteFile(io.BufferedIOBase):
     def __init__(self):
+        self.raw = None
         # current writing byte offset in the file
         self._offset = 0
         # contents waiting to be uploaded
         self._buf = b""
-        super().__init__()
 
     def _upload_chunk(self, chunk, finalize):
         raise NotImplementedError
@@ -1114,12 +1114,14 @@ class _StreamingWriteFile(io.RawIOBase):
     def readinto(self, b):
         raise io.UnsupportedOperation("not readable")
 
-    # BufferedWriter
-    # raw
-    # detach()
-    # read(size=-1)
-    # read1(size=None)
-    # readinto1(b)
+    def detach(self):
+        raise io.UnsupportedOperation("no underlying raw stream")
+
+    def read1(self, size=None):
+        raise io.UnsupportedOperation("not readable")
+
+    def readinto1(self, b):
+        raise io.UnsupportedOperation("not readable")
 
 
 class _GoogleStreamingWriteFile(_StreamingWriteFile):
@@ -1244,11 +1246,16 @@ def BlobFile(path, mode="r", buffer_size=io.DEFAULT_BUFFER_SIZE):
     assert mode in ("w", "wb", "r", "rb")
     if _is_local_path(path):
         f = io.FileIO(path, mode=mode)
+        if "r" in mode:
+            f = io.BufferedReader(f, buffer_size=buffer_size)
+        else:
+            f = io.BufferedWriter(f, buffer_size=buffer_size)
     elif _is_google_path(path):
         if mode in ("w", "wb"):
             f = _GoogleStreamingWriteFile(path)
         elif mode in ("r", "rb"):
             f = _GoogleStreamingReadFile(path)
+            f = io.BufferedReader(f, buffer_size=buffer_size)
         else:
             raise Exception(f"unsupported mode {mode}")
     elif _is_azure_path(path):
@@ -1256,22 +1263,15 @@ def BlobFile(path, mode="r", buffer_size=io.DEFAULT_BUFFER_SIZE):
             f = _AzureStreamingWriteFile(path)
         elif mode in ("r", "rb"):
             f = _AzureStreamingReadFile(path)
+            f = io.BufferedReader(f, buffer_size=buffer_size)
         else:
             raise Exception(f"unsupported mode {mode}")
     else:
         raise Exception("unrecognized path")
 
-    if "r" in mode:
-        f = io.BufferedReader(f, buffer_size=buffer_size)
-    else:
-        # TODO: try normal buffer size but use write_through=True for TextIOWrapper?
-        # TODO: just pass a FileIO object and hope it works?  should StreamingWriteFile inherit from BufferedIOBase?
-        # f = io.BufferedWriter(f, buffer_size=buffer_size)
-        f = f
-
     if "b" not in mode:
         # PR for type fix https://github.com/python/typeshed/pull/3485
-        f = io.TextIOWrapper(f, encoding="utf8", write_through=True)  # type: ignore
+        f = io.TextIOWrapper(f, encoding="utf8")
 
     return f
 

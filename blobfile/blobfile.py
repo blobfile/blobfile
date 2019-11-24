@@ -961,7 +961,6 @@ def md5(path):
         isfile, metadata = _azure_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file: '{path}'")
-        print("metadata", metadata)
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
         return binascii.hexlify(base64.b64decode(metadata["Content-MD5"])).decode(
             "utf8"

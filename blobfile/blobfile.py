@@ -348,19 +348,6 @@ def copy(src, dst, overwrite=False):
         shutil.copyfileobj(src_f, dst_f, length=STREAMING_CHUNK_SIZE)
 
 
-def _google_get_blob_metadata(path):
-    bucket, blob = google.split_url(path)
-    req = Request(
-        url=google.build_url(
-            "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
-        ),
-        method="GET",
-    )
-    with _execute_google_api_request(req) as resp:
-        assert resp.status in (200, 404), f"unexpected status {resp.status}"
-        return resp, json.load(resp)
-
-
 def _calc_range(start=None, end=None):
     # https://cloud.google.com/storage/docs/xml-api/get-object-download
     # oddly range requests are not mentioned in the JSON API, only in the XML api
@@ -375,19 +362,6 @@ def _calc_range(start=None, end=None):
             return f"bytes=-{-int(end)}"
     else:
         raise Exception("invalid range")
-
-
-def _azure_get_blob_metadata(path):
-    account, container, blob = azure.split_url(path)
-    req = Request(
-        url=azure.build_url(
-            account, "/{container}/{blob}", container=container, blob=blob
-        ),
-        method="HEAD",
-    )
-    with _execute_azure_api_request(req) as resp:
-        assert resp.status in (200, 404), f"unexpected status {resp.status}"
-        return resp
 
 
 def _create_google_page_iterator(url, method, params):
@@ -445,15 +419,34 @@ def _azure_get_names(result, skip_item_name):
             yield bp["Name"]
 
 
-def _google_exists(path):
-    resp, _metadata = _google_get_blob_metadata(path)
-    assert resp.status in (200, 404), f"unexpected status {resp.status}"
-    return resp.status == 200
+def _google_isfile(path):
+    bucket, blob = google.split_url(path)
+    if blob == "":
+        return False, None
+    req = Request(
+        url=google.build_url(
+            "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
+        ),
+        method="GET",
+    )
+    with _execute_google_api_request(req) as resp:
+        assert resp.status in (200, 404), f"unexpected status {resp.status}"
+        return resp.status == 200, json.load(resp)
 
 
-def _azure_exists(path):
-    resp = _azure_get_blob_metadata(path)
-    return resp.status == 200
+def _azure_isfile(path):
+    account, container, blob = azure.split_url(path)
+    if blob == "":
+        return False, None
+    req = Request(
+        url=azure.build_url(
+            account, "/{container}/{blob}", container=container, blob=blob
+        ),
+        method="HEAD",
+    )
+    with _execute_azure_api_request(req) as resp:
+        assert resp.status in (200, 404), f"unexpected status {resp.status}"
+        return resp.status == 200, resp.headers
 
 
 def exists(path):
@@ -463,11 +456,13 @@ def exists(path):
     if _is_local_path(path):
         return os.path.exists(path)
     elif _is_google_path(path):
-        if _google_exists(path):
+        isfile, metadata = _google_isfile(path)
+        if isfile:
             return True
         return isdir(path)
     elif _is_azure_path(path):
-        if _azure_exists(path):
+        isfile, metadata = _azure_isfile(path)
+        if isfile:
             return True
         return isdir(path)
     else:
@@ -515,14 +510,8 @@ def glob(pattern):
                     if bool(re_pattern.match(filepath)):
                         yield filepath
         else:
-            if _is_google_path(pattern):
-                if _google_exists(pattern):
-                    yield pattern
-            elif _is_azure_path(pattern):
-                if _azure_exists(pattern):
-                    yield pattern
-            else:
-                raise Exception("unrecognized path")
+            if exists(pattern):
+                yield pattern
     else:
         raise Exception("unrecognized path")
 
@@ -537,35 +526,54 @@ def isdir(path):
         if not path.endswith("/"):
             path += "/"
         bucket, blob_prefix = google.split_url(path)
-        params = dict(prefix=blob_prefix, delimiter="/", maxResults=1)
-        req = Request(
-            url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
-            method="GET",
-            params=params,
-        )
-        with _execute_google_api_request(req) as resp:
-            result = json.load(resp)
-            return "items" in result or "prefixes" in result
+        if blob_prefix == "":
+            req = Request(
+                url=google.build_url("/storage/v1/b/{bucket}", bucket=bucket),
+                method="GET",
+            )
+            with _execute_google_api_request(req) as resp:
+                return resp.status == 200
+        else:
+            params = dict(prefix=blob_prefix, delimiter="/", maxResults=1)
+            req = Request(
+                url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+                method="GET",
+                params=params,
+            )
+            with _execute_google_api_request(req) as resp:
+                result = json.load(resp)
+                return "items" in result or "prefixes" in result
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
         account, container, blob = azure.split_url(path)
-        req = Request(
-            url=azure.build_url(account, "/{container}", container=container),
-            method="GET",
-            params=dict(
-                comp="list",
-                restype="container",
-                prefix=blob,
-                delimiter="/",
-                maxresults=1,
-            ),
-        )
-        with _execute_azure_api_request(req) as resp:
-            result = xmltodict.parse(resp)["EnumerationResults"]
-            return result["Blobs"] is not None and (
-                "BlobPrefix" in result["Blobs"] or "Blob" in result["Blobs"]
+        if blob == "":
+            req = Request(
+                url=azure.build_url(
+                    account, "/{container}", container=container, blob=blob
+                ),
+                method="GET",
+                params=dict(restype="container"),
             )
+            with _execute_azure_api_request(req) as resp:
+                return resp.status == 200
+        else:
+            req = Request(
+                url=azure.build_url(account, "/{container}", container=container),
+                method="GET",
+                params=dict(
+                    comp="list",
+                    restype="container",
+                    prefix=blob,
+                    delimiter="/",
+                    maxresults=1,
+                ),
+            )
+            with _execute_azure_api_request(req) as resp:
+                result = xmltodict.parse(resp)["EnumerationResults"]
+                return result["Blobs"] is not None and (
+                    "BlobPrefix" in result["Blobs"] or "Blob" in result["Blobs"]
+                )
     else:
         raise Exception("unrecognized path")
 
@@ -574,6 +582,8 @@ def listdir(path):
     """
     Returns an iterator of the contents of the directory at `path`
     """
+    if not path.endswith("/"):
+        path += "/"
     if not exists(path):
         raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
     if not isdir(path):
@@ -585,8 +595,6 @@ def listdir(path):
             else:
                 yield d
     elif _is_google_path(path):
-        if not path.endswith("/"):
-            path += "/"
         bucket, blob = google.split_url(path)
         it = _create_google_page_iterator(
             url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
@@ -616,6 +624,7 @@ def makedirs(path):
     """
     if _is_local_path(path):
         os.makedirs(path, exist_ok=True)
+        return
     elif _is_google_path(path):
         if not path.endswith("/"):
             path += "/"
@@ -648,13 +657,86 @@ def remove(path):
     """
     Remove a file at the given path
     """
-    if not exists(path):
-        raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
-    if isdir(path):
-        raise IsADirectoryError(f"Is a directory: '{path}'")
     if _is_local_path(path):
         os.remove(path)
     elif _is_google_path(path):
+        bucket, blob = google.split_url(path)
+        if blob == "" or blob.endswith("/"):
+            raise IsADirectoryError(f"Is a directory: '{path}'")
+        req = Request(
+            url=google.build_url(
+                "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
+            ),
+            method="DELETE",
+        )
+        with _execute_google_api_request(req) as resp:
+            if resp.status == 404:
+                raise FileNotFoundError(
+                    f"The system cannot find the path specified: '{path}'"
+                )
+            assert resp.status == 204, f"unexpected status {resp.status}"
+    elif _is_azure_path(path):
+        account, container, blob = azure.split_url(path)
+        if blob == "" or blob.endswith("/"):
+            raise IsADirectoryError(f"Is a directory: '{path}'")
+        req = Request(
+            url=azure.build_url(
+                account, "/{container}/{blob}", container=container, blob=blob
+            ),
+            method="DELETE",
+        )
+        with _execute_azure_api_request(req) as resp:
+            if resp.status == 404:
+                raise FileNotFoundError(
+                    f"The system cannot find the path specified: '{path}'"
+                )
+            assert resp.status == 202, f"unexpected status {resp.status}"
+    else:
+        raise Exception("unrecognized path")
+
+
+def rmdir(path):
+    """
+    Remove an empty directory at the given path
+    """
+    if _is_local_path(path):
+        os.rmdir(path)
+        return
+
+    # directories in blob storage are different from normal directories
+    # a directory exists if there are any blobs that have that directory as a prefix
+    # when the last blob with that prefix is deleted, the directory no longer exists
+    # except in the case when there is a blob with a name ending in a slash
+    # representing an empty directory
+
+    # to make this more usable it is not an error to delete a directory that does
+    # not exist, but is still an error to delete a non-empty one
+    if not path.endswith("/"):
+        path += "/"
+
+    if _is_google_path(path):
+        _bucket, blob = google.split_url(path)
+    elif _is_azure_path(path):
+        _account, _container, blob = azure.split_url(path)
+    else:
+        raise Exception("unrecognized path")
+
+    if blob == "":
+        raise Exception(f"Cannot delete bucket: '{path}'")
+    it = listdir(path)
+    try:
+        next(it)
+    except FileNotFoundError:
+        # this directory does not exist
+        return
+    except StopIteration:
+        # this directory exists and is empty
+        pass
+    else:
+        # this directory exists but is not empty
+        raise OSError(f"The directory is not empty: '{path}'")
+
+    if _is_google_path(path):
         bucket, blob = google.split_url(path)
         req = Request(
             url=google.build_url(
@@ -686,19 +768,21 @@ def stat(path):
         s = os.stat(path)
         return Stat(size=s.st_size, mtime=s.st_mtime)
     elif _is_google_path(path):
-        resp, result = _google_get_blob_metadata(path)
-        if resp.status == 404:
-            raise FileNotFoundError(f"No such file or directory: '{path}'")
+        isfile, metadata = _google_isfile(path)
+        if not isfile:
+            raise FileNotFoundError(f"No such file: '{path}'")
         ts = time.strptime(
-            result["updated"].replace("Z", "GMT"), "%Y-%m-%dT%H:%M:%S.%f%Z"
+            metadata["updated"].replace("Z", "GMT"), "%Y-%m-%dT%H:%M:%S.%f%Z"
         )
         t = calendar.timegm(ts)
-        return Stat(size=int(result["size"]), mtime=t)
+        return Stat(size=int(metadata["size"]), mtime=t)
     elif _is_azure_path(path):
-        resp = _azure_get_blob_metadata(path)
-        ts = time.strptime(resp.headers["Last-Modified"], "%a, %d %b %Y %H:%M:%S %Z")
+        isfile, metadata = _azure_isfile(path)
+        if not isfile:
+            raise FileNotFoundError(f"No such file: '{path}'")
+        ts = time.strptime(metadata["Last-Modified"], "%a, %d %b %Y %H:%M:%S %Z")
         t = calendar.timegm(ts)
-        return Stat(size=int(resp.headers["Content-Length"]), mtime=t)
+        return Stat(size=int(metadata["Content-Length"]), mtime=t)
     else:
         raise Exception("unrecognized path")
 
@@ -721,7 +805,7 @@ def walk(top, topdown=True, onerror=None):
     elif _is_google_path(top) or _is_azure_path(top):
         assert topdown
         if not top.endswith("/"):
-            top = top + "/"
+            top += "/"
         dq = collections.deque()
         dq.append(top)
         while len(dq) > 0:
@@ -809,7 +893,9 @@ def join(a, *args):
 
 
 def _join2(a, b):
-    if _is_google_path(a) or _is_azure_path(a):
+    if _is_local_path(a):
+        return os.path.join(a, b)
+    elif _is_google_path(a) or _is_azure_path(a):
         if not a.endswith("/"):
             a += "/"
         assert "://" not in b
@@ -817,7 +903,7 @@ def _join2(a, b):
         newpath = urllib.parse.urljoin(parsed_a.path, b)
         return f"{parsed_a.scheme}://{parsed_a.netloc}" + newpath
     else:
-        return os.path.join(a, b)
+        raise Exception("unrecognized path")
 
 
 def cache_key(path):
@@ -864,18 +950,16 @@ def md5(path):
     Get the MD5 hash for a file
     """
     if _is_google_path(path):
-        resp, metadata = _google_get_blob_metadata(path)
-        if resp.status == 404:
-            raise FileNotFoundError(f"No such file or directory: '{path}'")
-        assert resp.status == 200, f"unexpected status {resp.status}"
+        isfile, metadata = _google_isfile(path)
+        if not isfile:
+            raise FileNotFoundError(f"No such file: '{path}'")
         return binascii.hexlify(base64.b64decode(metadata["md5Hash"])).decode("utf8")
     elif _is_azure_path(path):
-        resp = _azure_get_blob_metadata(path)
-        if resp.status == 404:
-            raise FileNotFoundError(f"No such file or directory: '{path}'")
-        assert resp.status == 200, f"unexpected status {resp.status}"
+        isfile, metadata = _azure_isfile(path)
+        if not isfile:
+            raise FileNotFoundError(f"No such file: '{path}'")
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
-        return binascii.hexlify(base64.b64decode(resp.headers["Content-MD5"])).decode(
+        return binascii.hexlify(base64.b64decode(metadata["Content-MD5"])).decode(
             "utf8"
         )
     else:
@@ -1024,10 +1108,9 @@ class _StreamingReadFile(io.RawIOBase):
 
 class _GoogleStreamingReadFile(_StreamingReadFile):
     def __init__(self, path):
-        resp, self._metadata = _google_get_blob_metadata(path)
-        if resp.status == 404:
+        isfile, self._metadata = _google_isfile(path)
+        if not isfile:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
-        assert resp.status == 200, f"unexpected status {resp.status}"
         super().__init__(path, int(self._metadata["size"]))
 
     def _get_file(self, offset):
@@ -1048,11 +1131,9 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
 
 class _AzureStreamingReadFile(_StreamingReadFile):
     def __init__(self, path):
-        resp = _azure_get_blob_metadata(path)
-        self._metadata = resp.headers
-        if resp.status == 404:
+        isfile, self._metadata = _azure_isfile(path)
+        if not isfile:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
-        assert resp.status == 200, f"unexpected status {resp.status}"
         super().__init__(path, int(self._metadata["Content-Length"]))
 
     def _get_file(self, offset):

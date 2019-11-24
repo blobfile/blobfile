@@ -33,6 +33,7 @@ Some are inspired by existing `os.path` and `shutil` functions:
 * `listdir` - list contents of a directory
 * `makedirs` - ensure that a directory and all parent directories exist
 * `remove` - remove a file
+* `rmdir` - remove an empty directory
 * `stat` - get the size and modification time of a file
 * `walk` - walk a directory tree, yielding `(dirpath, dirnames, filenames)` tuples
 * `basename` - get the final component of a path

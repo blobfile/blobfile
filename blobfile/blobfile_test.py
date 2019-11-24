@@ -13,7 +13,7 @@ import platform
 import av
 
 import pytest
-from tensorflow.io import gfile  # type: ignore
+from tensorflow.io import gfile
 import imageio
 import numpy as np
 
@@ -37,7 +37,7 @@ def _get_temp_gcs_path():
         random.choice(string.ascii_lowercase) for i in range(16)
     )
     gfile.mkdir(path)
-    yield path + "/name"
+    yield path + "/file.name"
     gfile.rmtree(path)
 
 
@@ -46,7 +46,7 @@ def _get_temp_as_path():
     random_id = "".join(random.choice(string.ascii_lowercase) for i in range(16))
     path = f"as://{AS_TEST_BUCKET}/" + random_id
     account, _sep, container = AS_TEST_BUCKET.partition("-")
-    yield path + "/name"
+    yield path + "/file.name"
     sp.run(
         [
             "az",
@@ -248,19 +248,6 @@ def test_stat(ctx):
         assert 0 <= abs(time.time() - s.mtime) <= 5
 
 
-# @pytest.mark.parametrize(
-#     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-# )
-# def test_rename(ctx):
-#     contents = b"meow!"
-#     with ctx() as path:
-#         _write_contents(path, contents)
-#         new_path = path + ".new"
-#         bf.rename(path, new_path)
-#         with bf.BlobFile(new_path, "rb") as f:
-#             assert f.read() == contents
-
-
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
@@ -271,6 +258,36 @@ def test_remove(ctx):
         assert bf.exists(path)
         bf.remove(path)
         assert not bf.exists(path)
+
+
+@pytest.mark.parametrize(
+    # don't test local path because that has slightly different behavior
+    "ctx",
+    [_get_temp_gcs_path, _get_temp_as_path],
+)
+def test_rmdir(ctx):
+    contents = b"meow!"
+    with ctx() as path:
+        dirpath = bf.dirname(path)
+        # this is an error for a local path but not for a blob path
+        bf.rmdir(bf.join(dirpath, "fakedirname"))
+        new_dirpath = bf.join(dirpath, "dirname")
+        bf.makedirs(new_dirpath)
+        assert bf.exists(new_dirpath)
+        bf.rmdir(new_dirpath)
+        assert not bf.exists(new_dirpath)
+
+        # double delete is fine
+        bf.rmdir(new_dirpath)
+
+        # implicit dir
+        new_filepath = bf.join(dirpath, "dirname", "name")
+        _write_contents(new_filepath, contents)
+        with pytest.raises(OSError):
+            # not empty dir
+            bf.rmdir(new_dirpath)
+        bf.remove(new_filepath)
+        bf.rmdir(new_dirpath)
 
 
 @pytest.mark.parametrize(
@@ -371,38 +388,6 @@ def test_glob(ctx):
             f.write(contents)
 
         assert_listing_equal(bf.join(dirpath, "*/test.txt"), ["test.txt"])
-
-
-# @pytest.mark.parametrize(
-#     "src_ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-# )
-# @pytest.mark.parametrize(
-#     "dst_ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-# )
-# def test_copytree(src_ctx, dst_ctx):
-#     contents = b"meow!"
-#     with src_ctx() as src_path, dst_ctx() as dst_path:
-#         src_dirpath = bf.dirname(src_path)
-#         a_path = bf.join(src_dirpath, "a")
-#         with bf.BlobFile(a_path, "wb") as w:
-#             w.write(contents)
-#         bf.makedirs(bf.join(src_dirpath, "c/d"))
-#         with bf.BlobFile(bf.join(src_dirpath, "c/d/b"), "wb") as w:
-#             w.write(contents)
-#         if "://" in src_path:
-#             # for remote filesystems, create a file without intermediate dirs
-#             with bf.BlobFile(bf.join(src_dirpath, "c/e/f"), "wb") as w:
-#                 w.write(contents)
-
-#         dst_dirpath = bf.join(bf.dirname(dst_path), "target")
-#         bf.copytree(bf.join(src_dirpath, "c"), dst_dirpath)
-#         assert bf.exists(bf.join(dst_dirpath, "d"))
-#         assert bf.isdir(bf.join(dst_dirpath, "d"))
-#         assert bf.exists(bf.join(dst_dirpath, "d/b"))
-#         if "://" in src_path:
-#             assert bf.exists(bf.join(dst_dirpath, "e"))
-#             assert bf.isdir(bf.join(dst_dirpath, "e"))
-#             assert bf.exists(bf.join(dst_dirpath, "e/f"))
 
 
 def test_copy():

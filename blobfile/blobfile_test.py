@@ -388,6 +388,7 @@ def test_glob(ctx):
             f.write(contents)
 
         assert_listing_equal(bf.join(dirpath, "*/test.txt"), ["test.txt"])
+        assert_listing_equal(bf.join(dirpath, "*/test"), [])
 
 
 def test_copy():
@@ -457,6 +458,76 @@ def test_read_stats(buffer_size, ctx):
         else:
             assert r.raw.requests == 1  # type: ignore
             assert r.raw.bytes_read == len(contents)  # type: ignore
+
+
+@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])
+def test_cache_dir(ctx):
+    cache_dir = tempfile.mkdtemp()
+    contents = b"meow!"
+    alternative_contents = b"purr!"
+    with ctx() as path:
+        with bf.BlobFile(path, mode="wb") as f:
+            f.write(contents)
+        with bf.LocalBlobFile(path, mode="rb", cache_dir=cache_dir) as f:
+            assert f.read() == contents
+        content_hash = hashlib.md5(contents).hexdigest()
+        cache_path = bf.join(cache_dir, content_hash, bf.basename(path))
+        with open(cache_path, "rb") as f:
+            assert f.read() == contents
+        # alter the cached file to make sure we are not re-reading the remote file
+        with open(cache_path, "wb") as f:
+            f.write(alternative_contents)
+        with bf.LocalBlobFile(path, mode="rb", cache_dir=cache_dir) as f:
+            assert f.read() == alternative_contents
+
+
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
+def test_truncation(ctx):
+    chunk_size = 2 ** 20
+    contents = b"\x00" * chunk_size * 3
+    alternative_contents = b"\xFF" * chunk_size * 2
+    with ctx() as path:
+        with bf.BlobFile(path, "wb") as f:
+            f.write(contents)
+        with bf.BlobFile(path, "rb") as f:
+            read_contents = f.read(chunk_size)
+            with bf.BlobFile(path, "wb") as f2:
+                f2.write(alternative_contents)
+            # close underlying connection
+            f.raw._f = None  # type: ignore
+            read_contents += f.read(chunk_size)
+            read_contents += f.read(chunk_size)
+            assert (
+                read_contents
+                == contents[:chunk_size]
+                + alternative_contents[chunk_size : chunk_size * 2]
+            )
+
+
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
+def test_overwrite_while_reading(ctx):
+    chunk_size = 2 ** 20
+    contents = b"\x00" * chunk_size * 2
+    alternative_contents = b"\xFF" * chunk_size * 4
+    with ctx() as path:
+        with bf.BlobFile(path, "wb") as f:
+            f.write(contents)
+        with bf.BlobFile(path, "rb") as f:
+            read_contents = f.read(chunk_size)
+            with bf.BlobFile(path, "wb") as f2:
+                f2.write(alternative_contents)
+            # close underlying connection
+            f.raw._f = None  # type: ignore
+            read_contents += f.read(chunk_size)
+            assert (
+                read_contents
+                == contents[:chunk_size]
+                + alternative_contents[chunk_size : chunk_size * 2]
+            )
 
 
 @pytest.mark.parametrize("binary", [True, False])
@@ -583,6 +654,12 @@ def test_md5(ctx):
 
     with ctx() as path:
         _write_contents(path, contents)
+        assert bf.md5(path) == meow_hash
+        with bf.BlobFile(path, "wb") as f:
+            f.write(contents)
+        assert bf.md5(path) == meow_hash
+        with bf.BlobFile(path, "wb") as f:
+            f.write(contents)
         assert bf.md5(path) == meow_hash
 
 

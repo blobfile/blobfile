@@ -15,13 +15,14 @@ import collections
 import functools
 import threading
 import ssl
-from typing import overload, TYPE_CHECKING
+from typing import overload, TYPE_CHECKING, Optional, Tuple
 
 if TYPE_CHECKING:
     from typing_extensions import Literal
 
 import urllib3
 import xmltodict
+import filelock
 
 from . import google, azure
 from .common import Request
@@ -503,7 +504,9 @@ def glob(pattern):
                 get_names = _azure_get_names
 
             # * should not match /, but this is hard to do with fnmatch so use re
-            re_pattern = re.compile(re.escape(prefix) + r"[^/]*" + re.escape(suffix))
+            re_pattern = re.compile(
+                re.escape(prefix) + r"[^/]*" + re.escape(suffix) + r"$"
+            )
             for result in it:
                 for name in get_names(result, blob_prefix):
                     filepath = join(root, name)
@@ -958,6 +961,7 @@ def md5(path):
         isfile, metadata = _azure_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file: '{path}'")
+        print("metadata", metadata)
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
         return binascii.hexlify(base64.b64decode(metadata["Content-MD5"])).decode(
             "utf8"
@@ -974,17 +978,34 @@ def md5(path):
 
 
 class _ProxyFile:
-    def __init__(self, path, mode):
+    def __init__(self, path, mode, cache_dir=None):
         self._mode = mode
         self._remote_path = path
-        self._local_dir = tempfile.mkdtemp()
-        self._local_path = join(self._local_dir, basename(path))
+
         if self._mode in ("r", "rb"):
-            if not exists(path):
-                raise FileNotFoundError(f"file '{path}' not found")
-            with open(self._local_path, "wb") as f:
-                with BlobFile(self._remote_path, "rb") as src_f:
-                    shutil.copyfileobj(src_f, f, length=STREAMING_CHUNK_SIZE)
+            if cache_dir is None:
+                self._local_dir = tempfile.mkdtemp()
+                self._local_path = join(self._local_dir, basename(path))
+                copy(self._remote_path, self._local_path, overwrite=True)
+            else:
+                path_md5 = hashlib.md5(path.encode("utf8")).hexdigest()
+                lock_path = join(cache_dir, f"{path_md5}.lock")
+                tmp_path = join(cache_dir, f"{path_md5}.tmp")
+                with filelock.FileLock(lock_path):
+                    local_path = join(cache_dir, md5(path), basename(path))
+                    if not exists(local_path):
+                        copy(self._remote_path, tmp_path, overwrite=True)
+                        # the file we downloaded may not match the remote file because
+                        # the remote file changed while we were downloading it
+                        # in this case make sure we don't cache it under the wrong md5
+                        local_path = join(cache_dir, md5(tmp_path), basename(path))
+                        os.makedirs(dirname(local_path), exist_ok=True)
+                        os.replace(tmp_path, local_path)
+                self._local_dir = None
+                self._local_path = local_path
+        else:
+            self._local_dir = tempfile.mkdtemp()
+            self._local_path = join(self._local_dir, basename(path))
         self._f = open(self._local_path, self._mode)
         self._closed = False
 
@@ -1008,12 +1029,18 @@ class _ProxyFile:
 
         self._f.close()
         if self._mode in ("w", "wb"):
-            with open(self._local_path, "rb") as f:
-                with BlobFile(self._remote_path, "wb") as dst_f:
-                    shutil.copyfileobj(f, dst_f, length=STREAMING_CHUNK_SIZE)
-        os.remove(self._local_path)
-        os.rmdir(self._local_dir)
+            copy(self._local_path, self._remote_path, overwrite=True)
+        if self._local_dir is not None:
+            os.remove(self._local_path)
+            os.rmdir(self._local_dir)
         self._closed = True
+
+
+class _RangeError:
+    """
+    Indicate to the caller that we attempted to read past the end of a file
+    This can happen if a file was truncated while reading
+    """
 
 
 class _StreamingReadFile(io.RawIOBase):
@@ -1028,7 +1055,7 @@ class _StreamingReadFile(io.RawIOBase):
         self.failures = 0
         self.bytes_read = 0
 
-    def _get_file(self, offset) -> io.RawIOBase:
+    def _get_file(self, offset) -> Tuple[io.RawIOBase, Optional[_RangeError]]:
         raise NotImplementedError
 
     def readall(self):
@@ -1043,7 +1070,9 @@ class _StreamingReadFile(io.RawIOBase):
             _exponential_sleep_generator(0.1, maximum=60.0)
         ):
             if self._f is None:
-                self._f = self._get_file(self._offset)
+                self._f, file_err = self._get_file(self._offset)
+                if isinstance(file_err, _RangeError):
+                    return 0
                 self.requests += 1
 
             err = None
@@ -1125,8 +1154,12 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
             headers={"Range": _calc_range(start=offset)},
         )
         resp = _execute_google_api_request(req)
+        if resp.status == 416:
+            # likely the file was truncated while we were reading it
+            # return an empty file and indicate to the caller what happened
+            return io.BytesIO(), _RangeError()
         assert resp.status == 206, f"unexpected status {resp.status}"
-        return resp
+        return resp, None
 
 
 class _AzureStreamingReadFile(_StreamingReadFile):
@@ -1146,13 +1179,16 @@ class _AzureStreamingReadFile(_StreamingReadFile):
             headers={"Range": _calc_range(start=offset)},
         )
         resp = _execute_azure_api_request(req)
+        if resp.status == 416:
+            # likely the file was truncated while we were reading it
+            # return an empty file and indicate to the caller what happened
+            return io.BytesIO(), _RangeError()
         assert resp.status == 206, f"unexpected status {resp.status}"
-        return resp
+        return resp, None
 
 
 class _StreamingWriteFile(io.BufferedIOBase):
     def __init__(self):
-        self.raw = None
         # current writing byte offset in the file
         self._offset = 0
         # contents waiting to be uploaded
@@ -1263,7 +1299,13 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             url=self._url, method="PUT", headers={"x-ms-blob-type": "AppendBlob"}
         )
         with _execute_azure_api_request(req) as resp:
+            if resp.status == 409:
+                # a blob already exists with a different type so we failed to create the new one
+                remove(path)
+                with _execute_azure_api_request(req) as resp:
+                    pass
             assert resp.status == 201, f"unexpected status {resp.status}"
+        self._md5 = hashlib.md5()
         super().__init__()
 
     def _upload_chunk(self, chunk, finalize):
@@ -1275,6 +1317,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         while start < len(chunk):
             end = start + AZURE_MAX_CHUNK_SIZE
             data = chunk[start:end]
+            self._md5.update(data)
             req = Request(
                 url=self._url,
                 method="PUT",
@@ -1287,6 +1330,23 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                 # https://docs.microsoft.com/en-us/rest/api/storageservices/append-block#remarks
                 assert resp.status in (201, 412), f"unexpected status {resp.status}"
             start += AZURE_MAX_CHUNK_SIZE
+
+    def close(self):
+        if self.closed:
+            return
+
+        super().close()
+        # azure does not calculate md5s for us, we have to do that manually
+        # https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
+        req = Request(
+            url=self._url,
+            method="PUT",
+            params=dict(comp="properties"),
+            headers={"x-ms-blob-content-md5": base64.b64encode(self._md5.digest())},
+        )
+
+        with _execute_azure_api_request(req) as resp:
+            assert resp.status == 200, f"unexpected status {resp.status}"
 
 
 # https://github.com/microsoft/pyright/issues/354#issuecomment-557836876
@@ -1364,14 +1424,17 @@ class LocalBlobFile:
 
     When reading this is done by downloading the file during the constructor, for writing this
     means uploading the file on `close()` or during destruction.
+
+    If `cache_dir` is specified and a remote file is opened in read mode, its contents will be
+    cached locally.  It is the user's responsibility to clean up this directory.
     """
 
-    def __init__(self, path, mode="r"):
+    def __init__(self, path, mode="r", cache_dir=None):
         assert not path.endswith("/")
         self._mode = mode
         assert self._mode in ("w", "wb", "r", "rb")
         if _is_google_path(path) or _is_azure_path(path):
-            self._f = _ProxyFile(path, self._mode)
+            self._f = _ProxyFile(path, self._mode, cache_dir=cache_dir)
         elif _is_local_path(path):
             self._f = open(file=path, mode=self._mode)
         else:

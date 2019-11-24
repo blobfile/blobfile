@@ -22,7 +22,7 @@ with bf.BlobFile("gs://my-bucket-name/cats", "wb") as w:
 Here are the functions:
 
 * `BlobFile` - like `open()` but works with `gs://` paths too
-* `LocalBlobFile` - like `BlobFile()` but operations take place on a local file.  When reading this is done by downloading the file during the constructor, for writing this means uploading the file on `close()` or during destruction.  You can pass a `cache_dir` parameter to cache files for reading.  You are reponsible for cleaning up the cache directory though.
+* `LocalBlobFile` - like `BlobFile()` but operations take place on a local file.  When reading this is done by downloading the file during the constructor, for writing this means uploading the file on `close()` or during destruction.  You can pass a `cache_dir` parameter to cache files for reading.  You are reponsible for cleaning up the cache directory.
 
 Some are inspired by existing `os.path` and `shutil` functions:
 

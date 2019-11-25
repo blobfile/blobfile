@@ -2,7 +2,7 @@
     "include": [
         "blobfile"
     ],
-    "typeshedPath": "/host/blobfile/third-party/typeshed",
+    "typeshedPath": "./third-party/typeshed",
     "typingsPath ": "./typings",
     "reportUnusedVariable": true,
     "reportUnusedFunction": true,

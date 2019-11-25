@@ -5,8 +5,8 @@ class Request:
     def __init__(
         self, method, url, params=None, headers=None, data=None, encoding=None
     ):
-        self.method = method
         self.url = url
+        self.method = method
         self.params = params
         self.headers = headers
         self.data = data

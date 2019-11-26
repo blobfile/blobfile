@@ -1032,9 +1032,9 @@ def md5(path: str) -> str:
     """
     Get the MD5 hash for a file in hexdigest format.
 
-    For GCS this can just look up the md5 in the blob's metadata.
-    For Azure this can look up the md5 if it's available, otherwise it must calculate it.
-    For local paths, this must always calculate the md5.
+    For GCS this can just look up the MD5 in the blob's metadata.
+    For Azure this can look up the MD5 if it's available, otherwise it must calculate it.
+    For local paths, this must always calculate the MD5.
     """
     if _is_google_path(path):
         isfile, metadata = _google_isfile(path)

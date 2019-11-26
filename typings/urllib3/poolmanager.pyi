@@ -1,5 +1,6 @@
 from typing import Any
 from .request import RequestMethods
+from .response import HTTPResponse
 
 class PoolManager(RequestMethods):
     proxy: Any
@@ -23,6 +24,9 @@ class PoolManager(RequestMethods):
         multipart_boundary=...,
         **kw,
     ): ...
+    def request(
+        self, method, url, fields=..., headers=..., **urlopen_kw
+    ) -> HTTPResponse: ...
 
 class ProxyManager(PoolManager):
     proxy: Any

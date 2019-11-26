@@ -1,5 +1,3 @@
-# pyright: strict
-
 import urllib
 
 from typing import Mapping, Optional, Any

@@ -5,15 +5,9 @@
     "exclude": [
         "blobfile/*_test.py"
     ],
+    "strict": [
+        "blobfile/**/*.py"
+    ],
     "typeshedPath": "./third-party/typeshed",
-    "typingsPath ": "./typings",
-    "reportUnusedVariable": true,
-    "reportUnusedFunction": true,
-    "reportUnusedImport": true,
-    "reportMissingTypeStubs": true,
-    "reportOptionalSubscript": true,
-    "reportOptionalMemberAccess": true,
-    "reportOptionalCall": true,
-    "reportUntypedFunctionDecorator": true,
-    "reportUnusedClass": true
+    "typingsPath ": "./typings"
 }

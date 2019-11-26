@@ -1,6 +1,3 @@
-# pyright: strict
-
-
 import urllib.parse
 import os
 import json

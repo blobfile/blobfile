@@ -25,10 +25,15 @@ from typing import (
     Iterator,
     Mapping,
     Any,
+    IO,
     TextIO,
     BinaryIO,
     cast,
+    Type,
+    NamedTuple,
 )
+from types import TracebackType
+
 
 if TYPE_CHECKING:
     from typing_extensions import Literal
@@ -53,8 +58,13 @@ assert STREAMING_CHUNK_SIZE % (256 * 1024) == 0
 # to create them, so don't keep the key around too long
 AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
 
-Stat = collections.namedtuple("Stat", ["size", "mtime"])
-ReadStats = collections.namedtuple("ReadStats", ["bytes_read", "requests", "failures"])
+class Stat(NamedTuple):
+    size: int
+    mtime: float
+class ReadStats(NamedTuple):
+    bytes_read: int
+    requests: int
+    failures: int
 
 _http = None
 _http_pid = None
@@ -212,7 +222,7 @@ def _execute_google_api_request(req: Request) -> urllib3.HTTPResponse:
 
 
 def _execute_request(
-    build_req, retry_statuses: Sequence[int] = (500, 502, 503, 504)
+    build_req: Callable[[], Request], retry_statuses: Sequence[int] = (500, 502, 503, 504)
 ) -> urllib3.HTTPResponse:
     for attempt, backoff in enumerate(_exponential_sleep_generator(0.1, maximum=60.0)):
         req = build_req()
@@ -817,7 +827,7 @@ def stat(path: str) -> Stat:
 
 
 def walk(
-    top: str, topdown: bool = True, onerror: Callable = None
+    top: str, topdown: bool = True, onerror: Optional[Callable] = None
 ) -> Iterator[Tuple[str, Sequence[str], Sequence[str]]]:
     """
     Walk a directory tree in a similar manner to os.walk
@@ -1026,10 +1036,13 @@ class _StreamingReadFile(io.RawIOBase):
     def _get_file(self, offset: int) -> Tuple[io.RawIOBase, Optional[_RangeError]]:
         raise NotImplementedError
 
-    def readall(self):
-        return self.read(self._size - self._offset)
+    def readall(self) -> bytes:
+        opt_bytes = self.read(self._size - self._offset)
+        assert opt_bytes is not None, "file is in non-blocking mode"
+        return opt_bytes
 
-    def readinto(self, b):
+    # https://bugs.python.org/issue27501
+    def readinto(self, b: Any) -> Optional[int]:
         if self._size == self._offset:
             return 0
 
@@ -1045,7 +1058,9 @@ class _StreamingReadFile(io.RawIOBase):
 
             err = None
             try:
-                n = self._f.readinto(b)
+                opt_n = self._f.readinto(b)
+                assert opt_n is not None, "file is in non-blocking mode"
+                n = opt_n
                 if n == 0:
                     # assume that the connection has died
                     self._f.close()
@@ -1069,7 +1084,7 @@ class _StreamingReadFile(io.RawIOBase):
         self.bytes_read += n
         return n
 
-    def seek(self, offset, whence=io.SEEK_SET):
+    def seek(self, offset: int, whence: int=io.SEEK_SET) -> int:
         if whence == io.SEEK_SET:
             new_offset = offset
         elif whence == io.SEEK_CUR:
@@ -1103,6 +1118,14 @@ class _StreamingReadFile(io.RawIOBase):
         return True
 
 
+def _make_empty_file() -> io.RawIOBase:
+    # BytesIO has the wrong parent class
+    # https://github.com/python/typeshed/blob/master/stdlib/3/io.pyi#L75
+    # even if it had the correct one, we need a RawIOBase not a buffered one
+    # to match HTTPResponse
+    return cast(io.RawIOBase, io.BytesIO())
+
+
 class _GoogleStreamingReadFile(_StreamingReadFile):
     def __init__(self, path: str):
         isfile, self._metadata = _google_isfile(path)
@@ -1110,7 +1133,7 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         super().__init__(path, int(self._metadata["size"]))
 
-    def _get_file(self, offset):
+    def _get_file(self, offset: int) -> Tuple[io.RawIOBase, Optional[_RangeError]]:
         req = Request(
             url=google.build_url(
                 "/storage/v1/b/{bucket}/o/{name}",
@@ -1125,9 +1148,10 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
         if resp.status == 416:
             # likely the file was truncated while we were reading it
             # return an empty file and indicate to the caller what happened
-            return io.BytesIO(), _RangeError()
+            return _make_empty_file(), _RangeError()
         assert resp.status == 206, f"unexpected status {resp.status}"
-        return resp, None
+        # we don't decode content, so this is actually a RawIOBase
+        return cast(io.RawIOBase, resp), None
 
 
 class _AzureStreamingReadFile(_StreamingReadFile):
@@ -1137,7 +1161,7 @@ class _AzureStreamingReadFile(_StreamingReadFile):
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         super().__init__(path, int(self._metadata["Content-Length"]))
 
-    def _get_file(self, offset):
+    def _get_file(self, offset: int) -> Tuple[io.RawIOBase, Optional[_RangeError]]:
         account, container, blob = azure.split_url(self._path)
         req = Request(
             url=azure.build_url(
@@ -1150,9 +1174,10 @@ class _AzureStreamingReadFile(_StreamingReadFile):
         if resp.status == 416:
             # likely the file was truncated while we were reading it
             # return an empty file and indicate to the caller what happened
-            return io.BytesIO(), _RangeError()
+            return _make_empty_file(), _RangeError()
         assert resp.status == 206, f"unexpected status {resp.status}"
-        return resp, None
+        # we don't decode content, so this is actually a RawIOBase
+        return cast(io.RawIOBase, resp), None
 
 
 class _StreamingWriteFile(io.BufferedIOBase):
@@ -1185,27 +1210,28 @@ class _StreamingWriteFile(io.BufferedIOBase):
         self._upload_buf(finalize=True)
         super().close()
 
-    def tell(self):
+    def tell(self) -> int:
         return self._offset
 
-    def writable(self):
+    def writable(self) -> bool:
         return True
 
-    def write(self, b):
+    def write(self, b: bytes) -> int:
         self._buf += b
         while len(self._buf) > STREAMING_CHUNK_SIZE:
             self._upload_buf()
+        return len(b)
 
-    def readinto(self, b):
+    def readinto(self, b: Any) -> int:
         raise io.UnsupportedOperation("not readable")
 
-    def detach(self):
+    def detach(self) -> io.RawIOBase:
         raise io.UnsupportedOperation("no underlying raw stream")
 
-    def read1(self, size=None):
+    def read1(self, size:int=-1) -> bytes:
         raise io.UnsupportedOperation("not readable")
 
-    def readinto1(self, b):
+    def readinto1(self, b: Any) -> int:
         raise io.UnsupportedOperation("not readable")
 
 
@@ -1225,7 +1251,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
             self._upload_url = resp.headers["Location"]
         super().__init__()
 
-    def _upload_chunk(self, chunk, finalize):
+    def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         start = self._offset
         end = self._offset + len(chunk) - 1
 
@@ -1276,7 +1302,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         self._md5 = hashlib.md5()
         super().__init__()
 
-    def _upload_chunk(self, chunk, finalize):
+    def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         if len(chunk) == 0:
             return
 
@@ -1339,7 +1365,7 @@ def BlobFile(path: str, mode: "Literal['w']", buffer_size: int = ...) -> TextIO:
     ...
 
 
-def BlobFile(path, mode="r", buffer_size=io.DEFAULT_BUFFER_SIZE):
+def BlobFile(path:str, mode:str="r", buffer_size:int=io.DEFAULT_BUFFER_SIZE):
     """
     Open a local or remote file for reading or writing
     """
@@ -1434,13 +1460,18 @@ class LocalBlobFile:
         self._f = open(file=self._local_path, mode=mode)
         self._closed = False
 
-    def __enter__(self):
+    def __enter__(self) -> IO:
         return self._f
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
         self.close()
 
-    def __getattr__(self, attr):
+    def __getattr__(self, attr: str) -> Any:
         if attr == "_f":
             raise AttributeError(attr)
         return getattr(self._f, attr)

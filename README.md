@@ -22,20 +22,20 @@ with bf.BlobFile("gs://my-bucket-name/cats", "wb") as w:
 Here are the functions:
 
 * `BlobFile` - like `open()` but works with `gs://` paths too
-* `LocalBlobFile` - like `BlobFile()` but operations take place on a local file.  When reading this is done by downloading the file during the constructor, for writing this means uploading the file on `close()` or during destruction.  You can pass a `cache_dir` parameter to cache files for reading.  You are reponsible for cleaning up the cache directory.
+* `LocalBlobFile` - like `BlobFile()` but operations take place on a local file.  When reading, this is done by downloading the file during the constructor.  When writing, this means uploading the file on `close()` or during destruction.  You can pass a `cache_dir` parameter to cache files for reading.  You are reponsible for cleaning up the cache directory.
 
 Some are inspired by existing `os.path` and `shutil` functions:
 
-* `copy` - copy a file from one path to another
+* `copy` - copy a file from one path to another, will do a remote copy between two remote paths on the same blob storage service
 * `exists` - returns `True` if the file or directory exists
-* `glob` - return files matching a pattern, on GCS this only supports the `*` operator and can be slow if the `*` appears early in the pattern since GCS can only do prefix matches, all additional filtering must happen locally
+* `glob` - return files matching a pattern, on GCS this only supports a single `*` operator.  In addition, it can be slow if the `*` appears early in the pattern since GCS can only do prefix matches; all additional filtering must happen locally
 * `isdir` - returns `True` if the path is a directory
-* `listdir` - list contents of a directory
+* `listdir` - list contents of a directory as a generator
 * `makedirs` - ensure that a directory and all parent directories exist
 * `remove` - remove a file
 * `rmdir` - remove an empty directory
 * `stat` - get the size and modification time of a file
-* `walk` - walk a directory tree, yielding `(dirpath, dirnames, filenames)` tuples
+* `walk` - walk a directory tree with a generator that yields `(dirpath, dirnames, filenames)` tuples
 * `basename` - get the final component of a path
 * `dirname` - get the path except for the final component
 * `join` - join 2 or more paths together, inserting directory separators between each component

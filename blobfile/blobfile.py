@@ -1003,65 +1003,6 @@ def md5(path: str) -> str:
         return m.hexdigest()
 
 
-class _ProxyFile:
-    def __init__(self, path: str, mode: str, cache_dir: Optional[str] = None):
-        self._mode = mode
-        self._remote_path = path
-
-        if self._mode in ("r", "rb"):
-            if cache_dir is None:
-                self._local_dir = tempfile.mkdtemp()
-                self._local_path = join(self._local_dir, basename(path))
-                copy(self._remote_path, self._local_path, overwrite=True)
-            else:
-                path_md5 = hashlib.md5(path.encode("utf8")).hexdigest()
-                lock_path = join(cache_dir, f"{path_md5}.lock")
-                tmp_path = join(cache_dir, f"{path_md5}.tmp")
-                with filelock.FileLock(lock_path):
-                    local_path = join(cache_dir, md5(path), basename(path))
-                    if not exists(local_path):
-                        copy(self._remote_path, tmp_path, overwrite=True)
-                        # the file we downloaded may not match the remote file because
-                        # the remote file changed while we were downloading it
-                        # in this case make sure we don't cache it under the wrong md5
-                        local_path = join(cache_dir, md5(tmp_path), basename(path))
-                        os.makedirs(dirname(local_path), exist_ok=True)
-                        os.replace(tmp_path, local_path)
-                self._local_dir = None
-                self._local_path = local_path
-        else:
-            self._local_dir = tempfile.mkdtemp()
-            self._local_path = join(self._local_dir, basename(path))
-        self._f = open(self._local_path, self._mode)
-        self._closed = False
-
-    def __getattr__(self, attr):
-        if attr == "_f":
-            raise AttributeError(attr)
-        return getattr(self._f, attr)
-
-    def __enter__(self):
-        return self._f
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-
-    def __del__(self):
-        self.close()
-
-    def close(self) -> None:
-        if not hasattr(self, "_closed") or self._closed:
-            return
-
-        self._f.close()
-        if self._mode in ("w", "wb"):
-            copy(self._local_path, self._remote_path, overwrite=True)
-        if self._local_dir is not None:
-            os.remove(self._local_path)
-            os.rmdir(self._local_dir)
-        self._closed = True
-
-
 class _RangeError:
     """
     Indicate to the caller that we attempted to read past the end of a file
@@ -1455,24 +1396,66 @@ class LocalBlobFile:
     cached locally.  It is the user's responsibility to clean up this directory.
     """
 
-    def __init__(self, path, mode="r", cache_dir=None):
+    def __init__(self, path: str, mode: str = "r", cache_dir: Optional[str] = None):
         assert not path.endswith("/")
         self._mode = mode
+        self._remote_path = None
         assert self._mode in ("w", "wb", "r", "rb")
+
         if _is_google_path(path) or _is_azure_path(path):
-            self._f = _ProxyFile(path, self._mode, cache_dir=cache_dir)
+            self._remote_path = path
+            if mode in ("r", "rb"):
+                if cache_dir is None:
+                    self._local_dir = tempfile.mkdtemp()
+                    self._local_path = join(self._local_dir, basename(path))
+                    copy(self._remote_path, self._local_path, overwrite=True)
+                else:
+                    path_md5 = hashlib.md5(path.encode("utf8")).hexdigest()
+                    lock_path = join(cache_dir, f"{path_md5}.lock")
+                    tmp_path = join(cache_dir, f"{path_md5}.tmp")
+                    with filelock.FileLock(lock_path):
+                        local_path = join(cache_dir, md5(path), basename(path))
+                        if not exists(local_path):
+                            copy(self._remote_path, tmp_path, overwrite=True)
+                            # the file we downloaded may not match the remote file because
+                            # the remote file changed while we were downloading it
+                            # in this case make sure we don't cache it under the wrong md5
+                            local_path = join(cache_dir, md5(tmp_path), basename(path))
+                            os.makedirs(dirname(local_path), exist_ok=True)
+                            os.replace(tmp_path, local_path)
+                    self._local_dir = None
+                    self._local_path = local_path
+            else:
+                self._local_dir = tempfile.mkdtemp()
+                self._local_path = join(self._local_dir, basename(path))
         elif _is_local_path(path):
-            self._f = open(file=path, mode=self._mode)
+            self._local_dir = None
+            self._local_path = path
         else:
             raise Exception("unrecognized path")
 
+        self._f = open(file=self._local_path, mode=mode)
+        self._closed = False
+
     def __enter__(self):
-        return self._f.__enter__()
+        return self._f
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        return self._f.__exit__(exc_type, exc_val, exc_tb)
+        self.close()
 
     def __getattr__(self, attr):
         if attr == "_f":
             raise AttributeError(attr)
         return getattr(self._f, attr)
+
+    def close(self) -> None:
+        if not hasattr(self, "_closed") or self._closed:
+            return
+
+        self._f.close()
+        if self._remote_path is not None and self._mode in ("w", "wb"):
+            copy(self._local_path, self._remote_path, overwrite=True)
+        if self._local_dir is not None:
+            os.remove(self._local_path)
+            os.rmdir(self._local_dir)
+        self._closed = True

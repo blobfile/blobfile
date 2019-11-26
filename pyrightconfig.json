@@ -2,10 +2,14 @@
     "include": [
         "blobfile"
     ],
+    "exclude": [
+        "blobfile/*_test.py"
+    ],
     "typeshedPath": "./third-party/typeshed",
     "typingsPath ": "./typings",
     "reportUnusedVariable": true,
     "reportUnusedFunction": true,
     "reportUnusedImport": true,
+    "reportMissingTypeStubs": true,
     "reportUnusedClass": true
 }

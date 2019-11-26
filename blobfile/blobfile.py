@@ -255,7 +255,7 @@ def _execute_request(
                 f"error {err} when executing http request {req}, sleeping {backoff} seconds"
             )
         time.sleep(backoff)
-    return None  # unreachable, for pylint
+    assert False, "unreachable"
 
 
 def _is_local_path(path: str) -> bool:

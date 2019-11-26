@@ -1472,6 +1472,7 @@ class LocalBlobFile:
         assert not path.endswith("/")
         self._mode = mode
         self._remote_path = None
+        self._tmp_dir = None
         assert self._mode in ("w", "wb", "r", "rb")
 
         if _is_google_path(path) or _is_azure_path(path):
@@ -1547,13 +1548,11 @@ class LocalBlobFile:
                             local_path = join(
                                 cache_dir, remote_hexdigest, basename(path)
                             )
-                    self._tmp_dir = None
                     self._local_path = local_path
             else:
                 self._tmp_dir = tempfile.mkdtemp()
                 self._local_path = join(self._tmp_dir, basename(path))
         elif _is_local_path(path):
-            self._tmp_dir = None
             self._local_path = path
         else:
             raise Exception("unrecognized path")

@@ -8,6 +8,5 @@
     "strict": [
         "blobfile/**/*.py"
     ],
-    "typeshedPath": "./third-party/typeshed",
     "typingsPath ": "./typings"
 }

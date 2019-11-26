@@ -10,8 +10,9 @@ import time
 import subprocess as sp
 import multiprocessing as mp
 import platform
-import av
+import base64
 
+import av
 import pytest
 from tensorflow.io import gfile
 import imageio
@@ -195,19 +196,6 @@ def test_join():
     for input_a, input_b, desired_output in testcases:
         actual_output = bf.join(input_a, input_b)
         assert desired_output == actual_output, f"{input_a} {input_b}"
-
-
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
-def test_cache_key(ctx):
-    contents = b"meow!"
-    with ctx() as path:
-        _write_contents(path, contents)
-        first_key = bf.cache_key(path)
-        _write_contents(path, contents + contents)
-        second_key = bf.cache_key(path)
-        assert first_key != second_key
 
 
 @pytest.mark.parametrize(
@@ -411,7 +399,8 @@ def test_copy():
         ]
 
         for src, dst in testcases:
-            bf.copy(src, dst)
+            h = bf.copy(src, dst, return_md5=True)
+            assert h == hashlib.md5(contents).hexdigest()
             assert _read_contents(dst) == contents
             with pytest.raises(FileExistsError):
                 bf.copy(src, dst)
@@ -663,20 +652,37 @@ def test_md5(ctx):
         assert bf.md5(path) == meow_hash
 
 
+@pytest.mark.parametrize("ctx", [_get_temp_as_path])
+def test_azure_maybe_update_md5(ctx):
+    contents = b"meow!"
+    meow_hash = hashlib.md5(contents).hexdigest()
+    alternative_contents = b"purr"
+    purr_hash = hashlib.md5(alternative_contents).hexdigest()
+
+    with ctx() as path:
+        _write_contents(path, contents)
+        _isfile, metadata = bf._azure_isfile(path)
+        assert bf._azure_maybe_update_md5(path, metadata["ETag"], meow_hash)
+        _write_contents(path, alternative_contents)
+        assert not bf._azure_maybe_update_md5(path, metadata["ETag"], meow_hash)
+        _isfile, metadata = bf._azure_isfile(path)
+        assert base64.b64decode(metadata["Content-MD5"]).hex() == purr_hash
+
+
 def _get_http_pool_id(q):
-    q.put(id(bf._get_http_pool()))  # pylint: disable=protected-access
+    q.put(id(bf._get_http_pool()))
 
 
 def test_fork():
     q = mp.Queue()
     # this reference should keep the old http client alive in the child process
     # to ensure that a new one does not recycle the memory address
-    http1 = bf._get_http_pool()  # pylint: disable=protected-access
+    http1 = bf._get_http_pool()
     parent1 = id(http1)
     p = mp.Process(target=_get_http_pool_id, args=(q,))
     p.start()
     p.join()
-    http2 = bf._get_http_pool()  # pylint: disable=protected-access
+    http2 = bf._get_http_pool()
     parent2 = id(http2)
 
     child = q.get()

@@ -1,14 +1,13 @@
 import calendar
 import os
 import tempfile
-import shutil
 import hashlib
 import base64
-import binascii
 import io
 import urllib.parse
 import time
 import json
+import binascii
 import glob as local_glob
 import re
 import collections
@@ -290,7 +289,20 @@ def _is_azure_path(path: str) -> bool:
     return url.scheme == "as"
 
 
-def copy(src: str, dst: str, overwrite: bool = False) -> None:
+def copy(
+    src: str, dst: str, overwrite: bool = False, return_md5: bool = False
+) -> Optional[str]:
+    """
+    Copy a file from one path to another
+
+    If both paths are on GCS, this will perform a remote copy operation without downloading
+    the contents locally.
+
+    If `overwrite` is `False` (the default), an exception will be raised if the destination
+    path exists.
+
+    If `return_md5` is set to `True`, an md5 will be calculated during the copy and returned.
+    """
     if not overwrite:
         if exists(dst):
             raise FileExistsError(
@@ -321,9 +333,11 @@ def copy(src: str, dst: str, overwrite: bool = False) -> None:
                 assert resp.status == 200, f"unexpected status {resp.status}"
                 result = json.load(resp)
                 if result["done"]:
-                    break
+                    if return_md5:
+                        return base64.b64decode(result["resource"]["md5Hash"]).hex()
+                    else:
+                        return
                 params["rewriteToken"] = result["rewriteToken"]
-        return
 
     if _is_azure_path(src) and _is_azure_path(dst):
         # https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob
@@ -372,11 +386,21 @@ def copy(src: str, dst: str, overwrite: bool = False) -> None:
                 assert resp.headers["x-ms-copy-id"] == copy_id
                 copy_status = resp.headers["x-ms-copy-status"]
         assert copy_status == "success"
+        if return_md5:
+            return md5(dst)
         return
 
     with BlobFile(src, "rb") as src_f, BlobFile(dst, "wb") as dst_f:
-        # https://github.com/microsoft/pyright/issues/364
-        shutil.copyfileobj(src_f, dst_f, length=STREAMING_CHUNK_SIZE)  # type: ignore
+        m = hashlib.md5()
+        while True:
+            block = src_f.read(STREAMING_CHUNK_SIZE)
+            if block == b"":
+                break
+            if return_md5:
+                m.update(block)
+            dst_f.write(block)
+        if return_md5:
+            return m.hexdigest()
 
 
 def _calc_range(start: Optional[int] = None, end: Optional[int] = None) -> str:
@@ -952,23 +976,6 @@ def _join2(a: str, b: str) -> str:
         raise Exception("unrecognized path")
 
 
-def cache_key(path: str) -> str:
-    """
-    Get a cache key for a file
-    """
-    if _is_local_path(path):
-        key_parts = [path, os.path.getmtime(path), os.path.getsize(path)]
-    elif _is_google_path(path) or _is_azure_path(path):
-        return md5(path)
-    else:
-        raise Exception("unrecognized path")
-    return hashlib.md5(
-        "|".join(
-            hashlib.md5(str(p).encode("utf8")).hexdigest() for p in key_parts
-        ).encode("utf8")
-    ).hexdigest()
-
-
 def get_url(path: str) -> Tuple[str, Optional[float]]:
     """
     Get a URL for the given path that a browser could open
@@ -991,32 +998,65 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
         raise Exception("unrecognized path")
 
 
+def _block_md5(f: BinaryIO) -> bytes:
+    m = hashlib.md5()
+    while True:
+        block = f.read(STREAMING_CHUNK_SIZE)
+        if block == b"":
+            break
+        m.update(block)
+    return m.digest()
+
+
+def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> None:
+    account, container, blob = azure.split_url(path)
+    digest = binascii.unhexlify(hexdigest)
+    req = Request(
+        url=azure.build_url(
+            account, "/{container}/{blob}", container=container, blob=blob
+        ),
+        method="PUT",
+        params=dict(comp="properties"),
+        headers={
+            "x-ms-blob-content-md5": base64.b64encode(digest).decode("utf8"),
+            # https://docs.microsoft.com/en-us/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations
+            "If-Match": etag,
+        },
+    )
+    with _execute_azure_api_request(req) as resp:
+        assert resp.status in (200, 412), f"unexpected status {resp.status}"
+        return resp.status == 200
+
+
 def md5(path: str) -> str:
     """
-    Get the MD5 hash for a file
+    Get the MD5 hash for a file in hexdigest format.
+
+    For GCS this can just look up the md5 in the blob's metadata.
+    For Azure this can look up the md5 if it's available, otherwise it must calculate it.
+    For local paths, this must always calculate the md5.
     """
     if _is_google_path(path):
         isfile, metadata = _google_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file: '{path}'")
-        return binascii.hexlify(base64.b64decode(metadata["md5Hash"])).decode("utf8")
+        return base64.b64decode(metadata["md5Hash"]).hex()
     elif _is_azure_path(path):
         isfile, metadata = _azure_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file: '{path}'")
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
-        return binascii.hexlify(base64.b64decode(metadata["Content-MD5"])).decode(
-            "utf8"
-        )
+        if "Content-MD5" in metadata:
+            result = base64.b64decode(metadata["Content-MD5"]).hex()
+        else:
+            # md5 is missing, calculate it and store it on file if the file has not changed
+            with BlobFile(path, "rb") as f:
+                result = _block_md5(f).hex()
+            _azure_maybe_update_md5(path, metadata["ETag"], result)
+        return result
     else:
-        m = hashlib.md5()
         with BlobFile(path, "rb") as f:
-            while True:
-                block = f.read(HASH_CHUNK_SIZE)
-                if block == b"":
-                    break
-                m.update(block)
-        return m.hexdigest()
+            return _block_md5(f).hex()
 
 
 class _RangeError:
@@ -1446,15 +1486,67 @@ class LocalBlobFile:
                     lock_path = join(cache_dir, f"{path_md5}.lock")
                     tmp_path = join(cache_dir, f"{path_md5}.tmp")
                     with filelock.FileLock(lock_path):
-                        local_path = join(cache_dir, md5(path), basename(path))
-                        if not exists(local_path):
-                            copy(self._remote_path, tmp_path, overwrite=True)
+                        remote_etag = ""
+                        # get the remote md5 so we can check for a local file
+                        if _is_google_path(path):
+                            remote_hexdigest = md5(path)
+                        elif _is_azure_path(path):
+                            # in the azure case the remote md5 may not exist
+                            # this duplicates some of md5() because we want more control
+                            isfile, metadata = _azure_isfile(path)
+                            if not isfile:
+                                raise FileNotFoundError(f"No such file: '{path}'")
+                            remote_etag = metadata["ETag"]
+                            if "Content-MD5" in metadata:
+                                remote_hexdigest = base64.b64decode(
+                                    metadata["Content-MD5"]
+                                ).hex()
+                            else:
+                                remote_hexdigest = None
+                        else:
+                            raise Exception("unrecognized path")
+
+                        perform_copy = False
+                        if remote_hexdigest is None:
+                            # there is no remote md5, copy the file
+                            # and attempt to update the md5
+                            perform_copy = True
+                        else:
+                            expected_local_path = join(
+                                cache_dir, remote_hexdigest, basename(path)
+                            )
+                            perform_copy = not exists(expected_local_path)
+
+                        if perform_copy:
+                            local_hexdigest = copy(
+                                self._remote_path,
+                                tmp_path,
+                                overwrite=True,
+                                return_md5=True,
+                            )
+                            assert local_hexdigest is not None, "failed to return md5"
                             # the file we downloaded may not match the remote file because
                             # the remote file changed while we were downloading it
                             # in this case make sure we don't cache it under the wrong md5
-                            local_path = join(cache_dir, md5(tmp_path), basename(path))
+                            local_path = join(
+                                cache_dir, local_hexdigest, basename(path)
+                            )
                             os.makedirs(dirname(local_path), exist_ok=True)
-                            os.replace(tmp_path, local_path)
+                            if os.path.exists(local_path):
+                                # the file is already here, nevermind
+                                os.remove(tmp_path)
+                            else:
+                                os.replace(tmp_path, local_path)
+
+                            if _is_azure_path(path) and remote_hexdigest is None:
+                                _azure_maybe_update_md5(
+                                    path, remote_etag, local_hexdigest
+                                )
+                        else:
+                            assert remote_hexdigest is not None
+                            local_path = join(
+                                cache_dir, remote_hexdigest, basename(path)
+                            )
                     self._local_dir = None
                     self._local_path = local_path
             else:

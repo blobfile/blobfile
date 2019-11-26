@@ -7,11 +7,13 @@ import datetime
 import time
 import calendar
 import copy
+from typing import Mapping, Tuple
 
 from . import common
+from .common import Request
 
 
-def _create_token_request(creds, scope):
+def _create_token_request(creds: Mapping[str, str], scope: str) -> Request:
     if "refreshToken" in creds:
         assert False, "refresh token not supported currently"
         # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-protocols-oauth-code#refreshing-the-access-tokens
@@ -37,7 +39,7 @@ def _create_token_request(creds, scope):
             "resource": scope,
         }
         tenant = creds["tenant"]
-    return common.Request(
+    return Request(
         url=f"https://login.microsoftonline.com/{tenant}/oauth2/token",
         method="POST",
         headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -45,7 +47,7 @@ def _create_token_request(creds, scope):
     )
 
 
-def _load_credentials():
+def _load_credentials() -> Mapping[str, str]:
     if "AZURE_APPLICATION_CREDENTIALS" in os.environ:
         creds_path = os.environ["AZURE_APPLICATION_CREDENTIALS"]
         if not os.path.exists(creds_path):
@@ -79,18 +81,18 @@ def _load_credentials():
     )
 
 
-def build_url(account, template, **data):
+def build_url(account: str, template: str, **data: str) -> str:
     return common.build_url(
         f"https://{account}.blob.core.windows.net", template, **data
     )
 
 
-def create_access_token_request(scope):
+def create_access_token_request(scope: str) -> Request:
     creds = _load_credentials()
     return _create_token_request(creds=creds, scope=scope)
 
 
-def make_api_request(req, access_token):
+def make_api_request(req: Request, access_token: str) -> Request:
     if req.headers is None:
         headers = {}
     else:
@@ -107,20 +109,20 @@ def make_api_request(req, access_token):
     return result
 
 
-def create_user_delegation_sas_request(account):
+def create_user_delegation_sas_request(account: str) -> Request:
     # https://docs.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas
     now = datetime.datetime.utcnow()
     start = (now + datetime.timedelta(hours=-1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     expiration = now + datetime.timedelta(days=6)
     expiry = expiration.strftime("%Y-%m-%dT%H:%M:%SZ")
-    return common.Request(
+    return Request(
         url=f"https://{account}.blob.core.windows.net/?restype=service&comp=userdelegationkey",
         method="POST",
         data={"KeyInfo": {"Start": start, "Expiry": expiry}},
     )
 
 
-def generate_signed_url(key, url):
+def generate_signed_url(key: Mapping[str, str], url: str) -> Tuple[str, float]:
     # https://docs.microsoft.com/en-us/rest/api/storageservices/delegate-access-with-shared-access-signature
     # https://docs.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas
     # https://docs.microsoft.com/en-us/rest/api/storageservices/service-sas-examples
@@ -180,7 +182,7 @@ def generate_signed_url(key, url):
         hmac.digest(
             base64.b64decode(key["Value"]), string_to_sign.encode("utf8"), "sha256"
         )
-    )
+    ).decode("utf8")
     query = urllib.parse.urlencode({k: v for k, v in params.items() if v != ""})
     # convert to a utc struct_time by replacing the timezone
     ts = time.strptime(key["SignedExpiry"].replace("Z", "GMT"), "%Y-%m-%dT%H:%M:%S%Z")
@@ -188,7 +190,7 @@ def generate_signed_url(key, url):
     return url + "?" + query, t
 
 
-def split_url(path):
+def split_url(path: str) -> Tuple[str, str, str]:
     url = urllib.parse.urlparse(path)
     assert url.scheme == "as"
     account, _sep, container = url.netloc.partition("-")

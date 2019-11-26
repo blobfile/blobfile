@@ -15,7 +15,17 @@ import collections
 import functools
 import threading
 import ssl
-from typing import overload, TYPE_CHECKING, Optional, Tuple
+from typing import (
+    overload,
+    TYPE_CHECKING,
+    Optional,
+    Tuple,
+    Callable,
+    Sequence,
+    Iterator,
+    Mapping,
+    Any,
+)
 
 if TYPE_CHECKING:
     from typing_extensions import Literal
@@ -48,7 +58,7 @@ _http_pid = None
 _http_lock = threading.Lock()
 
 
-def _get_http_pool():
+def _get_http_pool() -> urllib3.PoolManager:
     # ssl is not fork safe https://docs.python.org/2/library/ssl.html#multi-processing
     # urllib3 may not be fork safe https://github.com/urllib3/urllib3/issues/1179
     # both are supposedly threadsafe though, so we shouldn't need a thread-local pool
@@ -86,7 +96,7 @@ def _get_http_pool():
         return _http
 
 
-def __log_callback(msg):
+def __log_callback(msg: str) -> None:
     print(msg)
 
 
@@ -94,7 +104,7 @@ def __log_callback(msg):
 _log_callback = __log_callback
 
 
-def set_log_callback(fn):
+def set_log_callback(fn: Callable[[str], None]) -> None:
     global _log_callback
     _log_callback = fn
 
@@ -104,28 +114,28 @@ class TokenManager:
     Automatically refresh a token when it expires
     """
 
-    def __init__(self, get_token_fn):
+    def __init__(self, get_token_fn: Callable[[str], Tuple[str, float]]):
         self._get_token_fn = get_token_fn
         self._tokens = {}
         self._lock = threading.Lock()
         self._expiration = None
 
-    def get_token(self, *args):
+    def get_token(self, key: str):
         with self._lock:
             now = time.time()
             if (
                 self._expiration is None
                 or (now + EARLY_EXPIRATION_SECONDS) > self._expiration
             ):
-                if args in self._tokens:
-                    del self._tokens[args]
+                if key in self._tokens:
+                    del self._tokens[key]
 
-            if args not in self._tokens:
-                self._tokens[args], self._expiration = self._get_token_fn(*args)
-        return self._tokens[args]
+            if key not in self._tokens:
+                self._tokens[key], self._expiration = self._get_token_fn(key)
+        return self._tokens[key]
 
 
-def _google_get_access_token():
+def _google_get_access_token(key: str) -> Tuple[str, float]:
     now = time.time()
     build_req = functools.partial(
         google.create_access_token_request,
@@ -137,7 +147,7 @@ def _google_get_access_token():
         return result["access_token"], now + float(result["expires_in"])
 
 
-def _azure_get_access_token():
+def _azure_get_access_token(key: str) -> Tuple[str, float]:
     now = time.time()
     build_req = functools.partial(
         azure.create_access_token_request, "https://storage.azure.com/"
@@ -148,11 +158,11 @@ def _azure_get_access_token():
         return result["access_token"], now + float(result["expires_in"])
 
 
-def _azure_get_sas_token(account):
+def _azure_get_sas_token(account: str) -> Tuple[str, float]:
     def build_req():
         req = azure.create_user_delegation_sas_request(account=account)
         return azure.make_api_request(
-            req, access_token=global_azure_access_token_manager.get_token()
+            req, access_token=global_azure_access_token_manager.get_token(key="")
         )
 
     resp = _execute_request(build_req)
@@ -169,7 +179,9 @@ global_azure_access_token_manager = TokenManager(_azure_get_access_token)
 global_azure_sas_token_manager = TokenManager(_azure_get_sas_token)
 
 
-def _exponential_sleep_generator(initial, maximum, multiplier=2):
+def _exponential_sleep_generator(
+    initial: float, maximum: float, multiplier: float = 2
+) -> Iterator[float]:
     value = initial
     while True:
         yield value
@@ -178,25 +190,27 @@ def _exponential_sleep_generator(initial, maximum, multiplier=2):
             value = maximum
 
 
-def _execute_azure_api_request(req):
+def _execute_azure_api_request(req: Request) -> urllib3.HTTPResponse:
     def build_req():
         return azure.make_api_request(
-            req, access_token=global_azure_access_token_manager.get_token()
+            req, access_token=global_azure_access_token_manager.get_token(key="")
         )
 
     return _execute_request(build_req)
 
 
-def _execute_google_api_request(req):
+def _execute_google_api_request(req: Request) -> urllib3.HTTPResponse:
     def build_req():
         return google.make_api_request(
-            req, access_token=global_google_access_token_manager.get_token()
+            req, access_token=global_google_access_token_manager.get_token(key="")
         )
 
     return _execute_request(build_req)
 
 
-def _execute_request(build_req, retry_statuses=(500, 502, 503, 504)):
+def _execute_request(
+    build_req, retry_statuses: Sequence[int] = (500, 502, 503, 504)
+) -> urllib3.HTTPResponse:
     for attempt, backoff in enumerate(_exponential_sleep_generator(0.1, maximum=60.0)):
         req = build_req()
         url = req.url
@@ -244,21 +258,21 @@ def _execute_request(build_req, retry_statuses=(500, 502, 503, 504)):
     return None  # unreachable, for pylint
 
 
-def _is_local_path(path):
+def _is_local_path(path: str) -> bool:
     return not _is_google_path(path) and not _is_azure_path(path)
 
 
-def _is_google_path(path):
+def _is_google_path(path: str) -> bool:
     url = urllib.parse.urlparse(path)
     return url.scheme == "gs"
 
 
-def _is_azure_path(path):
+def _is_azure_path(path: str) -> bool:
     url = urllib.parse.urlparse(path)
     return url.scheme == "as"
 
 
-def copy(src, dst, overwrite=False):
+def copy(src: str, dst: str, overwrite: bool = False) -> None:
     if not overwrite:
         if exists(dst):
             raise FileExistsError(
@@ -349,7 +363,7 @@ def copy(src, dst, overwrite=False):
         shutil.copyfileobj(src_f, dst_f, length=STREAMING_CHUNK_SIZE)
 
 
-def _calc_range(start=None, end=None):
+def _calc_range(start: Optional[int] = None, end: Optional[int] = None) -> str:
     # https://cloud.google.com/storage/docs/xml-api/get-object-download
     # oddly range requests are not mentioned in the JSON API, only in the XML api
     if start is not None and end is not None:
@@ -365,35 +379,46 @@ def _calc_range(start=None, end=None):
         raise Exception("invalid range")
 
 
-def _create_google_page_iterator(url, method, params):
-    params = params.copy()
+def _create_google_page_iterator(
+    url: str, method: str, params: Mapping[str, str]
+) -> Iterator[Mapping[str, Any]]:
+    p = dict(params).copy()
 
     while True:
-        req = Request(url=url, method=method, params=params)
+        req = Request(url=url, method=method, params=p)
         with _execute_google_api_request(req) as resp:
             result = json.load(resp)
             yield result
             if "nextPageToken" not in result:
                 break
-        params["pageToken"] = result["nextPageToken"]
+        p["pageToken"] = result["nextPageToken"]
 
 
-def _create_azure_page_iterator(url, method, data=None, params=None):
-    if params is not None:
-        params = params.copy()
-    if data is not None:
-        data = data.copy()
+def _create_azure_page_iterator(
+    url: str,
+    method: str,
+    data: Optional[Mapping[str, str]] = None,
+    params: Optional[Mapping[str, str]] = None,
+) -> Iterator[Mapping[str, Any]]:
+    if params is None:
+        p = None
+    else:
+        p = dict(params).copy()
+    if data is None:
+        d = None
+    else:
+        d = dict(data).copy()
     while True:
-        req = Request(url=url, method=method, params=params, data=data)
+        req = Request(url=url, method=method, params=p, data=d)
         with _execute_azure_api_request(req) as resp:
             result = xmltodict.parse(resp)["EnumerationResults"]
             yield result
             if result["NextMarker"] is None:
                 break
-        params["marker"] = result["NextMarker"]
+        p["marker"] = result["NextMarker"]
 
 
-def _google_get_names(result, skip_item_name):
+def _google_get_names(result: Mapping[str, Any], skip_item_name: str) -> Iterator[str]:
     if "prefixes" in result:
         for p in result["prefixes"]:
             yield p
@@ -404,7 +429,7 @@ def _google_get_names(result, skip_item_name):
             yield item["name"]
 
 
-def _azure_get_names(result, skip_item_name):
+def _azure_get_names(result: Mapping[str, Any], skip_item_name: str) -> Iterator[str]:
     blobs = result["Blobs"]
     if "Blob" in blobs:
         if isinstance(blobs["Blob"], dict):
@@ -420,10 +445,10 @@ def _azure_get_names(result, skip_item_name):
             yield bp["Name"]
 
 
-def _google_isfile(path):
+def _google_isfile(path: str) -> Tuple[bool, Mapping[str, Any]]:
     bucket, blob = google.split_url(path)
     if blob == "":
-        return False, None
+        return False, {}
     req = Request(
         url=google.build_url(
             "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
@@ -435,10 +460,10 @@ def _google_isfile(path):
         return resp.status == 200, json.load(resp)
 
 
-def _azure_isfile(path):
+def _azure_isfile(path: str) -> Tuple[bool, Mapping[str, Any]]:
     account, container, blob = azure.split_url(path)
     if blob == "":
-        return False, None
+        return False, {}
     req = Request(
         url=azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
@@ -450,7 +475,7 @@ def _azure_isfile(path):
         return resp.status == 200, resp.headers
 
 
-def exists(path):
+def exists(path: str) -> bool:
     """
     Return true if that path exists (either as a file or a directory)
     """
@@ -470,7 +495,7 @@ def exists(path):
         raise Exception("unrecognized path")
 
 
-def glob(pattern):
+def glob(pattern: str) -> Iterator[str]:
     """
     Find files matching a pattern, only supports a single "*" operator
     """
@@ -519,7 +544,7 @@ def glob(pattern):
         raise Exception("unrecognized path")
 
 
-def isdir(path):
+def isdir(path: str) -> bool:
     """
     Return true if a path is an existing directory
     """
@@ -581,7 +606,7 @@ def isdir(path):
         raise Exception("unrecognized path")
 
 
-def listdir(path):
+def listdir(path: str) -> Iterator[str]:
     """
     Returns an iterator of the contents of the directory at `path`
     """
@@ -621,7 +646,7 @@ def listdir(path):
         raise Exception("unrecognized path")
 
 
-def makedirs(path):
+def makedirs(path: str) -> None:
     """
     Make any directories necessary to ensure that path is a directory
     """
@@ -656,7 +681,7 @@ def makedirs(path):
         raise Exception("unrecognized path")
 
 
-def remove(path):
+def remove(path: str) -> None:
     """
     Remove a file at the given path
     """
@@ -698,7 +723,7 @@ def remove(path):
         raise Exception("unrecognized path")
 
 
-def rmdir(path):
+def rmdir(path: str) -> None:
     """
     Remove an empty directory at the given path
     """
@@ -763,7 +788,7 @@ def rmdir(path):
         raise Exception("unrecognized path")
 
 
-def stat(path):
+def stat(path: str) -> Stat:
     """
     Stat a file or object representing a directory, returns a Stat object
     """
@@ -790,7 +815,9 @@ def stat(path):
         raise Exception("unrecognized path")
 
 
-def walk(top, topdown=True, onerror=None):
+def walk(
+    top: str, topdown: bool = True, onerror: Callable = None
+) -> Iterator[Tuple[str, Sequence[str], Sequence[str]]]:
     """
     Walk a directory tree in a similar manner to os.walk
     """
@@ -848,7 +875,7 @@ def walk(top, topdown=True, onerror=None):
         raise Exception("unrecognized path")
 
 
-def basename(path):
+def basename(path: str) -> str:
     """
     Get the filename component of the path
 
@@ -861,7 +888,7 @@ def basename(path):
         return os.path.basename(path)
 
 
-def dirname(path):
+def dirname(path: str) -> str:
     """
     Get the directory name of the path
 
@@ -885,7 +912,7 @@ def dirname(path):
         return dn
 
 
-def join(a, *args):
+def join(a: str, *args: str) -> str:
     """
     Join file paths, if a path is an absolute path, it will replace the entire path component of previous paths
     """
@@ -895,7 +922,7 @@ def join(a, *args):
     return out
 
 
-def _join2(a, b):
+def _join2(a: str, b: str) -> str:
     if _is_local_path(a):
         return os.path.join(a, b)
     elif _is_google_path(a) or _is_azure_path(a):
@@ -909,7 +936,7 @@ def _join2(a, b):
         raise Exception("unrecognized path")
 
 
-def cache_key(path):
+def cache_key(path: str) -> str:
     """
     Get a cache key for a file
     """
@@ -926,7 +953,7 @@ def cache_key(path):
     ).hexdigest()
 
 
-def get_url(path):
+def get_url(path: str) -> Tuple[str, Optional[float]]:
     """
     Get a URL for the given path that a browser could open
     """
@@ -940,7 +967,7 @@ def get_url(path):
         url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
         )
-        token = global_azure_sas_token_manager.get_token(account)
+        token = global_azure_sas_token_manager.get_token(key=account)
         return azure.generate_signed_url(key=token, url=url)
     elif _is_local_path(path):
         return f"file://{path}", None
@@ -948,7 +975,7 @@ def get_url(path):
         raise Exception("unrecognized path")
 
 
-def md5(path):
+def md5(path: str) -> str:
     """
     Get the MD5 hash for a file
     """
@@ -977,7 +1004,7 @@ def md5(path):
 
 
 class _ProxyFile:
-    def __init__(self, path, mode, cache_dir=None):
+    def __init__(self, path: str, mode: str, cache_dir: Optional[str] = None):
         self._mode = mode
         self._remote_path = path
 
@@ -1022,7 +1049,7 @@ class _ProxyFile:
     def __del__(self):
         self.close()
 
-    def close(self):
+    def close(self) -> None:
         if not hasattr(self, "_closed") or self._closed:
             return
 
@@ -1043,7 +1070,7 @@ class _RangeError:
 
 
 class _StreamingReadFile(io.RawIOBase):
-    def __init__(self, path, size):
+    def __init__(self, path: str, size: int):
         super().__init__()
         self._size = size
         self._path = path
@@ -1054,7 +1081,7 @@ class _StreamingReadFile(io.RawIOBase):
         self.failures = 0
         self.bytes_read = 0
 
-    def _get_file(self, offset) -> Tuple[io.RawIOBase, Optional[_RangeError]]:
+    def _get_file(self, offset: int) -> Tuple[io.RawIOBase, Optional[_RangeError]]:
         raise NotImplementedError
 
     def readall(self):
@@ -1135,7 +1162,7 @@ class _StreamingReadFile(io.RawIOBase):
 
 
 class _GoogleStreamingReadFile(_StreamingReadFile):
-    def __init__(self, path):
+    def __init__(self, path: str):
         isfile, self._metadata = _google_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
@@ -1162,7 +1189,7 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
 
 
 class _AzureStreamingReadFile(_StreamingReadFile):
-    def __init__(self, path):
+    def __init__(self, path: str):
         isfile, self._metadata = _azure_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
@@ -1193,10 +1220,10 @@ class _StreamingWriteFile(io.BufferedIOBase):
         # contents waiting to be uploaded
         self._buf = b""
 
-    def _upload_chunk(self, chunk, finalize):
+    def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         raise NotImplementedError
 
-    def _upload_buf(self, finalize=False):
+    def _upload_buf(self, finalize: bool = False):
         if finalize:
             size = len(self._buf)
         else:
@@ -1241,7 +1268,7 @@ class _StreamingWriteFile(io.BufferedIOBase):
 
 
 class _GoogleStreamingWriteFile(_StreamingWriteFile):
-    def __init__(self, path):
+    def __init__(self, path: str):
         bucket, name = google.split_url(path)
         req = Request(
             url=google.build_url(
@@ -1287,7 +1314,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
 
 
 class _AzureStreamingWriteFile(_StreamingWriteFile):
-    def __init__(self, path):
+    def __init__(self, path: str):
         account, container, blob = azure.split_url(path)
         self._url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob

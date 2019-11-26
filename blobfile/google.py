@@ -8,6 +8,7 @@ import datetime
 import hashlib
 import binascii
 import copy
+from typing import Mapping, Any, Optional, Tuple
 
 from Cryptodome.Signature import pkcs1_15
 from Cryptodome.Hash import SHA256
@@ -19,27 +20,27 @@ from .common import Request
 MAX_EXPIRATION = 7 * 24 * 60 * 60
 
 
-def _b64encode(s):
-    if isinstance(s, str):
-        s = s.encode("utf8")
+def _b64encode(s: bytes) -> bytes:
     return base64.urlsafe_b64encode(s)
 
 
-def _sign(private_key, msg):
+def _sign(private_key: str, msg: bytes) -> bytes:
     key = RSA.import_key(private_key)
     h = SHA256.new(msg)
     return pkcs1_15.new(key).sign(h)
 
 
-def _create_jwt(private_key, data):
-    header_b64 = _b64encode(json.dumps({"alg": "RS256", "typ": "JWT"}))
-    body_b64 = _b64encode(json.dumps(data))
+def _create_jwt(private_key: str, data: Mapping[str, Any]) -> bytes:
+    header_b64 = _b64encode(json.dumps({"alg": "RS256", "typ": "JWT"}).encode("utf8"))
+    body_b64 = _b64encode(json.dumps(data).encode("utf8"))
     to_sign = header_b64 + b"." + body_b64
     signature_b64 = _b64encode(_sign(private_key, to_sign))
     return header_b64 + b"." + body_b64 + b"." + signature_b64
 
 
-def _create_token_request(client_email, private_key, scopes):
+def _create_token_request(
+    client_email: str, private_key: str, scopes: Mapping[str, str]
+) -> Request:
     # https://developers.google.com/identity/protocols/OAuth2ServiceAccount
     now = time.time()
     claim_set = {
@@ -61,7 +62,9 @@ def _create_token_request(client_email, private_key, scopes):
     )
 
 
-def _refresh_access_token_request(client_id, client_secret, refresh_token):
+def _refresh_access_token_request(
+    client_id: str, client_secret: str, refresh_token: str
+) -> Request:
     # https://developers.google.com/identity/protocols/OAuth2WebServer#offline
     data = {
         "grant_type": "refresh_token",
@@ -77,7 +80,7 @@ def _refresh_access_token_request(client_id, client_secret, refresh_token):
     )
 
 
-def _load_credentials():
+def _load_credentials() -> Mapping[str, Any]:
     if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
         creds_path = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
         if not os.path.exists(creds_path):
@@ -104,7 +107,7 @@ def _load_credentials():
     )
 
 
-def create_access_token_request(scopes):
+def create_access_token_request(scopes: Mapping[str, str]) -> Request:
     creds = _load_credentials()
     if "private_key" in creds:
         # looks like GCS does not support the no-oauth flow https://developers.google.com/identity/protocols/OAuth2ServiceAccount#jwt-auth
@@ -121,11 +124,11 @@ def create_access_token_request(scopes):
         raise Exception("credentials not recognized")
 
 
-def build_url(template, **data):
+def build_url(template: str, **data: str):
     return common.build_url("https://www.googleapis.com", template, **data)
 
 
-def make_api_request(req, access_token):
+def make_api_request(req: Request, access_token: str) -> Request:
     if req.headers is None:
         headers = {}
     else:
@@ -138,13 +141,22 @@ def make_api_request(req, access_token):
 
 
 def generate_signed_url(
-    bucket, name, expiration, method="GET", params=None, headers=None
-):
+    bucket: str,
+    name: str,
+    expiration: float,
+    method: str = "GET",
+    params: Optional[Mapping[str, str]] = None,
+    headers: Optional[Mapping[str, str]] = None,
+) -> Tuple[str, Optional[float]]:
     if params is None:
-        params = {}
+        p = {}
+    else:
+        p = dict(params).copy()
 
     if headers is None:
-        headers = {}
+        h = {}
+    else:
+        h = dict(headers).copy()
 
     # https://cloud.google.com/storage/docs/access-control/signing-urls-manually
     creds = _load_credentials()
@@ -167,10 +179,10 @@ def generate_signed_url(
 
     credential_scope = f"{datestamp}/auto/storage/goog4_request"
     credential = f"{creds['client_email']}/{credential_scope}"
-    headers["host"] = "storage.googleapis.com"
+    h["host"] = "storage.googleapis.com"
 
     canonical_headers = ""
-    ordered_headers = sorted(headers.items())
+    ordered_headers = sorted(h.items())
     for k, v in ordered_headers:
         lower_k = str(k).lower()
         strip_v = str(v).lower()
@@ -182,14 +194,14 @@ def generate_signed_url(
         signed_headers_parts.append(lower_k)
     signed_headers = ";".join(signed_headers_parts)
 
-    params["X-Goog-Algorithm"] = "GOOG4-RSA-SHA256"
-    params["X-Goog-Credential"] = credential
-    params["X-Goog-Date"] = request_timestamp
-    params["X-Goog-Expires"] = expiration
-    params["X-Goog-SignedHeaders"] = signed_headers
+    p["X-Goog-Algorithm"] = "GOOG4-RSA-SHA256"
+    p["X-Goog-Credential"] = credential
+    p["X-Goog-Date"] = request_timestamp
+    p["X-Goog-Expires"] = str(expiration)
+    p["X-Goog-SignedHeaders"] = signed_headers
 
     canonical_query_string_parts = []
-    ordered_params = sorted(params.items())
+    ordered_params = sorted(p.items())
     for k, v in ordered_params:
         encoded_k = urllib.parse.quote(str(k), safe="")
         encoded_v = urllib.parse.quote(str(v), safe="")
@@ -226,7 +238,7 @@ def generate_signed_url(
     return signed_url, expiration
 
 
-def split_url(path):
+def split_url(path: str) -> Tuple[str, str]:
     url = urllib.parse.urlparse(path)
     assert url.scheme == "gs"
     return url.netloc, url.path[1:]

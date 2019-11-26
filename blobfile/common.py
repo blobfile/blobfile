@@ -13,7 +13,7 @@ class Request:
         self.encoding = encoding
 
 
-def build_url(base_url, template, **data):
+def build_url(base_url: str, template: str, **data: str) -> str:
     escaped_data = {}
     for k, v in data.items():
         escaped_data[k] = urllib.parse.quote_plus(v)

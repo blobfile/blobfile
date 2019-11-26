@@ -25,6 +25,9 @@ from typing import (
     Iterator,
     Mapping,
     Any,
+    TextIO,
+    BinaryIO,
+    cast,
 )
 
 if TYPE_CHECKING:
@@ -360,7 +363,8 @@ def copy(src: str, dst: str, overwrite: bool = False) -> None:
         return
 
     with BlobFile(src, "rb") as src_f, BlobFile(dst, "wb") as dst_f:
-        shutil.copyfileobj(src_f, dst_f, length=STREAMING_CHUNK_SIZE)
+        # https://github.com/microsoft/pyright/issues/364
+        shutil.copyfileobj(src_f, dst_f, length=STREAMING_CHUNK_SIZE)  # type: ignore
 
 
 def _calc_range(start: Optional[int] = None, end: Optional[int] = None) -> str:
@@ -1317,31 +1321,32 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
 
 
 # https://github.com/microsoft/pyright/issues/354#issuecomment-557836876
+# this should probably be a protocol, but those are python 3.8 only
 @overload
 def BlobFile(
     path: str, mode: "Literal['rb']", buffer_size: int = ...
-) -> io.BufferedIOBase:
+) -> BinaryIO:
     ...
 
 
 @overload
 def BlobFile(
     path: str, mode: "Literal['wb']", buffer_size: int = ...
-) -> io.BufferedIOBase:
+) -> BinaryIO:
     ...
 
 
 @overload
 def BlobFile(
     path: str, mode: "Literal['r']", buffer_size: int = ...
-) -> io.TextIOWrapper:
+) -> TextIO:
     ...
 
 
 @overload
 def BlobFile(
     path: str, mode: "Literal['w']", buffer_size: int = ...
-) -> io.TextIOWrapper:
+) -> TextIO:
     ...
 
 
@@ -1377,11 +1382,14 @@ def BlobFile(path, mode="r", buffer_size=io.DEFAULT_BUFFER_SIZE):
     else:
         raise Exception("unrecognized path")
 
-    if "b" not in mode:
-        # PR for type fix https://github.com/python/typeshed/pull/3485
-        f = io.TextIOWrapper(f, encoding="utf8")
+    binary_f = cast(BinaryIO, f)
+    if "b" in mode:
+        out = binary_f
+    else:
+        text_f = io.TextIOWrapper(binary_f, encoding="utf8")
+        out = cast(TextIO, text_f)
 
-    return f
+    return out
 
 
 class LocalBlobFile:

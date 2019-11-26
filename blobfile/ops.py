@@ -1478,8 +1478,8 @@ class LocalBlobFile:
             self._remote_path = path
             if mode in ("r", "rb"):
                 if cache_dir is None:
-                    self._local_dir = tempfile.mkdtemp()
-                    self._local_path = join(self._local_dir, basename(path))
+                    self._tmp_dir = tempfile.mkdtemp()
+                    self._local_path = join(self._tmp_dir, basename(path))
                     copy(self._remote_path, self._local_path, overwrite=True)
                 else:
                     path_md5 = hashlib.md5(path.encode("utf8")).hexdigest()
@@ -1547,13 +1547,13 @@ class LocalBlobFile:
                             local_path = join(
                                 cache_dir, remote_hexdigest, basename(path)
                             )
-                    self._local_dir = None
+                    self._tmp_dir = None
                     self._local_path = local_path
             else:
-                self._local_dir = tempfile.mkdtemp()
-                self._local_path = join(self._local_dir, basename(path))
+                self._tmp_dir = tempfile.mkdtemp()
+                self._local_path = join(self._tmp_dir, basename(path))
         elif _is_local_path(path):
-            self._local_dir = None
+            self._tmp_dir = None
             self._local_path = path
         else:
             raise Exception("unrecognized path")
@@ -1584,7 +1584,7 @@ class LocalBlobFile:
         self._f.close()
         if self._remote_path is not None and self._mode in ("w", "wb"):
             copy(self._local_path, self._remote_path, overwrite=True)
-        if self._local_dir is not None:
+        if self._tmp_dir is not None:
             os.remove(self._local_path)
-            os.rmdir(self._local_dir)
+            os.rmdir(self._tmp_dir)
         self._closed = True

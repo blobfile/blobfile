@@ -58,13 +58,17 @@ assert STREAMING_CHUNK_SIZE % (256 * 1024) == 0
 # to create them, so don't keep the key around too long
 AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
 
+
 class Stat(NamedTuple):
     size: int
     mtime: float
+
+
 class ReadStats(NamedTuple):
     bytes_read: int
     requests: int
     failures: int
+
 
 _http = None
 _http_pid = None
@@ -222,7 +226,8 @@ def _execute_google_api_request(req: Request) -> urllib3.HTTPResponse:
 
 
 def _execute_request(
-    build_req: Callable[[], Request], retry_statuses: Sequence[int] = (500, 502, 503, 504)
+    build_req: Callable[[], Request],
+    retry_statuses: Sequence[int] = (500, 502, 503, 504),
 ) -> urllib3.HTTPResponse:
     for attempt, backoff in enumerate(_exponential_sleep_generator(0.1, maximum=60.0)):
         req = build_req()
@@ -1084,7 +1089,7 @@ class _StreamingReadFile(io.RawIOBase):
         self.bytes_read += n
         return n
 
-    def seek(self, offset: int, whence: int=io.SEEK_SET) -> int:
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
         if whence == io.SEEK_SET:
             new_offset = offset
         elif whence == io.SEEK_CUR:
@@ -1228,7 +1233,7 @@ class _StreamingWriteFile(io.BufferedIOBase):
     def detach(self) -> io.RawIOBase:
         raise io.UnsupportedOperation("no underlying raw stream")
 
-    def read1(self, size:int=-1) -> bytes:
+    def read1(self, size: int = -1) -> bytes:
         raise io.UnsupportedOperation("not readable")
 
     def readinto1(self, b: Any) -> int:
@@ -1336,7 +1341,11 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             url=self._url,
             method="PUT",
             params=dict(comp="properties"),
-            headers={"x-ms-blob-content-md5": base64.b64encode(self._md5.digest()).decode("utf8")},
+            headers={
+                "x-ms-blob-content-md5": base64.b64encode(self._md5.digest()).decode(
+                    "utf8"
+                )
+            },
         )
 
         with _execute_azure_api_request(req) as resp:
@@ -1365,7 +1374,7 @@ def BlobFile(path: str, mode: "Literal['w']", buffer_size: int = ...) -> TextIO:
     ...
 
 
-def BlobFile(path:str, mode:str="r", buffer_size:int=io.DEFAULT_BUFFER_SIZE):
+def BlobFile(path: str, mode: str = "r", buffer_size: int = io.DEFAULT_BUFFER_SIZE):
     """
     Open a local or remote file for reading or writing
     """

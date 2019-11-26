@@ -1,3 +1,5 @@
+# pyright: strict
+
 import urllib.parse
 import json
 import base64
@@ -132,7 +134,7 @@ def make_api_request(req: Request, access_token: str) -> Request:
     if req.headers is None:
         headers = {}
     else:
-        headers = req.headers.copy()
+        headers = dict(req.headers).copy()
     headers["Authorization"] = f"Bearer {access_token}"
     result = copy.copy(req)
     result.encoding = "json"

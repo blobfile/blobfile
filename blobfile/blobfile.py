@@ -286,11 +286,8 @@ def copy(src: str, dst: str, overwrite: bool = False) -> None:
     if _is_google_path(src) and _is_google_path(dst):
         srcbucket, srcname = google.split_url(src)
         dstbucket, dstname = google.split_url(dst)
-        token = None
         while True:
-            params = None
-            if token is not None:
-                params = {"rewriteToken": token}
+            params = {}
             req = Request(
                 url=google.build_url(
                     "/storage/v1/b/{sourceBucket}/o/{sourceObject}/rewriteTo/b/{destinationBucket}/o/{destinationObject}",
@@ -310,7 +307,7 @@ def copy(src: str, dst: str, overwrite: bool = False) -> None:
                 result = json.load(resp)
                 if result["done"]:
                     break
-                token = result["rewriteToken"]
+                params["rewriteToken"] = result["rewriteToken"]
         return
 
     if _is_azure_path(src) and _is_azure_path(dst):
@@ -566,7 +563,7 @@ def isdir(path: str) -> bool:
             with _execute_google_api_request(req) as resp:
                 return resp.status == 200
         else:
-            params = dict(prefix=blob_prefix, delimiter="/", maxResults=1)
+            params = dict(prefix=blob_prefix, delimiter="/", maxResults="1")
             req = Request(
                 url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
                 method="GET",
@@ -598,7 +595,7 @@ def isdir(path: str) -> bool:
                     restype="container",
                     prefix=blob,
                     delimiter="/",
-                    maxresults=1,
+                    maxresults="1",
                 ),
             )
             with _execute_azure_api_request(req) as resp:
@@ -1294,7 +1291,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                 method="PUT",
                 params=dict(comp="appendblock"),
                 data=data,
-                headers={"x-ms-blob-condition-appendpos": self._offset + start},
+                headers={"x-ms-blob-condition-appendpos": str(self._offset + start)},
             )
 
             with _execute_azure_api_request(req) as resp:
@@ -1313,7 +1310,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             url=self._url,
             method="PUT",
             params=dict(comp="properties"),
-            headers={"x-ms-blob-content-md5": base64.b64encode(self._md5.digest())},
+            headers={"x-ms-blob-content-md5": base64.b64encode(self._md5.digest()).decode("utf8")},
         )
 
         with _execute_azure_api_request(req) as resp:

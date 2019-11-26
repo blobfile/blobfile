@@ -1,3 +1,6 @@
+# pyright: strict
+
+
 import urllib.parse
 import os
 import json
@@ -96,7 +99,7 @@ def make_api_request(req: Request, access_token: str) -> Request:
     if req.headers is None:
         headers = {}
     else:
-        headers = req.headers.copy()
+        headers = dict(req.headers).copy()
     headers["Authorization"] = f"Bearer {access_token}"
     # https://docs.microsoft.com/en-us/rest/api/storageservices/previous-azure-storage-service-versions
     headers["x-ms-version"] = "2019-02-02"

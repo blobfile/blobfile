@@ -1,9 +1,19 @@
+# pyright: strict
+
 import urllib
+
+from typing import Mapping, Optional, Any
 
 
 class Request:
     def __init__(
-        self, method, url, params=None, headers=None, data=None, encoding=None
+        self,
+        method: str,
+        url: str,
+        params: Optional[Mapping[str, str]] = None,
+        headers: Optional[Mapping[str, str]] = None,
+        data: Any = None,
+        encoding: Optional[str] = None,
     ):
         self.url = url
         self.method = method

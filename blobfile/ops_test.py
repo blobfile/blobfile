@@ -18,7 +18,8 @@ from tensorflow.io import gfile
 import imageio
 import numpy as np
 
-from . import blobfile as bf, azure
+import blobfile as bf
+from . import ops, azure
 
 GCS_TEST_BUCKET = "csh-test-2"
 AS_TEST_BUCKET = "cshteststorage2-testcontainer"
@@ -661,28 +662,28 @@ def test_azure_maybe_update_md5(ctx):
 
     with ctx() as path:
         _write_contents(path, contents)
-        _isfile, metadata = bf._azure_isfile(path)
-        assert bf._azure_maybe_update_md5(path, metadata["ETag"], meow_hash)
+        _isfile, metadata = ops._azure_isfile(path)
+        assert ops._azure_maybe_update_md5(path, metadata["ETag"], meow_hash)
         _write_contents(path, alternative_contents)
-        assert not bf._azure_maybe_update_md5(path, metadata["ETag"], meow_hash)
-        _isfile, metadata = bf._azure_isfile(path)
+        assert not ops._azure_maybe_update_md5(path, metadata["ETag"], meow_hash)
+        _isfile, metadata = ops._azure_isfile(path)
         assert base64.b64decode(metadata["Content-MD5"]).hex() == purr_hash
 
 
 def _get_http_pool_id(q):
-    q.put(id(bf._get_http_pool()))
+    q.put(id(ops._get_http_pool()))
 
 
 def test_fork():
     q = mp.Queue()
     # this reference should keep the old http client alive in the child process
     # to ensure that a new one does not recycle the memory address
-    http1 = bf._get_http_pool()
+    http1 = ops._get_http_pool()
     parent1 = id(http1)
     p = mp.Process(target=_get_http_pool_id, args=(q,))
     p.start()
     p.join()
-    http2 = bf._get_http_pool()
+    http2 = ops._get_http_pool()
     parent2 = id(http2)
 
     child = q.get()

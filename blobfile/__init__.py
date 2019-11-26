@@ -1,4 +1,4 @@
-from .blobfile import (
+from .ops import (
     copy,
     exists,
     glob,
@@ -16,6 +16,7 @@ from .blobfile import (
     md5,
     set_log_callback,
     BlobFile,
+    LocalBlobFile,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "md5",
     "set_log_callback",
     "BlobFile",
+    "LocalBlobFile",
 ]

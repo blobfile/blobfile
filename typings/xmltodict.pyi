@@ -39,4 +39,3 @@ def unparse(
     namespaces: Optional[Mapping[str, str]] = ...,
     full_document: bool = ...,
 ) -> str: ...
-

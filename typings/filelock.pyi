@@ -7,4 +7,3 @@ class FileLock(object):
         exc_val: Optional[BaseException],
         exc_tb: Optional[TracebackType],
     ) -> Optional[bool]: ...
-

@@ -13,15 +13,40 @@ class PoolManager(RequestMethods):
     def connection_from_url(self, url): ...
     # TODO: This was the original signature -- copied another one from base class to fix complaint.
     # def urlopen(self, method, url, redirect=True, **kw): ...
-    def urlopen(self, method, url, body=..., headers=..., encode_multipart=..., multipart_boundary=..., **kw): ...
+    def urlopen(
+        self,
+        method,
+        url,
+        body=...,
+        headers=...,
+        encode_multipart=...,
+        multipart_boundary=...,
+        **kw,
+    ): ...
 
 class ProxyManager(PoolManager):
     proxy: Any
     proxy_headers: Any
-    def __init__(self, proxy_url, num_pools=..., headers=..., proxy_headers=..., **connection_pool_kw) -> None: ...
+    def __init__(
+        self,
+        proxy_url,
+        num_pools=...,
+        headers=...,
+        proxy_headers=...,
+        **connection_pool_kw,
+    ) -> None: ...
     def connection_from_host(self, host, port=..., scheme=...): ...
     # TODO: This was the original signature -- copied another one from base class to fix complaint.
     # def urlopen(self, method, url, redirect=True, **kw): ...
-    def urlopen(self, method, url, body=..., headers=..., encode_multipart=..., multipart_boundary=..., **kw): ...
+    def urlopen(
+        self,
+        method,
+        url,
+        body=...,
+        headers=...,
+        encode_multipart=...,
+        multipart_boundary=...,
+        **kw,
+    ): ...
 
 def proxy_from_url(url, **kw): ...

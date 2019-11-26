@@ -11,5 +11,9 @@
     "reportUnusedFunction": true,
     "reportUnusedImport": true,
     "reportMissingTypeStubs": true,
+    "reportOptionalSubscript": true,
+    "reportOptionalMemberAccess": true,
+    "reportOptionalCall": true,
+    "reportUntypedFunctionDecorator": true,
     "reportUnusedClass": true
 }

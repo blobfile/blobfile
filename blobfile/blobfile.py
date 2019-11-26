@@ -405,7 +405,7 @@ def _create_azure_page_iterator(
     params: Optional[Mapping[str, str]] = None,
 ) -> Iterator[Mapping[str, Any]]:
     if params is None:
-        p = None
+        p = {}
     else:
         p = dict(params).copy()
     if data is None:
@@ -1323,30 +1323,22 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
 # https://github.com/microsoft/pyright/issues/354#issuecomment-557836876
 # this should probably be a protocol, but those are python 3.8 only
 @overload
-def BlobFile(
-    path: str, mode: "Literal['rb']", buffer_size: int = ...
-) -> BinaryIO:
+def BlobFile(path: str, mode: "Literal['rb']", buffer_size: int = ...) -> BinaryIO:
     ...
 
 
 @overload
-def BlobFile(
-    path: str, mode: "Literal['wb']", buffer_size: int = ...
-) -> BinaryIO:
+def BlobFile(path: str, mode: "Literal['wb']", buffer_size: int = ...) -> BinaryIO:
     ...
 
 
 @overload
-def BlobFile(
-    path: str, mode: "Literal['r']", buffer_size: int = ...
-) -> TextIO:
+def BlobFile(path: str, mode: "Literal['r']", buffer_size: int = ...) -> TextIO:
     ...
 
 
 @overload
-def BlobFile(
-    path: str, mode: "Literal['w']", buffer_size: int = ...
-) -> TextIO:
+def BlobFile(path: str, mode: "Literal['w']", buffer_size: int = ...) -> TextIO:
     ...
 
 

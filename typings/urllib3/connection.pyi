@@ -12,13 +12,12 @@ from . import util
 if sys.version_info < (3, 0):
     from httplib import HTTPConnection as _HTTPConnection
     from httplib import HTTPException as HTTPException
-
     class ConnectionError(Exception): ...
+
 else:
     from http.client import HTTPConnection as _HTTPConnection
     from http.client import HTTPException as HTTPException
     from builtins import ConnectionError as ConnectionError
-
 
 class DummyConnection: ...
 
@@ -50,7 +49,9 @@ class HTTPSConnection(HTTPConnection):
     default_port: Any
     key_file: Any
     cert_file: Any
-    def __init__(self, host, port=..., key_file=..., cert_file=..., strict=..., timeout=..., **kw) -> None: ...
+    def __init__(
+        self, host, port=..., key_file=..., cert_file=..., strict=..., timeout=..., **kw
+    ) -> None: ...
     sock: Any
     def connect(self): ...
 
@@ -62,7 +63,15 @@ class VerifiedHTTPSConnection(HTTPSConnection):
     key_file: Any
     cert_file: Any
     assert_hostname: Any
-    def set_cert(self, key_file=..., cert_file=..., cert_reqs=..., ca_certs=..., assert_hostname=..., assert_fingerprint=...): ...
+    def set_cert(
+        self,
+        key_file=...,
+        cert_file=...,
+        cert_reqs=...,
+        ca_certs=...,
+        assert_hostname=...,
+        assert_fingerprint=...,
+    ): ...
     sock: Any
     auto_open: Any
     is_verified: Any

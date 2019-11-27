@@ -7,6 +7,5 @@
     ],
     "strict": [
         "blobfile/**/*.py"
-    ],
-    "typingsPath ": "./typings"
-}
+    }
+]

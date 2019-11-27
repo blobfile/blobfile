@@ -40,7 +40,7 @@ setup_dict = dict(
     zip_safe=False,
 )
 
-if os.environ.get("USE_SCM_VERSION", "1") == "1":
+if os.environ.get("USE_SCM_VERSION", "0") == "1":
     setup_dict["use_scm_version"] = {
         "root": "..",
         "relative_to": __file__,

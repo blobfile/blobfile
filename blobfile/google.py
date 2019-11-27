@@ -8,7 +8,7 @@ import datetime
 import hashlib
 import binascii
 import copy
-from typing import Mapping, Any, Optional, Tuple
+from typing import Mapping, Any, Optional, Tuple, List
 
 from Cryptodome.Signature import pkcs1_15
 from Cryptodome.Hash import SHA256
@@ -39,7 +39,7 @@ def _create_jwt(private_key: str, data: Mapping[str, Any]) -> bytes:
 
 
 def _create_token_request(
-    client_email: str, private_key: str, scopes: Mapping[str, str]
+    client_email: str, private_key: str, scopes: List[str]
 ) -> Request:
     # https://developers.google.com/identity/protocols/OAuth2ServiceAccount
     now = time.time()
@@ -107,7 +107,7 @@ def _load_credentials() -> Mapping[str, Any]:
     )
 
 
-def create_access_token_request(scopes: Mapping[str, str]) -> Request:
+def create_access_token_request(scopes: List[str]) -> Request:
     creds = _load_credentials()
     if "private_key" in creds:
         # looks like GCS does not support the no-oauth flow https://developers.google.com/identity/protocols/OAuth2ServiceAccount#jwt-auth

@@ -193,5 +193,5 @@ def generate_signed_url(key: Mapping[str, str], url: str) -> Tuple[str, float]:
 def split_url(path: str) -> Tuple[str, str, str]:
     url = urllib.parse.urlparse(path)
     assert url.scheme == "as"
-    account, _sep, container = url.netloc.partition("-")
+    account, _, container = url.netloc.partition("-")
     return account, container, url.path[1:]

@@ -16,7 +16,6 @@ import threading
 import ssl
 from typing import (
     overload,
-    TYPE_CHECKING,
     Optional,
     Tuple,
     Callable,
@@ -32,10 +31,8 @@ from typing import (
     NamedTuple,
 )
 from types import TracebackType
+from typing_extensions import Literal, Protocol, runtime_checkable
 
-
-if TYPE_CHECKING:
-    from typing_extensions import Literal
 
 import urllib3
 import xmltodict
@@ -130,13 +127,13 @@ class TokenManager:
     Automatically refresh a token when it expires
     """
 
-    def __init__(self, get_token_fn: Callable[[str], Tuple[str, float]]):
+    def __init__(self, get_token_fn: Callable[[str], Tuple[Any, float]]):
         self._get_token_fn = get_token_fn
         self._tokens = {}
         self._lock = threading.Lock()
         self._expiration = None
 
-    def get_token(self, key: str):
+    def get_token(self, key: str) -> Any:
         with self._lock:
             now = time.time()
             if (
@@ -151,7 +148,7 @@ class TokenManager:
         return self._tokens[key]
 
 
-def _google_get_access_token(key: str) -> Tuple[str, float]:
+def _google_get_access_token(key: str) -> Tuple[Any, float]:
     now = time.time()
     build_req = functools.partial(
         google.create_access_token_request,
@@ -163,7 +160,7 @@ def _google_get_access_token(key: str) -> Tuple[str, float]:
         return result["access_token"], now + float(result["expires_in"])
 
 
-def _azure_get_access_token(key: str) -> Tuple[str, float]:
+def _azure_get_access_token(key: str) -> Tuple[Any, float]:
     now = time.time()
     build_req = functools.partial(
         azure.create_access_token_request, "https://storage.azure.com/"
@@ -174,7 +171,7 @@ def _azure_get_access_token(key: str) -> Tuple[str, float]:
         return result["access_token"], now + float(result["expires_in"])
 
 
-def _azure_get_sas_token(account: str) -> Tuple[str, float]:
+def _azure_get_sas_token(account: str) -> Tuple[Any, float]:
     def build_req():
         req = azure.create_user_delegation_sas_request(account=account)
         return azure.make_api_request(
@@ -522,12 +519,12 @@ def exists(path: str) -> bool:
     if _is_local_path(path):
         return os.path.exists(path)
     elif _is_google_path(path):
-        isfile, metadata = _google_isfile(path)
+        isfile, _ = _google_isfile(path)
         if isfile:
             return True
         return isdir(path)
     elif _is_azure_path(path):
-        isfile, metadata = _azure_isfile(path)
+        isfile, _ = _azure_isfile(path)
         if isfile:
             return True
         return isdir(path)
@@ -546,7 +543,7 @@ def glob(pattern: str) -> Iterator[str]:
     elif _is_google_path(pattern) or _is_azure_path(pattern):
         if "*" in pattern:
             assert pattern.count("*") == 1
-            prefix, _sep, suffix = pattern.partition("*")
+            prefix, _, suffix = pattern.partition("*")
             if _is_google_path(pattern):
                 bucket, blob_prefix = google.split_url(prefix)
                 assert "*" not in bucket
@@ -783,9 +780,9 @@ def rmdir(path: str) -> None:
         path += "/"
 
     if _is_google_path(path):
-        _bucket, blob = google.split_url(path)
+        _, blob = google.split_url(path)
     elif _is_azure_path(path):
-        _account, _container, blob = azure.split_url(path)
+        _, _, blob = azure.split_url(path)
     else:
         raise Exception("unrecognized path")
 
@@ -1008,7 +1005,7 @@ def _block_md5(f: BinaryIO) -> bytes:
     return m.digest()
 
 
-def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> None:
+def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> bool:
     account, container, blob = azure.split_url(path)
     digest = binascii.unhexlify(hexdigest)
     req = Request(
@@ -1066,6 +1063,17 @@ class _RangeError:
     """
 
 
+@runtime_checkable
+class ReadableBinaryFile(Protocol):
+    # self should probably not need to be annotated
+    # https://github.com/microsoft/pyright/issues/370
+    def readinto(self: Any, b: Any) -> Optional[int]:
+        ...
+
+    def close(self: Any) -> None:
+        ...
+
+
 class _StreamingReadFile(io.RawIOBase):
     def __init__(self, path: str, size: int):
         super().__init__()
@@ -1078,7 +1086,9 @@ class _StreamingReadFile(io.RawIOBase):
         self.failures = 0
         self.bytes_read = 0
 
-    def _get_file(self, offset: int) -> Tuple[io.RawIOBase, Optional[_RangeError]]:
+    def _get_file(
+        self, offset: int
+    ) -> Tuple[ReadableBinaryFile, Optional[_RangeError]]:
         raise NotImplementedError
 
     def readall(self) -> bytes:
@@ -1163,14 +1173,6 @@ class _StreamingReadFile(io.RawIOBase):
         return True
 
 
-def _make_empty_file() -> io.RawIOBase:
-    # BytesIO has the wrong parent class
-    # https://github.com/python/typeshed/blob/master/stdlib/3/io.pyi#L75
-    # even if it had the correct one, we need a RawIOBase not a buffered one
-    # to match HTTPResponse
-    return cast(io.RawIOBase, io.BytesIO())
-
-
 class _GoogleStreamingReadFile(_StreamingReadFile):
     def __init__(self, path: str):
         isfile, self._metadata = _google_isfile(path)
@@ -1178,7 +1180,9 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         super().__init__(path, int(self._metadata["size"]))
 
-    def _get_file(self, offset: int) -> Tuple[io.RawIOBase, Optional[_RangeError]]:
+    def _get_file(
+        self, offset: int
+    ) -> Tuple[ReadableBinaryFile, Optional[_RangeError]]:
         req = Request(
             url=google.build_url(
                 "/storage/v1/b/{bucket}/o/{name}",
@@ -1193,10 +1197,10 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
         if resp.status == 416:
             # likely the file was truncated while we were reading it
             # return an empty file and indicate to the caller what happened
-            return _make_empty_file(), _RangeError()
+            return io.BytesIO(), _RangeError()
         assert resp.status == 206, f"unexpected status {resp.status}"
-        # we don't decode content, so this is actually a RawIOBase
-        return cast(io.RawIOBase, resp), None
+        # we don't decode content, so this is actually a ReadableBinaryFile
+        return resp, None
 
 
 class _AzureStreamingReadFile(_StreamingReadFile):
@@ -1206,7 +1210,9 @@ class _AzureStreamingReadFile(_StreamingReadFile):
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         super().__init__(path, int(self._metadata["Content-Length"]))
 
-    def _get_file(self, offset: int) -> Tuple[io.RawIOBase, Optional[_RangeError]]:
+    def _get_file(
+        self, offset: int
+    ) -> Tuple[ReadableBinaryFile, Optional[_RangeError]]:
         account, container, blob = azure.split_url(self._path)
         req = Request(
             url=azure.build_url(
@@ -1219,10 +1225,10 @@ class _AzureStreamingReadFile(_StreamingReadFile):
         if resp.status == 416:
             # likely the file was truncated while we were reading it
             # return an empty file and indicate to the caller what happened
-            return _make_empty_file(), _RangeError()
+            return io.BytesIO(), _RangeError()
         assert resp.status == 206, f"unexpected status {resp.status}"
-        # we don't decode content, so this is actually a RawIOBase
-        return cast(io.RawIOBase, resp), None
+        # we don't decode content, so this is actually a ReadableBinaryFile
+        return resp, None
 
 
 class _StreamingWriteFile(io.BufferedIOBase):
@@ -1392,29 +1398,30 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             assert resp.status == 200, f"unexpected status {resp.status}"
 
 
-# https://github.com/microsoft/pyright/issues/354#issuecomment-557836876
-# this should probably be a protocol, but those are python 3.8 only
+MODE = Literal["r", "rb", "w", "wb"]
+
+
 @overload
-def BlobFile(path: str, mode: "Literal['rb']", buffer_size: int = ...) -> BinaryIO:
+def BlobFile(path: str, mode: Literal["rb"], buffer_size: int = ...) -> BinaryIO:
     ...
 
 
 @overload
-def BlobFile(path: str, mode: "Literal['wb']", buffer_size: int = ...) -> BinaryIO:
+def BlobFile(path: str, mode: Literal["wb"], buffer_size: int = ...) -> BinaryIO:
     ...
 
 
 @overload
-def BlobFile(path: str, mode: "Literal['r']", buffer_size: int = ...) -> TextIO:
+def BlobFile(path: str, mode: Literal["r"], buffer_size: int = ...) -> TextIO:
     ...
 
 
 @overload
-def BlobFile(path: str, mode: "Literal['w']", buffer_size: int = ...) -> TextIO:
+def BlobFile(path: str, mode: Literal["w"], buffer_size: int = ...) -> TextIO:
     ...
 
 
-def BlobFile(path: str, mode: str = "r", buffer_size: int = io.DEFAULT_BUFFER_SIZE):
+def BlobFile(path: str, mode: MODE = "r", buffer_size: int = io.DEFAULT_BUFFER_SIZE):
     """
     Open a local or remote file for reading or writing
     """
@@ -1446,6 +1453,8 @@ def BlobFile(path: str, mode: str = "r", buffer_size: int = io.DEFAULT_BUFFER_SI
     else:
         raise Exception("unrecognized path")
 
+    # this should be a protocol so we don't have to cast
+    # but the standard library does not seem to have a file-like protocol
     binary_f = cast(BinaryIO, f)
     if "b" in mode:
         out = binary_f
@@ -1468,7 +1477,7 @@ class LocalBlobFile:
     cached locally.  It is the user's responsibility to clean up this directory.
     """
 
-    def __init__(self, path: str, mode: str = "r", cache_dir: Optional[str] = None):
+    def __init__(self, path: str, mode: MODE = "r", cache_dir: Optional[str] = None):
         assert not path.endswith("/")
         self._mode = mode
         self._remote_path = None

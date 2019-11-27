@@ -7,7 +7,7 @@ README = open(os.path.join(SCRIPT_DIR, "README.md")).read()
 
 setup_dict = dict(
     name="blobfile",
-    version="0.9.0",
+    version="0.9.1",
     description="Read GCS and local paths with the same interface, clone of tensorflow.io.gfile",
     long_description=README,
     long_description_content_type="text/markdown",
@@ -20,6 +20,7 @@ setup_dict = dict(
         "urllib3~=1.25",
         "xmltodict~=0.12.0",
         "filelock~=3.0",
+        "typing-extensions>=3.7.4.1",
     ],
     extras_require={
         "dev": [
@@ -29,6 +30,7 @@ setup_dict = dict(
             "imageio-ffmpeg",
             "azure-cli",
             "google-cloud-storage",
+            "typeguard",
         ]
     },
     python_requires=">=3.6.0",

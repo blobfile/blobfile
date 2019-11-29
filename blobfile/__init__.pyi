@@ -1,5 +1,10 @@
-# all public symbols from this package
-# this must be created manually based on type data from the existing functions
+# this is the public api of this package
+# but must be generated manually from existing type information
+# in the future it would be nice to be able to annotate objects as exported
+# with a comment and add a build step to build this file
+# or else build a program to compare the public annotations
+# to the private ones and make sure they are the same
+# see https://github.com/microsoft/pyright/issues/377
 
 from typing import (
     overload,

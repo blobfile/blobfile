@@ -35,7 +35,7 @@ setup_dict = dict(
     },
     python_requires=">=3.6.0",
     # indicate that we have type information
-    package_data={"blobfile": ["py.typed"]},
+    package_data={"blobfile": ["__init__.pyi", "py.typed"]},
     # mypy cannot find type information in zip files
     zip_safe=False,
 )

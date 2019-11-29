@@ -1400,7 +1400,6 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
 
 MODE = Literal["r", "rb", "w", "wb"]
 
-
 @overload
 def BlobFile(path: str, mode: Literal["rb"], buffer_size: int = ...) -> BinaryIO:
     ...
@@ -1421,7 +1420,7 @@ def BlobFile(path: str, mode: Literal["w"], buffer_size: int = ...) -> TextIO:
     ...
 
 
-def BlobFile(path: str, mode: MODE = "r", buffer_size: int = io.DEFAULT_BUFFER_SIZE):
+def BlobFile(path: str, mode: MODE = "r", buffer_size: int = io.DEFAULT_BUFFER_SIZE) -> IO:
     """
     Open a local or remote file for reading or writing
     """
@@ -1465,19 +1464,8 @@ def BlobFile(path: str, mode: MODE = "r", buffer_size: int = io.DEFAULT_BUFFER_S
     return out
 
 
-class LocalBlobFile:
-    """
-    Like BlobFile() but in the case that the path is a remote file, all operations take place
-    on a local copy of that file.
-
-    When reading this is done by downloading the file during the constructor, for writing this
-    means uploading the file on `close()` or during destruction.
-
-    If `cache_dir` is specified and a remote file is opened in read mode, its contents will be
-    cached locally.  It is the user's responsibility to clean up this directory.
-    """
-
-    def __init__(self, path: str, mode: MODE = "r", cache_dir: Optional[str] = None):
+class _ProxyFile:
+    def __init__(self, path: str, mode: MODE = "r", cache_dir: Optional[str] = None) -> None:
         assert not path.endswith("/")
         self._mode = mode
         self._remote_path = None
@@ -1596,3 +1584,37 @@ class LocalBlobFile:
             os.remove(self._local_path)
             os.rmdir(self._tmp_dir)
         self._closed = True
+
+
+@overload
+def LocalBlobFile(path: str, mode: Literal["rb"], cache_dir: Optional[str] = ...) -> BinaryIO:
+    ...
+
+@overload
+def LocalBlobFile(path: str, mode: Literal["wb"], cache_dir: Optional[str] = ...) -> BinaryIO:
+    ...
+
+@overload
+def LocalBlobFile(path: str, mode: Literal["r"], cache_dir: Optional[str] = ...) -> TextIO:
+    ...
+
+@overload
+def LocalBlobFile(path: str, mode: Literal["w"], cache_dir: Optional[str] = ...) -> TextIO:
+    ...
+
+def LocalBlobFile(path: str, mode: MODE = "r", cache_dir: Optional[str] = None) -> IO:
+    """
+    Like BlobFile() but in the case that the path is a remote file, all operations take place
+    on a local copy of that file.
+
+    When reading this is done by downloading the file during the constructor, for writing this
+    means uploading the file on `close()` or during destruction.
+
+    If `cache_dir` is specified and a remote file is opened in read mode, its contents will be
+    cached locally.  It is the user's responsibility to clean up this directory.
+    """
+    f = _ProxyFile(path=path, mode=mode, cache_dir=cache_dir)
+    if "b" in mode:
+        return cast(BinaryIO, f)
+    else:
+        return cast(TextIO, f)

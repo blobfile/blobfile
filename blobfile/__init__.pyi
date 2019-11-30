@@ -5,6 +5,7 @@
 # or else build a program to compare the public annotations
 # to the private ones and make sure they are the same
 # see https://github.com/microsoft/pyright/issues/377
+# typeguard does not seem to use the annotations in this file
 
 from typing import (
     overload,
@@ -76,4 +77,3 @@ def LocalBlobFile(
 def LocalBlobFile(
     path: str, mode: MODE = "r", cache_dir: Optional[str] = ...
 ) -> IO: ...
-

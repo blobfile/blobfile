@@ -27,10 +27,8 @@ from typing import (
     TextIO,
     BinaryIO,
     cast,
-    Type,
     NamedTuple,
 )
-from types import TracebackType
 from typing_extensions import Literal, Protocol, runtime_checkable
 
 
@@ -1400,6 +1398,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
 
 MODE = Literal["r", "rb", "w", "wb"]
 
+
 @overload
 def BlobFile(path: str, mode: Literal["rb"], buffer_size: int = ...) -> BinaryIO:
     ...
@@ -1420,7 +1419,9 @@ def BlobFile(path: str, mode: Literal["w"], buffer_size: int = ...) -> TextIO:
     ...
 
 
-def BlobFile(path: str, mode: MODE = "r", buffer_size: int = io.DEFAULT_BUFFER_SIZE) -> IO:
+def BlobFile(
+    path: str, mode: MODE = "r", buffer_size: int = io.DEFAULT_BUFFER_SIZE
+) -> IO:
     """
     Open a local or remote file for reading or writing
     """
@@ -1456,128 +1457,32 @@ def BlobFile(path: str, mode: MODE = "r", buffer_size: int = io.DEFAULT_BUFFER_S
     # but the standard library does not seem to have a file-like protocol
     binary_f = cast(BinaryIO, f)
     if "b" in mode:
-        out = binary_f
+        return binary_f
     else:
         text_f = io.TextIOWrapper(binary_f, encoding="utf8")
-        out = cast(TextIO, text_f)
-
-    return out
+        return cast(TextIO, text_f)
 
 
-class _ProxyFile:
-    def __init__(self, path: str, mode: MODE = "r", cache_dir: Optional[str] = None) -> None:
-        assert not path.endswith("/")
-        self._mode = mode
-        self._remote_path = None
-        self._tmp_dir = None
-        assert self._mode in ("w", "wb", "r", "rb")
-
-        if _is_google_path(path) or _is_azure_path(path):
-            self._remote_path = path
-            if mode in ("r", "rb"):
-                if cache_dir is None:
-                    self._tmp_dir = tempfile.mkdtemp()
-                    self._local_path = join(self._tmp_dir, basename(path))
-                    copy(self._remote_path, self._local_path, overwrite=True)
-                else:
-                    path_md5 = hashlib.md5(path.encode("utf8")).hexdigest()
-                    lock_path = join(cache_dir, f"{path_md5}.lock")
-                    tmp_path = join(cache_dir, f"{path_md5}.tmp")
-                    with filelock.FileLock(lock_path):
-                        remote_etag = ""
-                        # get the remote md5 so we can check for a local file
-                        if _is_google_path(path):
-                            remote_hexdigest = md5(path)
-                        elif _is_azure_path(path):
-                            # in the azure case the remote md5 may not exist
-                            # this duplicates some of md5() because we want more control
-                            isfile, metadata = _azure_isfile(path)
-                            if not isfile:
-                                raise FileNotFoundError(f"No such file: '{path}'")
-                            remote_etag = metadata["ETag"]
-                            if "Content-MD5" in metadata:
-                                remote_hexdigest = base64.b64decode(
-                                    metadata["Content-MD5"]
-                                ).hex()
-                            else:
-                                remote_hexdigest = None
-                        else:
-                            raise Exception("unrecognized path")
-
-                        perform_copy = False
-                        if remote_hexdigest is None:
-                            # there is no remote md5, copy the file
-                            # and attempt to update the md5
-                            perform_copy = True
-                        else:
-                            expected_local_path = join(
-                                cache_dir, remote_hexdigest, basename(path)
-                            )
-                            perform_copy = not exists(expected_local_path)
-
-                        if perform_copy:
-                            local_hexdigest = copy(
-                                self._remote_path,
-                                tmp_path,
-                                overwrite=True,
-                                return_md5=True,
-                            )
-                            assert local_hexdigest is not None, "failed to return md5"
-                            # the file we downloaded may not match the remote file because
-                            # the remote file changed while we were downloading it
-                            # in this case make sure we don't cache it under the wrong md5
-                            local_path = join(
-                                cache_dir, local_hexdigest, basename(path)
-                            )
-                            os.makedirs(dirname(local_path), exist_ok=True)
-                            if os.path.exists(local_path):
-                                # the file is already here, nevermind
-                                os.remove(tmp_path)
-                            else:
-                                os.replace(tmp_path, local_path)
-
-                            if _is_azure_path(path) and remote_hexdigest is None:
-                                _azure_maybe_update_md5(
-                                    path, remote_etag, local_hexdigest
-                                )
-                        else:
-                            assert remote_hexdigest is not None
-                            local_path = join(
-                                cache_dir, remote_hexdigest, basename(path)
-                            )
-                    self._local_path = local_path
-            else:
-                self._tmp_dir = tempfile.mkdtemp()
-                self._local_path = join(self._tmp_dir, basename(path))
-        elif _is_local_path(path):
-            self._local_path = path
-        else:
-            raise Exception("unrecognized path")
-
-        self._f = open(file=self._local_path, mode=mode)
-        self._closed = False
-
-    def __enter__(self) -> IO:
-        return self._f
-
-    def __exit__(
+class _ProxyFile(io.FileIO):
+    def __init__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+        local_path: str,
+        mode: MODE,
+        tmp_dir: Optional[str],
+        remote_path: Optional[str],
     ) -> None:
-        self.close()
-
-    def __getattr__(self, attr: str) -> Any:
-        if attr == "_f":
-            raise AttributeError(attr)
-        return getattr(self._f, attr)
+        super().__init__(local_path, mode=mode)
+        self._mode = mode
+        self._tmp_dir = tmp_dir
+        self._local_path = local_path
+        self._remote_path = remote_path
+        self._closed = False
 
     def close(self) -> None:
         if not hasattr(self, "_closed") or self._closed:
             return
 
-        self._f.close()
+        super().close()
         if self._remote_path is not None and self._mode in ("w", "wb"):
             copy(self._local_path, self._remote_path, overwrite=True)
         if self._tmp_dir is not None:
@@ -1587,20 +1492,32 @@ class _ProxyFile:
 
 
 @overload
-def LocalBlobFile(path: str, mode: Literal["rb"], cache_dir: Optional[str] = ...) -> BinaryIO:
+def LocalBlobFile(
+    path: str, mode: Literal["rb"], cache_dir: Optional[str] = ...
+) -> BinaryIO:
     ...
 
-@overload
-def LocalBlobFile(path: str, mode: Literal["wb"], cache_dir: Optional[str] = ...) -> BinaryIO:
-    ...
 
 @overload
-def LocalBlobFile(path: str, mode: Literal["r"], cache_dir: Optional[str] = ...) -> TextIO:
+def LocalBlobFile(
+    path: str, mode: Literal["wb"], cache_dir: Optional[str] = ...
+) -> BinaryIO:
     ...
 
+
 @overload
-def LocalBlobFile(path: str, mode: Literal["w"], cache_dir: Optional[str] = ...) -> TextIO:
+def LocalBlobFile(
+    path: str, mode: Literal["r"], cache_dir: Optional[str] = ...
+) -> TextIO:
     ...
+
+
+@overload
+def LocalBlobFile(
+    path: str, mode: Literal["w"], cache_dir: Optional[str] = ...
+) -> TextIO:
+    ...
+
 
 def LocalBlobFile(path: str, mode: MODE = "r", cache_dir: Optional[str] = None) -> IO:
     """
@@ -1613,8 +1530,90 @@ def LocalBlobFile(path: str, mode: MODE = "r", cache_dir: Optional[str] = None) 
     If `cache_dir` is specified and a remote file is opened in read mode, its contents will be
     cached locally.  It is the user's responsibility to clean up this directory.
     """
-    f = _ProxyFile(path=path, mode=mode, cache_dir=cache_dir)
-    if "b" in mode:
-        return cast(BinaryIO, f)
+    assert not path.endswith("/")
+    remote_path = None
+    tmp_dir = None
+    assert mode in ("w", "wb", "r", "rb")
+
+    if _is_google_path(path) or _is_azure_path(path):
+        remote_path = path
+        if mode in ("r", "rb"):
+            if cache_dir is None:
+                tmp_dir = tempfile.mkdtemp()
+                local_path = join(tmp_dir, basename(path))
+                copy(remote_path, local_path, overwrite=True)
+            else:
+                path_md5 = hashlib.md5(path.encode("utf8")).hexdigest()
+                lock_path = join(cache_dir, f"{path_md5}.lock")
+                tmp_path = join(cache_dir, f"{path_md5}.tmp")
+                with filelock.FileLock(lock_path):
+                    remote_etag = ""
+                    # get the remote md5 so we can check for a local file
+                    if _is_google_path(path):
+                        remote_hexdigest = md5(path)
+                    elif _is_azure_path(path):
+                        # in the azure case the remote md5 may not exist
+                        # this duplicates some of md5() because we want more control
+                        isfile, metadata = _azure_isfile(path)
+                        if not isfile:
+                            raise FileNotFoundError(f"No such file: '{path}'")
+                        remote_etag = metadata["ETag"]
+                        if "Content-MD5" in metadata:
+                            remote_hexdigest = base64.b64decode(
+                                metadata["Content-MD5"]
+                            ).hex()
+                        else:
+                            remote_hexdigest = None
+                    else:
+                        raise Exception("unrecognized path")
+
+                    perform_copy = False
+                    if remote_hexdigest is None:
+                        # there is no remote md5, copy the file
+                        # and attempt to update the md5
+                        perform_copy = True
+                    else:
+                        expected_local_path = join(
+                            cache_dir, remote_hexdigest, basename(path)
+                        )
+                        perform_copy = not exists(expected_local_path)
+
+                    if perform_copy:
+                        local_hexdigest = copy(
+                            remote_path, tmp_path, overwrite=True, return_md5=True
+                        )
+                        assert local_hexdigest is not None, "failed to return md5"
+                        # the file we downloaded may not match the remote file because
+                        # the remote file changed while we were downloading it
+                        # in this case make sure we don't cache it under the wrong md5
+                        local_path = join(cache_dir, local_hexdigest, basename(path))
+                        os.makedirs(dirname(local_path), exist_ok=True)
+                        if os.path.exists(local_path):
+                            # the file is already here, nevermind
+                            os.remove(tmp_path)
+                        else:
+                            os.replace(tmp_path, local_path)
+
+                        if _is_azure_path(path) and remote_hexdigest is None:
+                            _azure_maybe_update_md5(path, remote_etag, local_hexdigest)
+                    else:
+                        assert remote_hexdigest is not None
+                        local_path = join(cache_dir, remote_hexdigest, basename(path))
+                local_path = local_path
+        else:
+            tmp_dir = tempfile.mkdtemp()
+            local_path = join(tmp_dir, basename(path))
+    elif _is_local_path(path):
+        local_path = path
     else:
-        return cast(TextIO, f)
+        raise Exception("unrecognized path")
+
+    f = _ProxyFile(
+        local_path=local_path, mode=mode, tmp_dir=tmp_dir, remote_path=remote_path
+    )
+    binary_f = cast(BinaryIO, f)
+    if "b" in mode:
+        return binary_f
+    else:
+        text_f = io.TextIOWrapper(binary_f, encoding="utf8")
+        return cast(TextIO, text_f)

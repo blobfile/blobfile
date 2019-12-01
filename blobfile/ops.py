@@ -125,7 +125,7 @@ class TokenManager:
     Automatically refresh a token when it expires
     """
 
-    def __init__(self, get_token_fn: Callable[[str], Tuple[Any, float]]):
+    def __init__(self, get_token_fn: Callable[[str], Tuple[Any, float]]) -> None:
         self._get_token_fn = get_token_fn
         self._tokens = {}
         self._lock = threading.Lock()
@@ -1073,7 +1073,7 @@ class ReadableBinaryFile(Protocol):
 
 
 class _StreamingReadFile(io.RawIOBase):
-    def __init__(self, path: str, size: int):
+    def __init__(self, path: str, size: int) -> None:
         super().__init__()
         self._size = size
         self._path = path
@@ -1172,7 +1172,7 @@ class _StreamingReadFile(io.RawIOBase):
 
 
 class _GoogleStreamingReadFile(_StreamingReadFile):
-    def __init__(self, path: str):
+    def __init__(self, path: str) -> None:
         isfile, self._metadata = _google_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
@@ -1202,7 +1202,7 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
 
 
 class _AzureStreamingReadFile(_StreamingReadFile):
-    def __init__(self, path: str):
+    def __init__(self, path: str) -> None:
         isfile, self._metadata = _azure_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
@@ -1230,7 +1230,7 @@ class _AzureStreamingReadFile(_StreamingReadFile):
 
 
 class _StreamingWriteFile(io.BufferedIOBase):
-    def __init__(self):
+    def __init__(self) -> None:
         # current writing byte offset in the file
         self._offset = 0
         # contents waiting to be uploaded
@@ -1285,7 +1285,7 @@ class _StreamingWriteFile(io.BufferedIOBase):
 
 
 class _GoogleStreamingWriteFile(_StreamingWriteFile):
-    def __init__(self, path: str):
+    def __init__(self, path: str) -> None:
         bucket, name = google.split_url(path)
         req = Request(
             url=google.build_url(
@@ -1331,7 +1331,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
 
 
 class _AzureStreamingWriteFile(_StreamingWriteFile):
-    def __init__(self, path: str):
+    def __init__(self, path: str) -> None:
         account, container, blob = azure.split_url(path)
         self._url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
@@ -1372,28 +1372,23 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             with _execute_azure_api_request(req) as resp:
                 # https://docs.microsoft.com/en-us/rest/api/storageservices/append-block#remarks
                 assert resp.status in (201, 412), f"unexpected status {resp.status}"
+
+            # azure does not calculate md5s for us, we have to do that manually
+            # https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
+            req = Request(
+                url=self._url,
+                method="PUT",
+                params=dict(comp="properties"),
+                headers={
+                    "x-ms-blob-content-md5": base64.b64encode(
+                        self._md5.digest()
+                    ).decode("utf8")
+                },
+            )
+            with _execute_azure_api_request(req) as resp:
+                assert resp.status == 200, f"unexpected status {resp.status}"
+
             start += AZURE_MAX_CHUNK_SIZE
-
-    def close(self):
-        if self.closed:
-            return
-
-        super().close()
-        # azure does not calculate md5s for us, we have to do that manually
-        # https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
-        req = Request(
-            url=self._url,
-            method="PUT",
-            params=dict(comp="properties"),
-            headers={
-                "x-ms-blob-content-md5": base64.b64encode(self._md5.digest()).decode(
-                    "utf8"
-                )
-            },
-        )
-
-        with _execute_azure_api_request(req) as resp:
-            assert resp.status == 200, f"unexpected status {resp.status}"
 
 
 MODE = Literal["r", "rb", "w", "wb"]

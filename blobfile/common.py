@@ -12,7 +12,7 @@ class Request:
         headers: Optional[Mapping[str, str]] = None,
         data: Any = None,
         encoding: Optional[str] = None,
-    ):
+    ) -> None:
         self.url = url
         self.method = method
         self.params = params

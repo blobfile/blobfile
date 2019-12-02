@@ -124,7 +124,7 @@ def create_access_token_request(scopes: List[str]) -> Request:
         raise Exception("credentials not recognized")
 
 
-def build_url(template: str, **data: str):
+def build_url(template: str, **data: str) -> str:
     return common.build_url("https://www.googleapis.com", template, **data)
 
 

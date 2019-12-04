@@ -1,9 +1,21 @@
 import os
 from setuptools import setup, find_packages
+import setuptools.command.build_py
+import subprocess as sp
+
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 README = open(os.path.join(SCRIPT_DIR, "README.md")).read()
+
+
+class BuildPyCommand(setuptools.command.build_py.build_py):
+    def run(self):
+        sp.run(
+            ["python", "scripts/export-stubs.py", "--dirpath", "blobfile"], check=True
+        )
+        setuptools.command.build_py.build_py.run(self)
+
 
 setup_dict = dict(
     name="blobfile",
@@ -35,9 +47,10 @@ setup_dict = dict(
     },
     python_requires=">=3.6.0",
     # indicate that we have type information
-    package_data={"blobfile": ["__init__.pyi", "py.typed"]},
+    package_data={"blobfile": ["*.pyi", "py.typed"]},
     # mypy cannot find type information in zip files
     zip_safe=False,
+    cmdclass={"build_py": BuildPyCommand},
 )
 
 if os.environ.get("USE_SCM_VERSION", "0") == "1":

@@ -1,0 +1,6 @@
+[build-system]
+requires = [
+    "setuptools == 42.0.0",
+    "wheel == 0.33.6",
+    "astor == 0.8.0",
+]

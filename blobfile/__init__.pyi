@@ -1,79 +1,43 @@
-# this is the public api of this package
-# but must be generated manually from existing type information
-# in the future it would be nice to be able to annotate objects as exported
-# with a comment and add a build step to build this file
-# or else build a program to compare the public annotations
-# to the private ones and make sure they are the same
-# see https://github.com/microsoft/pyright/issues/377
-# typeguard does not seem to use the annotations in this file
+# This file was generated automatically by export.py
 
-from typing import (
-    overload,
-    Any,
-    BinaryIO,
-    TextIO,
-    Callable,
-    IO,
-    Iterator,
-    NamedTuple,
-    Optional,
-    Sequence,
-    Tuple,
-    Type,
-    Literal,
+from .ops import (
+    copy,
+    exists,
+    glob,
+    isdir,
+    listdir,
+    makedirs,
+    remove,
+    rmdir,
+    stat,
+    walk,
+    basename,
+    dirname,
+    join,
+    get_url,
+    md5,
+    set_log_callback,
+    BlobFile,
+    LocalBlobFile,
 )
 
-class Stat(NamedTuple):
-    size: int
-    mtime: float
-
-def set_log_callback(fn: Callable[[str], None]) -> None: ...
-def copy(
-    src: str, dst: str, overwrite: bool = ..., return_md5: bool = ...
-) -> Optional[str]: ...
-def exists(path: str) -> bool: ...
-def glob(pattern: str) -> Iterator[str]: ...
-def isdir(path: str) -> bool: ...
-def listdir(path: str) -> Iterator[str]: ...
-def makedirs(path: str) -> None: ...
-def remove(path: str) -> None: ...
-def rmdir(path: str) -> None: ...
-def stat(path: str) -> Stat: ...
-def walk(
-    top: str, topdown: bool = ..., onerror: Optional[Callable] = ...
-) -> Iterator[Tuple[str, Sequence[str], Sequence[str]]]: ...
-def basename(path: str) -> str: ...
-def dirname(path: str) -> str: ...
-def join(a: str, *args: str) -> str: ...
-def get_url(path: str) -> Tuple[str, Optional[float]]: ...
-def md5(path: str) -> str: ...
-
-MODE = Literal["r", "rb", "w", "wb"]
-@overload
-def BlobFile(path: str, mode: Literal["rb"], buffer_size: int = ...) -> BinaryIO: ...
-@overload
-def BlobFile(path: str, mode: Literal["wb"], buffer_size: int = ...) -> BinaryIO: ...
-@overload
-def BlobFile(path: str, mode: Literal["r"], buffer_size: int = ...) -> TextIO: ...
-@overload
-def BlobFile(path: str, mode: Literal["w"], buffer_size: int = ...) -> TextIO: ...
-def BlobFile(path: str, mode: MODE = "r", buffer_size: int = ...) -> IO: ...
-@overload
-def LocalBlobFile(
-    path: str, mode: Literal["rb"], cache_dir: Optional[str] = ...
-) -> BinaryIO: ...
-@overload
-def LocalBlobFile(
-    path: str, mode: Literal["wb"], cache_dir: Optional[str] = ...
-) -> BinaryIO: ...
-@overload
-def LocalBlobFile(
-    path: str, mode: Literal["r"], cache_dir: Optional[str] = ...
-) -> TextIO: ...
-@overload
-def LocalBlobFile(
-    path: str, mode: Literal["w"], cache_dir: Optional[str] = ...
-) -> TextIO: ...
-def LocalBlobFile(
-    path: str, mode: MODE = "r", cache_dir: Optional[str] = ...
-) -> IO: ...
+__all__ = [
+    "copy",
+    "exists",
+    "glob",
+    "isdir",
+    "listdir",
+    "makedirs",
+    "remove",
+    "rmdir",
+    "stat",
+    "walk",
+    "basename",
+    "dirname",
+    "join",
+    "get_url",
+    "md5",
+    "set_log_callback",
+    "BlobFile",
+    "LocalBlobFile",
+]

@@ -1151,10 +1151,10 @@ class _StreamingReadFile(io.RawIOBase):
             self._f = None
         return self._offset
 
-    def tell(self):
+    def tell(self) -> int:
         return self._offset
 
-    def close(self):
+    def close(self) -> None:
         if self.closed:
             return
 
@@ -1164,10 +1164,10 @@ class _StreamingReadFile(io.RawIOBase):
 
         super().close()
 
-    def readable(self):
+    def readable(self) -> bool:
         return True
 
-    def seekable(self):
+    def seekable(self) -> bool:
         return True
 
 
@@ -1251,7 +1251,7 @@ class _StreamingWriteFile(io.BufferedIOBase):
         self._upload_chunk(chunk, finalize)
         self._offset += len(chunk)
 
-    def close(self):
+    def close(self) -> None:
         if self.closed:
             return
 

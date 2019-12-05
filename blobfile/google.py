@@ -134,9 +134,12 @@ def make_api_request(req: Request, access_token: str) -> Request:
     else:
         headers = dict(req.headers).copy()
     headers["Authorization"] = f"Bearer {access_token}"
+    data = req.data
+    if data is not None and not isinstance(data, (bytes, bytearray)):
+        data = json.dumps(data).encode("utf8")
     result = copy.copy(req)
-    result.encoding = "json"
     result.headers = headers
+    result.data = data
     return result
 
 

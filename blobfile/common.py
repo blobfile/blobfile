@@ -11,14 +11,12 @@ class Request:
         params: Optional[Mapping[str, str]] = None,
         headers: Optional[Mapping[str, str]] = None,
         data: Any = None,
-        encoding: Optional[str] = None,
     ) -> None:
         self.url = url
         self.method = method
         self.params = params
         self.headers = headers
         self.data = data
-        self.encoding = encoding
 
 
 def build_url(base_url: str, template: str, **data: str) -> str:

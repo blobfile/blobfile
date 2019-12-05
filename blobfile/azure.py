@@ -10,6 +10,8 @@ import copy
 import re
 from typing import Mapping, Tuple
 
+import xmltodict
+
 from . import common
 from .common import Request
 
@@ -18,21 +20,21 @@ OAUTH_TOKEN = "oauth_token"
 
 
 def load_credentials() -> Mapping[str, str]:
-    # if "AZURE_APPLICATION_CREDENTIALS" in os.environ:
-    #     creds_path = os.environ["AZURE_APPLICATION_CREDENTIALS"]
-    #     if not os.path.exists(creds_path):
-    #         raise Exception(
-    #             f"credentials not found at {creds_path} specified by environment variable 'AZURE_APPLICATION_CREDENTIALS'"
-    #         )
-    #     with open(creds_path) as f:
-    #         return json.load(f)
+    if "AZURE_APPLICATION_CREDENTIALS" in os.environ:
+        creds_path = os.environ["AZURE_APPLICATION_CREDENTIALS"]
+        if not os.path.exists(creds_path):
+            raise Exception(
+                f"credentials not found at {creds_path} specified by environment variable 'AZURE_APPLICATION_CREDENTIALS'"
+            )
+        with open(creds_path) as f:
+            return json.load(f)
 
-    # if "AZURE_CLIENT_ID" in os.environ:
-    #     return dict(
-    #         appId=os.environ["AZURE_CLIENT_ID"],
-    #         password=os.environ["AZURE_CLIENT_SECRET"],
-    #         tenant=os.environ["AZURE_TENANT_ID"],
-    #     )
+    if "AZURE_CLIENT_ID" in os.environ:
+        return dict(
+            appId=os.environ["AZURE_CLIENT_ID"],
+            password=os.environ["AZURE_CLIENT_SECRET"],
+            tenant=os.environ["AZURE_TENANT_ID"],
+        )
 
     # look for a refresh token in the az command line credentials
     # https://mikhail.io/2019/07/how-azure-cli-manages-access-tokens/
@@ -110,8 +112,9 @@ def create_user_delegation_sas_request(account: str) -> Request:
     expiration = now + datetime.timedelta(days=6)
     expiry = expiration.strftime("%Y-%m-%dT%H:%M:%SZ")
     return Request(
-        url=f"https://{account}.blob.core.windows.net/?restype=service&comp=userdelegationkey",
+        url=f"https://{account}.blob.core.windows.net/",
         method="POST",
+        params=dict(restype="service", comp="userdelegationkey"),
         data={"KeyInfo": {"Start": start, "Expiry": expiry}},
     )
 
@@ -127,9 +130,13 @@ def make_api_request(req: Request, auth: Tuple[str, str]) -> Request:
     headers["x-ms-date"] = datetime.datetime.utcnow().strftime(
         "%a, %d %b %Y %H:%M:%S GMT"
     )
+    data = req.data
+    if data is not None and not isinstance(data, (bytes, bytearray)):
+        data = xmltodict.unparse(data).encode("utf8")
+
     result = copy.copy(req)
-    result.encoding = "xml"
     result.headers = headers
+    result.data = data
 
     kind, token = auth
     if kind == SHARED_KEY:
@@ -243,7 +250,6 @@ def sign_with_shared_key(req: Request, key: str) -> str:
 
     content_length = headers.get("Content-Length", "")
     if req.data is not None:
-        # TODO: encode data before doing this
         content_length = str(len(req.data))
 
     parts_to_sign = [
@@ -263,7 +269,6 @@ def sign_with_shared_key(req: Request, key: str) -> str:
         canonicalized_resource,
     ]
     string_to_sign = "\n".join(parts_to_sign)
-    print(repr(string_to_sign))
 
     signature = base64.b64encode(
         hmac.digest(base64.b64decode(key), string_to_sign.encode("utf8"), "sha256")

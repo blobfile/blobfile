@@ -243,9 +243,11 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
 def _azure_get_sas_token(account: str) -> Tuple[Any, float]:
     def build_req() -> Request:
         req = azure.create_user_delegation_sas_request(account=account)
-        return azure.make_api_request(
-            req, auth=global_azure_access_token_manager.get_token(key=account)
-        )
+        auth = global_azure_access_token_manager.get_token(key=account)
+        assert (
+            auth[0] == azure.OAUTH_TOKEN
+        ), "only oauth tokens can be used to get sas tokens"
+        return azure.make_api_request(req, auth=auth)
 
     with _execute_request(build_req) as resp:
         assert resp.status == 200, f"unexpected status {resp.status}"
@@ -303,16 +305,6 @@ def _execute_request(
         if req.params is not None:
             if len(req.params) > 0:
                 url += "?" + urllib.parse.urlencode(req.params)
-        data = req.data
-        if data is not None:
-            if not isinstance(data, (bytes, bytearray)):
-                if req.encoding == "json":
-                    data = json.dumps(data)
-                elif req.encoding == "xml":
-                    data = xmltodict.unparse(data)
-                else:
-                    raise Exception("invalid encoding")
-                data = data.encode("utf8")
 
         err = None
         try:
@@ -320,7 +312,7 @@ def _execute_request(
                 method=req.method,
                 url=url,
                 headers=req.headers,
-                body=data,
+                body=req.data,
                 timeout=urllib3.Timeout(connect=CONNECT_TIMEOUT, read=READ_TIMEOUT),
                 preload_content=False,
                 retries=False,
@@ -394,7 +386,6 @@ def copy(
                 ),
                 method="POST",
                 params=params,
-                encoding="json",
             )
             with _execute_google_api_request(req) as resp:
                 if resp.status == 404:
@@ -1445,8 +1436,6 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
 
             with _execute_azure_api_request(req) as resp:
                 # https://docs.microsoft.com/en-us/rest/api/storageservices/append-block#remarks
-                print(resp.headers)
-                print(resp.read())
                 assert resp.status in (201, 412), f"unexpected status {resp.status}"
 
             # azure does not calculate md5s for us, we have to do that manually

@@ -7,22 +7,78 @@ import datetime
 import time
 import calendar
 import copy
+import re
 from typing import Mapping, Tuple
 
 from . import common
 from .common import Request
 
+SHARED_KEY = "shared_key"
+OAUTH_TOKEN = "oauth_token"
 
-def _create_token_request(creds: Mapping[str, str], scope: str) -> Request:
+
+def load_credentials() -> Mapping[str, str]:
+    # if "AZURE_APPLICATION_CREDENTIALS" in os.environ:
+    #     creds_path = os.environ["AZURE_APPLICATION_CREDENTIALS"]
+    #     if not os.path.exists(creds_path):
+    #         raise Exception(
+    #             f"credentials not found at {creds_path} specified by environment variable 'AZURE_APPLICATION_CREDENTIALS'"
+    #         )
+    #     with open(creds_path) as f:
+    #         return json.load(f)
+
+    # if "AZURE_CLIENT_ID" in os.environ:
+    #     return dict(
+    #         appId=os.environ["AZURE_CLIENT_ID"],
+    #         password=os.environ["AZURE_CLIENT_SECRET"],
+    #         tenant=os.environ["AZURE_TENANT_ID"],
+    #     )
+
+    # look for a refresh token in the az command line credentials
+    # https://mikhail.io/2019/07/how-azure-cli-manages-access-tokens/
+    default_creds_path = os.path.expanduser("~/.azure/accessTokens.json")
+    if os.path.exists(default_creds_path):
+        default_profile_path = os.path.expanduser("~/.azure/azureProfile.json")
+        assert os.path.exists(default_profile_path), f"missing {default_profile_path}"
+        with open(default_profile_path, "rb") as f:
+            # this file has a UTF-8 BOM
+            profile = json.loads(f.read().decode("utf-8-sig"))
+            subscriptions = [sub["id"] for sub in profile["subscriptions"]]
+
+        with open(default_creds_path) as f:
+            tokens = json.load(f)
+            best_token = None
+            for token in tokens:
+                if best_token is None:
+                    best_token = token
+                else:
+                    if token["expiresOn"] > best_token["expiresOn"]:
+                        best_token = token
+            if best_token is not None:
+                token = copy.copy(best_token)
+                token["subscriptions"] = subscriptions
+                return token
+
+    raise Exception(
+        "credentials not found, please create an account with 'az ad sp create-for-rbac --name <name>' and set the 'AZURE_APPLICATION_CREDENTIALS' environment variable to the path of the output from that command"
+    )
+
+
+def build_url(account: str, template: str, **data: str) -> str:
+    return common.build_url(
+        f"https://{account}.blob.core.windows.net", template, **data
+    )
+
+
+def create_access_token_request(creds: Mapping[str, str], scope: str) -> Request:
     if "refreshToken" in creds:
-        assert False, "refresh token not supported currently"
         # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-protocols-oauth-code#refreshing-the-access-tokens
-        # data = {
-        #     "grant_type": "refresh_token",
-        #     "refresh_token": creds["refreshToken"],
-        #     "resource": scope,
-        # }
-        # tenant = "common"
+        data = {
+            "grant_type": "refresh_token",
+            "refresh_token": creds["refreshToken"],
+            "resource": scope,
+        }
+        tenant = "common"
     else:
         # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-oauth2-client-creds-grant-flow#request-an-access-token
         # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-protocols-oauth-code
@@ -47,68 +103,6 @@ def _create_token_request(creds: Mapping[str, str], scope: str) -> Request:
     )
 
 
-def _load_credentials() -> Mapping[str, str]:
-    if "AZURE_APPLICATION_CREDENTIALS" in os.environ:
-        creds_path = os.environ["AZURE_APPLICATION_CREDENTIALS"]
-        if not os.path.exists(creds_path):
-            raise Exception(
-                f"credentials not found at {creds_path} specified by environment variable 'AZURE_APPLICATION_CREDENTIALS'"
-            )
-        with open(creds_path) as f:
-            return json.load(f)
-
-    # this doesn't work, it may need to use this token to list storage account keys
-    # https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Storage/storageAccounts/{accountName}/listKeys?api-version=2019-04-01
-    # this may produce a sharedkey
-    # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#specifying-the-authorization-header
-
-    # # https://mikhail.io/2019/07/how-azure-cli-manages-access-tokens/
-    # default_creds_path = os.path.expanduser("~/.azure/accessTokens.json")
-    # if os.path.exists(default_creds_path):
-    #     with open(default_creds_path) as f:
-    #         tokens = json.load(f)
-    #         best_token = None
-    #         for token in tokens:
-    #             if best_token is None:
-    #                 best_token = token
-    #             else:
-    #                 if token["expiresOn"] > best_token["expiresOn"]:
-    #                     best_token = token
-    #         if best_token is not None:
-    #             return best_token
-    raise Exception(
-        "credentials not found, please create an account with 'az ad sp create-for-rbac --name <name>' and set the 'AZURE_APPLICATION_CREDENTIALS' environment variable to the path of the output from that command"
-    )
-
-
-def build_url(account: str, template: str, **data: str) -> str:
-    return common.build_url(
-        f"https://{account}.blob.core.windows.net", template, **data
-    )
-
-
-def create_access_token_request(scope: str) -> Request:
-    creds = _load_credentials()
-    return _create_token_request(creds=creds, scope=scope)
-
-
-def make_api_request(req: Request, access_token: str) -> Request:
-    if req.headers is None:
-        headers = {}
-    else:
-        headers = dict(req.headers).copy()
-    headers["Authorization"] = f"Bearer {access_token}"
-    # https://docs.microsoft.com/en-us/rest/api/storageservices/previous-azure-storage-service-versions
-    headers["x-ms-version"] = "2019-02-02"
-    headers["x-ms-date"] = datetime.datetime.utcnow().strftime(
-        "%a, %d %b %Y %H:%M:%S GMT"
-    )
-    result = copy.copy(req)
-    result.encoding = "xml"
-    result.headers = headers
-    return result
-
-
 def create_user_delegation_sas_request(account: str) -> Request:
     # https://docs.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas
     now = datetime.datetime.utcnow()
@@ -120,6 +114,30 @@ def create_user_delegation_sas_request(account: str) -> Request:
         method="POST",
         data={"KeyInfo": {"Start": start, "Expiry": expiry}},
     )
+
+
+def make_api_request(req: Request, auth: Tuple[str, str]) -> Request:
+    if req.headers is None:
+        headers = {}
+    else:
+        headers = dict(req.headers).copy()
+
+    # https://docs.microsoft.com/en-us/rest/api/storageservices/previous-azure-storage-service-versions
+    headers["x-ms-version"] = "2019-02-02"
+    headers["x-ms-date"] = datetime.datetime.utcnow().strftime(
+        "%a, %d %b %Y %H:%M:%S GMT"
+    )
+    result = copy.copy(req)
+    result.encoding = "xml"
+    result.headers = headers
+
+    kind, token = auth
+    if kind == SHARED_KEY:
+        # make sure we are signing the request that has the ms headers added already
+        headers["Authorization"] = sign_with_shared_key(result, token)
+    elif kind == OAUTH_TOKEN:
+        headers["Authorization"] = f"Bearer {token}"
+    return result
 
 
 def generate_signed_url(key: Mapping[str, str], url: str) -> Tuple[str, float]:
@@ -195,3 +213,60 @@ def split_url(path: str) -> Tuple[str, str, str]:
     assert url.scheme == "as"
     account, _, container = url.netloc.partition("-")
     return account, container, url.path[1:]
+
+
+def sign_with_shared_key(req: Request, key: str) -> str:
+    # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key
+    params_to_sign = []
+    if req.params is not None:
+        for name, value in req.params.items():
+            canonical_name = name.lower()
+            params_to_sign.append(f"{canonical_name}:{value}")
+
+    u = urllib.parse.urlparse(req.url)
+    storage_account = u.netloc.split(".")[0]
+    canonical_url = f"/{storage_account}/{u.path[1:]}"
+    canonicalized_resource = "\n".join([canonical_url] + list(sorted(params_to_sign)))
+
+    if req.headers is None:
+        headers = {}
+    else:
+        headers = dict(req.headers)
+
+    headers_to_sign = []
+    for name, value in headers.items():
+        canonical_name = name.lower()
+        canonical_value = re.sub(r"\s+", " ", value).strip()
+        if canonical_name.startswith("x-ms-"):
+            headers_to_sign.append(f"{canonical_name}:{canonical_value}")
+    canonicalized_headers = "\n".join(sorted(headers_to_sign))
+
+    content_length = headers.get("Content-Length", "")
+    if req.data is not None:
+        # TODO: encode data before doing this
+        content_length = str(len(req.data))
+
+    parts_to_sign = [
+        req.method,
+        headers.get("Content-Encoding", ""),
+        headers.get("Content-Language", ""),
+        content_length,
+        headers.get("Content-MD5", ""),
+        headers.get("Content-Type", ""),
+        headers.get("Date", ""),
+        headers.get("If-Modified-Since", ""),
+        headers.get("If-Match", ""),
+        headers.get("If-None-Match", ""),
+        headers.get("If-Unmodified-Since", ""),
+        headers.get("Range", ""),
+        canonicalized_headers,
+        canonicalized_resource,
+    ]
+    string_to_sign = "\n".join(parts_to_sign)
+    print(repr(string_to_sign))
+
+    signature = base64.b64encode(
+        hmac.digest(base64.b64decode(key), string_to_sign.encode("utf8"), "sha256")
+    ).decode("utf8")
+
+    return f"SharedKey {storage_account}:{signature}"

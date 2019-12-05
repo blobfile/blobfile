@@ -11,7 +11,6 @@ import binascii
 import glob as local_glob
 import re
 import collections
-import functools
 import threading
 import ssl
 from typing import (
@@ -51,6 +50,8 @@ assert STREAMING_CHUNK_SIZE % (256 * 1024) == 0
 # it looks like azure signed urls cannot exceed the lifetime of the token used
 # to create them, so don't keep the key around too long
 AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
+# these seem to be expired manually, but we don't currently detect that
+AZURE_SHARED_KEY_EXPIRATION_SECONDS = 24 * 60 * 60
 
 
 class Stat(NamedTuple):
@@ -103,6 +104,8 @@ def _get_http_pool() -> urllib3.PoolManager:
             context.load_default_certs()
             _http_pid = os.getpid()
             _http = urllib3.PoolManager(ssl_context=context)
+            # for debugging with mitmproxy
+            # _http = urllib3.ProxyManager('http://localhost:8080/', ssl_context=context)
 
         return _http
 
@@ -148,39 +151,107 @@ class TokenManager:
 
 def _google_get_access_token(key: str) -> Tuple[Any, float]:
     now = time.time()
-    build_req = functools.partial(
-        google.create_access_token_request,
-        ["https://www.googleapis.com/auth/devstorage.full_control"],
-    )
+
+    def build_req() -> Request:
+        return google.create_access_token_request(
+            scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
+        )
+
     with _execute_request(build_req) as resp:
         assert resp.status == 200, f"unexpected status {resp.status}"
         result = json.load(resp)
         return result["access_token"], now + float(result["expires_in"])
 
 
-def _azure_get_access_token(key: str) -> Tuple[Any, float]:
+def _azure_get_access_token(account: str) -> Tuple[Any, float]:
     now = time.time()
-    build_req = functools.partial(
-        azure.create_access_token_request, "https://storage.azure.com/"
-    )
-    with _execute_request(build_req) as resp:
-        assert resp.status == 200, f"unexpected status {resp.status}"
-        result = json.load(resp)
-        return result["access_token"], now + float(result["expires_in"])
+    creds = azure.load_credentials()
+    if "refreshToken" in creds:
+        # we have a refresh token, do a dance to get a shared key
+        def build_req() -> Request:
+            return azure.create_access_token_request(
+                creds=creds, scope="https://management.azure.com/"
+            )
+
+        with _execute_request(build_req) as resp:
+            assert resp.status == 200, f"unexpected status {resp.status}"
+            result = json.load(resp)
+            auth = (azure.OAUTH_TOKEN, result["access_token"])
+
+        # check each subscription for our account
+        for subscription_id in creds["subscriptions"]:
+            # get a list of storage accounts
+            def build_req() -> Request:
+                req = Request(
+                    method="GET",
+                    url=f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.Storage/storageAccounts",
+                    params={"api-version": "2019-04-01"},
+                )
+                # return somefunc(auth=auth)
+                return azure.make_api_request(req, auth=auth)
+
+            with _execute_request(build_req) as resp:
+                assert resp.status == 200, f"unexpected status {resp.status}"
+                out = json.load(resp)
+                # check if we found the storage account we are looking for
+                for obj in out["value"]:
+                    if obj["name"] == account:
+                        storage_account_id = obj["id"]
+                        break
+                else:
+                    continue
+
+            def build_req() -> Request:
+                req = Request(
+                    method="POST",
+                    url=f"https://management.azure.com{storage_account_id}/listKeys",
+                    params={"api-version": "2019-04-01"},
+                )
+                return azure.make_api_request(req, auth=auth)
+
+            with _execute_request(build_req) as resp:
+                assert resp.status == 200, f"unexpected status {resp.status}"
+                result = json.load(resp)
+                for key in result["keys"]:
+                    if key["permissions"] == "FULL":
+                        return (
+                            (azure.SHARED_KEY, key["value"]),
+                            now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
+                        )
+                else:
+                    raise Exception(
+                        f"storage account {account} did not have any keys defined"
+                    )
+
+        raise Exception(f"storage account id not found for storage account {account}")
+    else:
+        # we have a service account, get an oauth token
+        def build_req() -> Request:
+            return azure.create_access_token_request(
+                creds=creds, scope="https://storage.azure.com/"
+            )
+
+        with _execute_request(build_req) as resp:
+            assert resp.status == 200, f"unexpected status {resp.status}"
+            result = json.load(resp)
+            return (
+                (azure.OAUTH_TOKEN, result["access_token"]),
+                now + float(result["expires_in"]),
+            )
 
 
 def _azure_get_sas_token(account: str) -> Tuple[Any, float]:
-    def build_req():
+    def build_req() -> Request:
         req = azure.create_user_delegation_sas_request(account=account)
         return azure.make_api_request(
-            req, access_token=global_azure_access_token_manager.get_token(key="")
+            req, auth=global_azure_access_token_manager.get_token(key=account)
         )
 
-    resp = _execute_request(build_req)
-    assert resp.status == 200, f"unexpected status {resp.status}"
-    out = xmltodict.parse(resp)
-    t = time.time() + AZURE_SAS_TOKEN_EXPIRATION_SECONDS
-    return out["UserDelegationKey"], t
+    with _execute_request(build_req) as resp:
+        assert resp.status == 200, f"unexpected status {resp.status}"
+        out = xmltodict.parse(resp)
+        t = time.time() + AZURE_SAS_TOKEN_EXPIRATION_SECONDS
+        return out["UserDelegationKey"], t
 
 
 global_google_access_token_manager = TokenManager(_google_get_access_token)
@@ -202,16 +273,19 @@ def _exponential_sleep_generator(
 
 
 def _execute_azure_api_request(req: Request) -> urllib3.HTTPResponse:
-    def build_req():
+    u = urllib.parse.urlparse(req.url)
+    account = u.netloc.split(".")[0]
+
+    def build_req() -> Request:
         return azure.make_api_request(
-            req, access_token=global_azure_access_token_manager.get_token(key="")
+            req, auth=global_azure_access_token_manager.get_token(key=account)
         )
 
     return _execute_request(build_req)
 
 
 def _execute_google_api_request(req: Request) -> urllib3.HTTPResponse:
-    def build_req():
+    def build_req() -> Request:
         return google.make_api_request(
             req, access_token=global_google_access_token_manager.get_token(key="")
         )
@@ -1371,6 +1445,8 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
 
             with _execute_azure_api_request(req) as resp:
                 # https://docs.microsoft.com/en-us/rest/api/storageservices/append-block#remarks
+                print(resp.headers)
+                print(resp.read())
                 assert resp.status in (201, 412), f"unexpected status {resp.status}"
 
             # azure does not calculate md5s for us, we have to do that manually

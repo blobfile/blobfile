@@ -1031,6 +1031,13 @@ def _join2(a: str, b: str) -> str:
         assert "://" not in b
         parsed_a = urllib.parse.urlparse(a)
         newpath = urllib.parse.urljoin(parsed_a.path, b)
+        if not newpath.startswith("/"):
+            # urljoin has special handling for http:// urls
+            # urllib.parse.urljoin("http://a/b/c/d;p?q", "../../../g") works fine
+            # urllib.parse.urljoin("gs://a/b/c/d;p?q", "../../../g") does not
+            # urllib.parse.urljoin("/b/c/d;p?q", "../../../g") is just "g"
+            # see https://tools.ietf.org/html/rfc3986.html 5.4.2
+            newpath = "/" + newpath
         return f"{parsed_a.scheme}://{parsed_a.netloc}" + newpath
     else:
         raise Exception("unrecognized path")

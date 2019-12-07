@@ -322,7 +322,7 @@ def test_listdir(ctx):
         with bf.BlobFile(b_path, "wb") as w:
             w.write(contents)
         bf.makedirs(bf.join(dirpath, "c"))
-        assert sorted(list(bf.listdir(dirpath))) == ["a", "b", "c/"]
+        assert sorted(list(bf.listdir(dirpath))) == ["a", "b", "c"]
 
 
 @pytest.mark.parametrize(
@@ -340,8 +340,8 @@ def test_walk(ctx):
         with bf.BlobFile(b_path, "wb") as w:
             w.write(contents)
         assert list(bf.walk(dirpath)) == [
-            (dirpath, ["c/"], ["a"]),
-            (bf.join(dirpath, "c/"), ["d/"], []),
+            (dirpath, ["c"], ["a"]),
+            (bf.join(dirpath, "c/"), ["d"], []),
             (bf.join(dirpath, "c", "d/"), [], ["b"]),
         ]
 

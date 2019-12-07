@@ -719,8 +719,6 @@ def listdir(path: str) -> Iterator[str]:
     if _is_local_path(path):
         for d in os.listdir(path):
             if os.path.isdir(os.path.join(path, d)):
-                yield d + "/"
-            else:
                 yield d
     elif _is_google_path(path):
         bucket, blob = google.split_url(path)
@@ -731,7 +729,11 @@ def listdir(path: str) -> Iterator[str]:
         )
         for result in it:
             for name in _google_get_names(result, blob):
-                yield name[len(blob) :]
+                name = name[len(blob) :]
+                if name.endswith("/"):
+                    yield name[:-1]
+                else:
+                    yield name
     elif _is_azure_path(path):
         account, container, blob = azure.split_url(path)
         it = _create_azure_page_iterator(
@@ -741,7 +743,11 @@ def listdir(path: str) -> Iterator[str]:
         )
         for result in it:
             for name in _azure_get_names(result, blob):
-                yield name[len(blob) :]
+                name = name[len(blob) :]
+                if name.endswith("/"):
+                    yield name[:-1]
+                else:
+                    yield name
     else:
         raise Exception("unrecognized path")
 
@@ -966,7 +972,7 @@ def walk(
                 for name in get_names(result, blob):
                     name = name[len(blob) :]
                     if name.endswith("/"):
-                        dirnames.append(name)
+                        dirnames.append(name[:-1])
                     else:
                         filenames.append(name)
             yield (cur, dirnames, filenames)

@@ -1469,9 +1469,6 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             start += AZURE_MAX_CHUNK_SIZE
 
 
-MODE = Literal["r", "rb", "w", "wb"]
-
-
 @overload
 def BlobFile(path: str, mode: Literal["rb"], buffer_size: int = ...) -> BinaryIO:
     ...
@@ -1493,7 +1490,7 @@ def BlobFile(path: str, mode: Literal["w"], buffer_size: int = ...) -> TextIO:
 
 
 def BlobFile(
-    path: str, mode: MODE = "r", buffer_size: int = io.DEFAULT_BUFFER_SIZE
+    path: str, mode: Literal["r", "rb", "w", "wb"] = "r", buffer_size: int = io.DEFAULT_BUFFER_SIZE
 ) -> IO:
     """
     Open a local or remote file for reading or writing
@@ -1540,7 +1537,7 @@ class _ProxyFile(io.FileIO):
     def __init__(
         self,
         local_path: str,
-        mode: MODE,
+        mode: Literal["r", "rb", "w", "wb", "a", "ab"],
         tmp_dir: Optional[str],
         remote_path: Optional[str],
     ) -> None:
@@ -1556,7 +1553,7 @@ class _ProxyFile(io.FileIO):
             return
 
         super().close()
-        if self._remote_path is not None and self._mode in ("w", "wb"):
+        if self._remote_path is not None and self._mode in ("w", "wb", "a", "ab"):
             copy(self._local_path, self._remote_path, overwrite=True)
         if self._tmp_dir is not None:
             os.remove(self._local_path)
@@ -1580,6 +1577,13 @@ def LocalBlobFile(
 
 @overload
 def LocalBlobFile(
+    path: str, mode: Literal["ab"], cache_dir: Optional[str] = ...
+) -> BinaryIO:
+    ...
+
+
+@overload
+def LocalBlobFile(
     path: str, mode: Literal["r"], cache_dir: Optional[str] = ...
 ) -> TextIO:
     ...
@@ -1592,7 +1596,14 @@ def LocalBlobFile(
     ...
 
 
-def LocalBlobFile(path: str, mode: MODE = "r", cache_dir: Optional[str] = None) -> IO:
+@overload
+def LocalBlobFile(
+    path: str, mode: Literal["a"], cache_dir: Optional[str] = ...
+) -> TextIO:
+    ...
+
+
+def LocalBlobFile(path: str, mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r", cache_dir: Optional[str] = None) -> IO:
     """
     Like BlobFile() but in the case that the path is a remote file, all operations take place
     on a local copy of that file.
@@ -1610,11 +1621,16 @@ def LocalBlobFile(path: str, mode: MODE = "r", cache_dir: Optional[str] = None) 
 
     if _is_google_path(path) or _is_azure_path(path):
         remote_path = path
-        if mode in ("r", "rb"):
+        if mode in ("a", "ab"):
+            tmp_dir = tempfile.mkdtemp()
+            local_path = join(tmp_dir, basename(path))
+            if exists(remote_path):
+                copy(remote_path, local_path) 
+        elif mode in ("r", "rb"):
             if cache_dir is None:
                 tmp_dir = tempfile.mkdtemp()
                 local_path = join(tmp_dir, basename(path))
-                copy(remote_path, local_path, overwrite=True)
+                copy(remote_path, local_path)
             else:
                 path_md5 = hashlib.md5(path.encode("utf8")).hexdigest()
                 lock_path = join(cache_dir, f"{path_md5}.lock")

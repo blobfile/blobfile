@@ -230,6 +230,21 @@ def test_read_write(ctx):
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
+def test_append(ctx):
+    contents = b"meow!\n"
+    additional_contents = b"purr\n"
+    with ctx() as path:
+        with bf.LocalBlobFile(path, "ab") as w:
+            w.write(contents)
+        with bf.LocalBlobFile(path, "ab") as w:
+            w.write(additional_contents)
+        with bf.BlobFile(path, "rb") as r:
+            assert r.read() == contents + additional_contents
+
+
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_stat(ctx):
     contents = b"meow!"
     with ctx() as path:

@@ -1,3 +1,9 @@
+# https://github.com/tensorflow/tensorflow/issues/27023
+import warnings
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import random
 import string
 import tempfile
@@ -47,7 +53,7 @@ def _get_temp_gcs_path():
 def _get_temp_as_path():
     random_id = "".join(random.choice(string.ascii_lowercase) for i in range(16))
     path = f"as://{AS_TEST_BUCKET}/" + random_id
-    account, _sep, container = AS_TEST_BUCKET.partition("-")
+    account, _, container = AS_TEST_BUCKET.partition("-")
     yield path + "/file.name"
     sp.run(
         [
@@ -135,15 +141,19 @@ def _read_contents(path):
 
 def test_basename():
     testcases = [
+        ("/", ""),
+        ("a/", ""),
         ("a", "a"),
         ("a/b", "b"),
         ("", ""),
         ("gs://a", ""),
         ("gs://a/", ""),
+        ("gs://a/b/", ""),
         ("gs://a/b", "b"),
         ("gs://a/b/c/test.filename", "test.filename"),
         ("as://a", ""),
         ("as://a/", ""),
+        ("as://a/b/", ""),
         ("as://a/b", "b"),
         ("as://a/b/c/test.filename", "test.filename"),
     ]
@@ -155,20 +165,20 @@ def test_basename():
 def test_dirname():
     testcases = [
         ("a", ""),
-        ("a/b", "a/"),
-        ("a/b/c", "a/b/"),
-        ("a/b/c/", "a/b/c/"),
+        ("a/b", "a"),
+        ("a/b/c", "a/b"),
+        ("a/b/c/", "a/b/c"),
         ("", ""),
-        ("gs://a", "gs://a/"),
-        ("gs://a/", "gs://a/"),
-        ("gs://a/b", "gs://a/"),
-        ("gs://a/b/c/test.filename", "gs://a/b/c/"),
-        ("gs://a/b/c/", "gs://a/b/"),
-        ("as://a", "as://a/"),
-        ("as://a/", "as://a/"),
-        ("as://a/b", "as://a/"),
-        ("as://a/b/c/test.filename", "as://a/b/c/"),
-        ("as://a/b/c/", "as://a/b/"),
+        ("gs://a", "gs://a"),
+        ("gs://a/", "gs://a"),
+        ("gs://a/b", "gs://a"),
+        ("gs://a/b/c/test.filename", "gs://a/b/c"),
+        ("gs://a/b/c/", "gs://a/b"),
+        ("as://a", "as://a"),
+        ("as://a/", "as://a"),
+        ("as://a/b", "as://a"),
+        ("as://a/b/c/test.filename", "as://a/b/c"),
+        ("as://a/b/c/", "as://a/b"),
     ]
     for input_, desired_output in testcases:
         actual_output = bf.dirname(input_)
@@ -208,7 +218,7 @@ def test_get_url(ctx):
     contents = b"meow!"
     with ctx() as path:
         _write_contents(path, contents)
-        url, _expiration = bf.get_url(path)
+        url, _ = bf.get_url(path)
         assert urllib.request.urlopen(url).read() == contents
 
 
@@ -356,8 +366,8 @@ def test_walk(ctx):
             w.write(contents)
         assert list(bf.walk(dirpath)) == [
             (dirpath, ["c"], ["a"]),
-            (bf.join(dirpath, "c/"), ["d"], []),
-            (bf.join(dirpath, "c", "d/"), [], ["b"]),
+            (bf.join(dirpath, "c"), ["d"], []),
+            (bf.join(dirpath, "c", "d"), [], ["b"]),
         ]
 
 
@@ -377,7 +387,7 @@ def test_glob(ctx):
 
         def assert_listing_equal(actual, desired):
             actual = [bf.basename(p) for p in sorted(list(bf.glob(actual)))]
-            assert actual == desired
+            assert actual == desired, f"{actual} != {desired}"
 
         assert_listing_equal(bf.join(dirpath, "*b"), ["ab", "bb"])
         assert_listing_equal(bf.join(dirpath, "a*"), ["ab"])
@@ -393,8 +403,74 @@ def test_glob(ctx):
         with bf.BlobFile(path, "wb") as f:
             f.write(contents)
 
+        # TODO: test implicit dirs
+
         assert_listing_equal(bf.join(dirpath, "*/test.txt"), ["test.txt"])
         assert_listing_equal(bf.join(dirpath, "*/test"), [])
+        assert_listing_equal(bf.join(dirpath, "subdir/test.txt"), ["test.txt"])
+
+        # TODO: make sure directories don't end with slash
+        # directories
+        assert_listing_equal(bf.join(dirpath, "*"), ["ab", "bb", "subdir"])
+        assert_listing_equal(bf.join(dirpath, "subdir"), ["subdir"])
+        assert_listing_equal(bf.join(dirpath, "subdir/"), ["subdir"])
+        assert_listing_equal(bf.join(dirpath, "*dir"), ["subdir"])
+
+
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
+def test_rmtree(ctx):
+    contents = b"meow!"
+    with ctx() as path:
+        root = bf.dirname(path)
+        destroy_path = bf.join(root, "destroy")
+        bf.makedirs(destroy_path)
+        save_path = bf.join(root, "save")
+        bf.makedirs(save_path)
+
+        # implicit dir
+        if not "://" in path:
+            bf.makedirs(bf.join(destroy_path, "adir"))
+        with bf.BlobFile(bf.join(destroy_path, "adir/b"), "wb") as w:
+            w.write(contents)
+
+        # explicit dir
+        bf.makedirs(bf.join(destroy_path, "bdir"))
+        with bf.BlobFile(bf.join(destroy_path, "bdir/b"), "wb") as w:
+            w.write(contents)
+
+        bf.makedirs(bf.join(save_path, "somedir"))
+        with bf.BlobFile(bf.join(save_path, "somefile"), "wb") as w:
+            w.write(contents)
+
+        def assert_listing_equal(path, desired):
+            actual = list(bf.walk(path))
+            # ordering of os walk is weird, only compare sorted order
+            assert sorted(actual) == sorted(desired), f"{actual} != {desired}"
+
+        assert_listing_equal(
+            root,
+            [
+                (root, ["destroy", "save"], []),
+                (destroy_path, ["adir", "bdir"], []),
+                (bf.join(destroy_path, "adir"), [], ["b"]),
+                (bf.join(destroy_path, "bdir"), [], ["b"]),
+                (save_path, ["somedir"], ["somefile"]),
+                (bf.join(save_path, "somedir"), [], []),
+            ],
+        )
+
+        bf.rmtree(destroy_path)
+
+        assert_listing_equal(
+            root,
+            [
+                (root, ["save"], []),
+                (save_path, ["somedir"], ["somefile"]),
+                (bf.join(save_path, "somedir"), [], []),
+            ],
+        )
 
 
 def test_copy():

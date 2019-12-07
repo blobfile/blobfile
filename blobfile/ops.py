@@ -10,6 +10,7 @@ import json
 import binascii
 import glob as local_glob
 import re
+import shutil
 import collections
 import threading
 import ssl
@@ -518,7 +519,7 @@ def _create_azure_page_iterator(
         p["marker"] = result["NextMarker"]
 
 
-def _google_get_names(result: Mapping[str, Any], skip_item_name: str) -> Iterator[str]:
+def _google_get_names(result: Mapping[str, Any], skip_item_name: str = "") -> Iterator[str]:
     if "prefixes" in result:
         for p in result["prefixes"]:
             yield p
@@ -529,7 +530,7 @@ def _google_get_names(result: Mapping[str, Any], skip_item_name: str) -> Iterato
             yield item["name"]
 
 
-def _azure_get_names(result: Mapping[str, Any], skip_item_name: str) -> Iterator[str]:
+def _azure_get_names(result: Mapping[str, Any], skip_item_name: str= "") -> Iterator[str]:
     blobs = result["Blobs"]
     if "Blob" in blobs:
         if isinstance(blobs["Blob"], dict):
@@ -597,11 +598,13 @@ def exists(path: str) -> bool:
 
 def glob(pattern: str) -> Iterator[str]:
     """
-    Find files matching a pattern, only supports a single "*" operator
+    Find files and directories matching a pattern, only supports a single "*" operator
     """
     assert "?" not in pattern and "[" not in pattern and "]" not in pattern
     if _is_local_path(pattern):
         for filepath in local_glob.glob(pattern):
+            if filepath.endswith(os.sep):
+                filepath = filepath[:-1]
             yield filepath
     elif _is_google_path(pattern) or _is_azure_path(pattern):
         if "*" in pattern:
@@ -635,6 +638,11 @@ def glob(pattern: str) -> Iterator[str]:
             for result in it:
                 for name in get_names(result, blob_prefix):
                     filepath = join(root, name)
+                    # TODO: if pattern had a /, only match against directories
+                    # TODO: does this match against implicit directories? seems unlikely
+                    if filepath.endswith("/"):
+                        filepath = filepath[:-1]
+                    print("name", name, "filepath", filepath)
                     if bool(re_pattern.match(filepath)):
                         yield filepath
         else:
@@ -921,6 +929,65 @@ def stat(path: str) -> Stat:
         raise Exception("unrecognized path")
 
 
+def rmtree(path: str) -> None:
+    """
+    Delete a directory tree
+    """
+    if not isdir(path):
+        raise NotADirectoryError(f"The directory name is invalid: '{path}'")
+
+    if _is_local_path(path):
+        shutil.rmtree(path)
+    elif _is_google_path(path):
+        if not path.endswith("/"):
+            path += "/"
+        bucket, blob = google.split_url(path)
+        it = _create_google_page_iterator(
+            url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+            method="GET",
+            params=dict(prefix=blob),
+        )
+        for result in it:
+            for item in _google_get_names(result):
+                req = Request(
+                    url=google.build_url(
+                        "/storage/v1/b/{bucket}/o/{object}",
+                        bucket=bucket,
+                        object=item,
+                    ),
+                    method="DELETE",
+                )
+                with _execute_google_api_request(req) as resp:
+                    # 404 is allowed in case a failed request successfully deleted the file
+                    # before erroring out
+                    assert resp.status in (204, 404), f"unexpected status {resp.status}"
+    elif _is_azure_path(path):
+        if not path.endswith("/"):
+            path += "/"
+        account, container, blob = azure.split_url(path)
+        it = _create_azure_page_iterator(
+            url=azure.build_url(account, "/{container}", container=container),
+            method="GET",
+            params=dict(
+                comp="list", restype="container", prefix=blob
+            ),
+        )
+        for result in it:
+            for item in _azure_get_names(result):
+                req = Request(
+                    url=azure.build_url(
+                        account, "/{container}/{blob}", container=container, blob=item
+                    ),
+                    method="DELETE",
+                )
+                with _execute_azure_api_request(req) as resp:
+                    # 404 is allowed in case a failed request successfully deleted the file
+                    # before erroring out
+                    assert resp.status in (202, 404), f"unexpected status {resp.status}"
+    else:
+        raise Exception("unrecognized path")
+
+
 def walk(
     top: str, topdown: bool = True, onerror: Optional[Callable] = None
 ) -> Iterator[Tuple[str, Sequence[str], Sequence[str]]]:
@@ -931,21 +998,21 @@ def walk(
         return
 
     if _is_local_path(top):
-        for (dirpath, dirnames, filenames) in os.walk(
+        for root, dirnames, filenames in os.walk(
             top=top, topdown=topdown, onerror=onerror
         ):
-            assert isinstance(dirpath, str)
-            if not dirpath.endswith(os.sep):
-                dirpath += os.sep
-            yield (dirpath, [d + os.sep for d in dirnames], filenames)
+            assert isinstance(root, str)
+            if root.endswith(os.sep):
+                root = root[:-1]
+            yield (root, sorted(dirnames), sorted(filenames))
     elif _is_google_path(top) or _is_azure_path(top):
         assert topdown
-        if not top.endswith("/"):
-            top += "/"
         dq = collections.deque()
         dq.append(top)
         while len(dq) > 0:
             cur = dq.popleft()
+            if not cur.endswith("/"):
+                cur += "/"
             if _is_google_path(top):
                 bucket, blob = google.split_url(cur)
                 it = _create_google_page_iterator(
@@ -975,7 +1042,7 @@ def walk(
                         dirnames.append(name[:-1])
                     else:
                         filenames.append(name)
-            yield (cur, dirnames, filenames)
+            yield (cur[:-1], dirnames, filenames)
             dq.extend(join(cur, dirname) for dirname in dirnames)
     else:
         raise Exception("unrecognized path")
@@ -1006,16 +1073,14 @@ def dirname(path: str) -> str:
         if urlpath.endswith("/"):
             urlpath = urlpath[:-1]
 
+        base = f"{url.scheme}://{url.netloc}"
         if "/" in urlpath:
-            urlpath = "/".join(urlpath.split("/")[:-1]) + "/"
+            urlpath = "/".join(urlpath.split("/")[:-1])
+            return f"{base}/{urlpath}"
         else:
-            urlpath = ""
-        return f"{url.scheme}://{url.netloc}/{urlpath}"
+            return base
     else:
-        dn = os.path.dirname(path)
-        if dn != "":
-            dn += os.sep
-        return dn
+        return os.path.dirname(path)
 
 
 def join(a: str, *args: str) -> str:
@@ -1490,7 +1555,9 @@ def BlobFile(path: str, mode: Literal["w"], buffer_size: int = ...) -> TextIO:
 
 
 def BlobFile(
-    path: str, mode: Literal["r", "rb", "w", "wb"] = "r", buffer_size: int = io.DEFAULT_BUFFER_SIZE
+    path: str,
+    mode: Literal["r", "rb", "w", "wb"] = "r",
+    buffer_size: int = io.DEFAULT_BUFFER_SIZE,
 ) -> IO:
     """
     Open a local or remote file for reading or writing
@@ -1603,7 +1670,11 @@ def LocalBlobFile(
     ...
 
 
-def LocalBlobFile(path: str, mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r", cache_dir: Optional[str] = None) -> IO:
+def LocalBlobFile(
+    path: str,
+    mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r",
+    cache_dir: Optional[str] = None,
+) -> IO:
     """
     Like BlobFile() but in the case that the path is a remote file, all operations take place
     on a local copy of that file.
@@ -1617,7 +1688,7 @@ def LocalBlobFile(path: str, mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r
     assert not path.endswith("/")
     remote_path = None
     tmp_dir = None
-    assert mode in ("w", "wb", "r", "rb")
+    assert mode in ("w", "wb", "r", "rb", "a", "ab")
 
     if _is_google_path(path) or _is_azure_path(path):
         remote_path = path
@@ -1625,7 +1696,7 @@ def LocalBlobFile(path: str, mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r
             tmp_dir = tempfile.mkdtemp()
             local_path = join(tmp_dir, basename(path))
             if exists(remote_path):
-                copy(remote_path, local_path) 
+                copy(remote_path, local_path)
         elif mode in ("r", "rb"):
             if cache_dir is None:
                 tmp_dir = tempfile.mkdtemp()

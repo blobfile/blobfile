@@ -385,12 +385,14 @@ def test_glob(ctx):
         with bf.BlobFile(b_path, "wb") as w:
             w.write(contents)
 
-        def assert_listing_equal(actual, desired):
-            actual = [bf.basename(p) for p in sorted(list(bf.glob(actual)))]
+        def assert_listing_equal(path, desired):
+            desired = sorted([bf.join(dirpath, p) for p in desired])
+            actual = sorted(list(bf.glob(path)))
             assert actual == desired, f"{actual} != {desired}"
 
         assert_listing_equal(bf.join(dirpath, "*b"), ["ab", "bb"])
         assert_listing_equal(bf.join(dirpath, "a*"), ["ab"])
+        assert_listing_equal(bf.join(dirpath, "ab*"), ["ab"])
         assert_listing_equal(bf.join(dirpath, "*"), ["ab", "bb"])
         assert_listing_equal(bf.join(dirpath, "bb"), ["bb"])
 
@@ -399,22 +401,23 @@ def test_glob(ctx):
         with bf.BlobFile(path, "wb") as f:
             f.write(contents)
         path = bf.join(dirpath, "subdir", "subsubdir", "test.txt")
-        bf.makedirs(bf.dirname(path))
+        if "://" not in path:
+            # implicit directory
+            bf.makedirs(bf.dirname(path))
         with bf.BlobFile(path, "wb") as f:
             f.write(contents)
 
-        # TODO: test implicit dirs
-
-        assert_listing_equal(bf.join(dirpath, "*/test.txt"), ["test.txt"])
+        assert_listing_equal(bf.join(dirpath, "*/test.txt"), ["subdir/test.txt"])
         assert_listing_equal(bf.join(dirpath, "*/test"), [])
-        assert_listing_equal(bf.join(dirpath, "subdir/test.txt"), ["test.txt"])
+        assert_listing_equal(bf.join(dirpath, "subdir/test.txt"), ["subdir/test.txt"])
 
-        # TODO: make sure directories don't end with slash
         # directories
         assert_listing_equal(bf.join(dirpath, "*"), ["ab", "bb", "subdir"])
         assert_listing_equal(bf.join(dirpath, "subdir"), ["subdir"])
         assert_listing_equal(bf.join(dirpath, "subdir/"), ["subdir"])
         assert_listing_equal(bf.join(dirpath, "*dir"), ["subdir"])
+        assert_listing_equal(bf.join(dirpath, "subdir/*dir"), ["subdir/subsubdir"])
+        assert_listing_equal(bf.join(dirpath, "subdir/*dir/"), ["subdir/subsubdir"])
 
 
 @pytest.mark.parametrize(

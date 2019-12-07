@@ -519,7 +519,9 @@ def _create_azure_page_iterator(
         p["marker"] = result["NextMarker"]
 
 
-def _google_get_names(result: Mapping[str, Any], skip_item_name: str = "") -> Iterator[str]:
+def _google_get_names(
+    result: Mapping[str, Any], skip_item_name: str = ""
+) -> Iterator[str]:
     if "prefixes" in result:
         for p in result["prefixes"]:
             yield p
@@ -530,7 +532,9 @@ def _google_get_names(result: Mapping[str, Any], skip_item_name: str = "") -> It
             yield item["name"]
 
 
-def _azure_get_names(result: Mapping[str, Any], skip_item_name: str= "") -> Iterator[str]:
+def _azure_get_names(
+    result: Mapping[str, Any], skip_item_name: str = ""
+) -> Iterator[str]:
     blobs = result["Blobs"]
     if "Blob" in blobs:
         if isinstance(blobs["Blob"], dict):
@@ -631,25 +635,42 @@ def glob(pattern: str) -> Iterator[str]:
                 root = f"as://{account}-{container}"
                 get_names = _azure_get_names
 
-            # * should not match /, but this is hard to do with fnmatch so use re
             re_pattern = re.compile(
-                re.escape(prefix) + r"[^/]*" + re.escape(suffix) + r"$"
-            )
+                    re.escape(prefix) + r"[^/]*" + re.escape(suffix) + r"/?$"
+                )
+            seen = set()
             for result in it:
-                for name in get_names(result, blob_prefix):
-                    filepath = join(root, name)
-                    # TODO: if pattern had a /, only match against directories
-                    # TODO: does this match against implicit directories? seems unlikely
-                    if filepath.endswith("/"):
-                        filepath = filepath[:-1]
-                    print("name", name, "filepath", filepath)
-                    if bool(re_pattern.match(filepath)):
-                        yield filepath
+                for name in get_names(result):
+                    # expand out implicit directories in case the glob matches one of those
+                    parts = name.split("/")
+                    cur = ""
+                    for i, part in enumerate(parts):
+                        cur += part
+                        if i < len(parts) - 1:
+                            cur += "/"
+                        # since we're looking at implicit directories, don't double
+                        # process the same item multiple times
+                        if cur in seen:
+                            continue
+                        seen.add(cur)
+                        filepath = join(root, cur)
+                        if bool(re_pattern.match(filepath)):
+                            if filepath == prefix and filepath.endswith("/"):
+                                # we matched the parent directory
+                                continue
+                            yield _strip_slash(filepath)
         else:
             if exists(pattern):
-                yield pattern
+                yield _strip_slash(pattern)
     else:
         raise Exception("unrecognized path")
+
+
+def _strip_slash(path: str) -> str:
+    if path.endswith("/"):
+        return path[:-1]
+    else:
+        return path
 
 
 def isdir(path: str) -> bool:
@@ -737,11 +758,7 @@ def listdir(path: str) -> Iterator[str]:
         )
         for result in it:
             for name in _google_get_names(result, blob):
-                name = name[len(blob) :]
-                if name.endswith("/"):
-                    yield name[:-1]
-                else:
-                    yield name
+                yield _strip_slash(name[len(blob) :])
     elif _is_azure_path(path):
         account, container, blob = azure.split_url(path)
         it = _create_azure_page_iterator(
@@ -751,11 +768,7 @@ def listdir(path: str) -> Iterator[str]:
         )
         for result in it:
             for name in _azure_get_names(result, blob):
-                name = name[len(blob) :]
-                if name.endswith("/"):
-                    yield name[:-1]
-                else:
-                    yield name
+                yield _strip_slash(name[len(blob) :])
     else:
         raise Exception("unrecognized path")
 
@@ -951,9 +964,7 @@ def rmtree(path: str) -> None:
             for item in _google_get_names(result):
                 req = Request(
                     url=google.build_url(
-                        "/storage/v1/b/{bucket}/o/{object}",
-                        bucket=bucket,
-                        object=item,
+                        "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=item
                     ),
                     method="DELETE",
                 )
@@ -968,9 +979,7 @@ def rmtree(path: str) -> None:
         it = _create_azure_page_iterator(
             url=azure.build_url(account, "/{container}", container=container),
             method="GET",
-            params=dict(
-                comp="list", restype="container", prefix=blob
-            ),
+            params=dict(comp="list", restype="container", prefix=blob),
         )
         for result in it:
             for item in _azure_get_names(result):
@@ -1042,7 +1051,7 @@ def walk(
                         dirnames.append(name[:-1])
                     else:
                         filenames.append(name)
-            yield (cur[:-1], dirnames, filenames)
+            yield (_strip_slash(cur), dirnames, filenames)
             dq.extend(join(cur, dirname) for dirname in dirnames)
     else:
         raise Exception("unrecognized path")
@@ -1069,9 +1078,7 @@ def dirname(path: str) -> str:
     """
     if _is_google_path(path) or _is_azure_path(path):
         url = urllib.parse.urlparse(path)
-        urlpath = url.path[1:]
-        if urlpath.endswith("/"):
-            urlpath = urlpath[:-1]
+        urlpath = _strip_slash(url.path[1:])
 
         base = f"{url.scheme}://{url.netloc}"
         if "/" in urlpath:

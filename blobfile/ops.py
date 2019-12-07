@@ -636,8 +636,8 @@ def glob(pattern: str) -> Iterator[str]:
                 get_names = _azure_get_names
 
             re_pattern = re.compile(
-                    re.escape(prefix) + r"[^/]*" + re.escape(suffix) + r"/?$"
-                )
+                re.escape(prefix) + r"[^/]*" + re.escape(suffix) + r"/?$"
+            )
             seen = set()
             for result in it:
                 for name in get_names(result):
@@ -746,9 +746,8 @@ def listdir(path: str) -> Iterator[str]:
     if not isdir(path):
         raise NotADirectoryError(f"The directory name is invalid: '{path}'")
     if _is_local_path(path):
-        for d in os.listdir(path):
-            if os.path.isdir(os.path.join(path, d)):
-                yield d
+        for d in sorted(os.listdir(path)):
+            yield d
     elif _is_google_path(path):
         bucket, blob = google.split_url(path)
         it = _create_google_page_iterator(

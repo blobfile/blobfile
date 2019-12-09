@@ -21,8 +21,16 @@ with bf.BlobFile("gs://my-bucket-name/cats", "wb") as w:
 
 Here are the functions:
 
-* `BlobFile` - like `open()` but works with `gs://` paths too
-* `LocalBlobFile` - like `BlobFile()` but operations take place on a local file.  When reading, this is done by downloading the file during the constructor.  When writing, this means uploading the file on `close()` or during destruction.  You can pass a `cache_dir` parameter to cache files for reading.  You are reponsible for cleaning up the cache directory.
+* `BlobFile` - like `open()` but works with `gs://` paths too, data is streamed to/from the remote file.
+    * Reading is done without downloading the entire remote file.
+    * Writing is done to the remote file directly, but only in chunks of a few MB in size.  `flush()` will not cause an early write.
+    * Appending is not implemented.
+    * You can specify a `buffer_size` on creation to buffer more data and potentially make reading more efficient.
+* `LocalBlobFile` - like `BlobFile()` but operations take place on a local file.
+    * When reading, this is done by downloading the file during the constructor.
+    * When writing, this means uploading the file on `close()` or during destruction.
+    * When appending, the means downloading the file during construction and uploading on `close()`.
+    * You can pass a `cache_dir` parameter to cache files for reading.  You are reponsible for cleaning up the cache directory.
 
 Some are inspired by existing `os.path` and `shutil` functions:
 

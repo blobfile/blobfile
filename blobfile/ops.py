@@ -43,11 +43,14 @@ from .common import Request
 EARLY_EXPIRATION_SECONDS = 5 * 60
 CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 30
-HASH_CHUNK_SIZE = 65536
-STREAMING_CHUNK_SIZE = 2 ** 20
-AZURE_MAX_CHUNK_SIZE = 4 * 2 ** 20
+CHUNK_SIZE = 2 ** 20
+GOOGLE_CHUNK_SIZE = 2 ** 20
 # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
-assert STREAMING_CHUNK_SIZE % (256 * 1024) == 0
+assert GOOGLE_CHUNK_SIZE % (256 * 1024) == 0
+# https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-append-blobs
+# the chunk size determines the maximum size of an individual file for
+# append blobs, 4MB x 50,000 blocks = 195GB(?) according to the docs
+AZURE_MAX_CHUNK_SIZE = 4 * 2 ** 20
 # it looks like azure signed urls cannot exceed the lifetime of the token used
 # to create them, so don't keep the key around too long
 AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
@@ -454,7 +457,7 @@ def copy(
     with BlobFile(src, "rb") as src_f, BlobFile(dst, "wb") as dst_f:
         m = hashlib.md5()
         while True:
-            block = src_f.read(STREAMING_CHUNK_SIZE)
+            block = src_f.read(CHUNK_SIZE)
             if block == b"":
                 break
             if return_md5:
@@ -1145,7 +1148,7 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
 def _block_md5(f: BinaryIO) -> bytes:
     m = hashlib.md5()
     while True:
-        block = f.read(STREAMING_CHUNK_SIZE)
+        block = f.read(CHUNK_SIZE)
         if block == b"":
             break
         m.update(block)
@@ -1379,11 +1382,12 @@ class _AzureStreamingReadFile(_StreamingReadFile):
 
 
 class _StreamingWriteFile(io.BufferedIOBase):
-    def __init__(self) -> None:
+    def __init__(self, chunk_size: int) -> None:
         # current writing byte offset in the file
         self._offset = 0
         # contents waiting to be uploaded
         self._buf = b""
+        self._chunk_size = chunk_size
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         raise NotImplementedError
@@ -1392,7 +1396,7 @@ class _StreamingWriteFile(io.BufferedIOBase):
         if finalize:
             size = len(self._buf)
         else:
-            size = (len(self._buf) // STREAMING_CHUNK_SIZE) * STREAMING_CHUNK_SIZE
+            size = (len(self._buf) // self._chunk_size) * self._chunk_size
             assert size > 0
         chunk = self._buf[:size]
         self._buf = self._buf[size:]
@@ -1416,7 +1420,7 @@ class _StreamingWriteFile(io.BufferedIOBase):
 
     def write(self, b: bytes) -> int:
         self._buf += b
-        while len(self._buf) > STREAMING_CHUNK_SIZE:
+        while len(self._buf) > self._chunk_size:
             self._upload_buf()
         return len(b)
 
@@ -1447,7 +1451,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
         with _execute_google_api_request(req) as resp:
             assert resp.status == 200, f"unexpected status {resp.status}"
             self._upload_url = resp.headers["Location"]
-        super().__init__()
+        super().__init__(chunk_size=GOOGLE_CHUNK_SIZE)
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         start = self._offset
@@ -1498,7 +1502,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                     pass
             assert resp.status == 201, f"unexpected status {resp.status}"
         self._md5 = hashlib.md5()
-        super().__init__()
+        super().__init__(chunk_size=AZURE_MAX_CHUNK_SIZE)
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         if len(chunk) == 0:

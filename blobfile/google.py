@@ -128,7 +128,7 @@ def create_access_token_request(scopes: List[str]) -> Request:
         raise Exception("credentials not recognized")
 
 
-def have_credentials():
+def have_credentials() -> bool:
     _, err = _load_credentials()
     return err is None
 

@@ -781,7 +781,6 @@ def makedirs(path: str) -> None:
     """
     if _is_local_path(path):
         os.makedirs(path, exist_ok=True)
-        return
     elif _is_google_path(path):
         if not path.endswith("/"):
             path += "/"
@@ -1713,6 +1712,8 @@ def LocalBlobFile(
                 local_path = join(tmp_dir, basename(path))
                 copy(remote_path, local_path)
             else:
+                assert _is_local_path(cache_dir), "cache dir must be a local path"
+                makedirs(cache_dir)
                 path_md5 = hashlib.md5(path.encode("utf8")).hexdigest()
                 lock_path = join(cache_dir, f"{path_md5}.lock")
                 tmp_path = join(cache_dir, f"{path_md5}.tmp")

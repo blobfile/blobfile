@@ -301,7 +301,7 @@ def _execute_google_api_request(req: Request) -> urllib3.HTTPResponse:
 
 def _execute_request(
     build_req: Callable[[], Request],
-    retry_statuses: Sequence[int] = (500, 502, 503, 504),
+    retry_statuses: Sequence[int] = (429, 500, 502, 503, 504),
 ) -> urllib3.HTTPResponse:
     for attempt, backoff in enumerate(_exponential_sleep_generator(0.1, maximum=60.0)):
         req = build_req()

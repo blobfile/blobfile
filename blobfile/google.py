@@ -80,15 +80,16 @@ def _refresh_access_token_request(
     )
 
 
-def _load_credentials() -> Mapping[str, Any]:
+def _load_credentials() -> Tuple[Mapping[str, Any], Optional[str]]:
     if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
         creds_path = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
         if not os.path.exists(creds_path):
-            raise Exception(
-                f"credentials not found at {creds_path} specified by environment variable 'GOOGLE_APPLICATION_CREDENTIALS'"
+            return (
+                {},
+                f"credentials not found at {creds_path} specified by environment variable 'GOOGLE_APPLICATION_CREDENTIALS'",
             )
         with open(creds_path) as f:
-            return json.load(f)
+            return json.load(f), None
     if platform.system() == "Windows":
         # https://www.jhanley.com/google-cloud-application-default-credentials/
         default_creds_path = os.path.join(
@@ -101,14 +102,17 @@ def _load_credentials() -> Mapping[str, Any]:
 
     if os.path.exists(default_creds_path):
         with open(default_creds_path) as f:
-            return json.load(f)
-    raise Exception(
-        "credentials not found, please login with 'gcloud auth application-default login' or else set the 'GOOGLE_APPLICATION_CREDENTIALS' environment variable to the path of a JSON format service account key"
+            return json.load(f), None
+    return (
+        {},
+        "credentials not found, please login with 'gcloud auth application-default login' or else set the 'GOOGLE_APPLICATION_CREDENTIALS' environment variable to the path of a JSON format service account key",
     )
 
 
 def create_access_token_request(scopes: List[str]) -> Request:
-    creds = _load_credentials()
+    creds, err = _load_credentials()
+    if err is not None:
+        raise Exception(err)
     if "private_key" in creds:
         # looks like GCS does not support the no-oauth flow https://developers.google.com/identity/protocols/OAuth2ServiceAccount#jwt-auth
         return _create_token_request(
@@ -122,6 +126,11 @@ def create_access_token_request(scopes: List[str]) -> Request:
         )
     else:
         raise Exception("credentials not recognized")
+
+
+def have_credentials():
+    _, err = _load_credentials()
+    return err is None
 
 
 def build_url(template: str, **data: str) -> str:
@@ -162,7 +171,9 @@ def generate_signed_url(
         h = dict(headers).copy()
 
     # https://cloud.google.com/storage/docs/access-control/signing-urls-manually
-    creds = _load_credentials()
+    creds, err = _load_credentials()
+    if err is not None:
+        raise Exception(err)
     if "private_key" not in creds:
         raise Exception(
             "private key not found in credentials, please set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to point to a JSON key for a service account to use this call"

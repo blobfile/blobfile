@@ -14,6 +14,7 @@ import shutil
 import collections
 import threading
 import ssl
+import socket
 from typing import (
     overload,
     Optional,
@@ -153,18 +154,43 @@ class TokenManager:
         return self._tokens[key]
 
 
+def _is_gce_instance() -> bool:
+    try:
+        socket.getaddrinfo("metadata.google.internal", 80)
+    except socket.gaierror:
+        return False
+    return True
+
+
 def _google_get_access_token(key: str) -> Tuple[Any, float]:
     now = time.time()
 
-    def build_req() -> Request:
-        return google.create_access_token_request(
-            scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
-        )
+    if google.have_credentials():
 
-    with _execute_request(build_req) as resp:
-        assert resp.status == 200, f"unexpected status {resp.status}"
-        result = json.load(resp)
-        return result["access_token"], now + float(result["expires_in"])
+        def build_req() -> Request:
+            return google.create_access_token_request(
+                scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
+            )
+
+        with _execute_request(build_req) as resp:
+            assert resp.status == 200, f"unexpected status {resp.status}"
+            result = json.load(resp)
+            return result["access_token"], now + float(result["expires_in"])
+    elif _is_gce_instance():
+        # see if the metadata server has a token for us
+        def build_req() -> Request:
+            return Request(
+                method="GET",
+                url="http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+                headers={"Metadata-Flavor": "Google"},
+            )
+
+        with _execute_request(build_req) as resp:
+            assert resp.status == 200, f"unexpected status {resp.status}"
+            result = json.load(resp)
+            return result["access_token"], now + float(result["expires_in"])
+    else:
+        raise Exception("no google credentials found")
 
 
 def _azure_get_access_token(account: str) -> Tuple[Any, float]:

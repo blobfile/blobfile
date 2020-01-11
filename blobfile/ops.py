@@ -196,7 +196,12 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
 def _azure_get_access_token(account: str) -> Tuple[Any, float]:
     now = time.time()
     creds = azure.load_credentials()
-    if "refreshToken" in creds:
+    if "storageAccountKey" in creds:
+        return (
+            (azure.SHARED_KEY, creds["storageAccountKey"]),
+            now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
+        )
+    elif "refreshToken" in creds:
         # we have a refresh token, do a dance to get a shared key
         def build_req() -> Request:
             return azure.create_access_token_request(

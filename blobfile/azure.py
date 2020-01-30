@@ -223,10 +223,11 @@ def generate_signed_url(key: Mapping[str, str], url: str) -> Tuple[str, float]:
 
 
 def split_url(path: str) -> Tuple[str, str, str]:
-    url = urllib.parse.urlparse(path)
-    assert url.scheme == "as"
-    account, _, container = url.netloc.partition("-")
-    return account, container, url.path[1:]
+    assert path.startswith("as://")
+    path = path[len("as://") :]
+    bucket, _, obj = path.partition("/")
+    account, _, container = bucket.partition("-")
+    return account, container, obj
 
 
 def sign_with_shared_key(req: Request, key: str) -> str:

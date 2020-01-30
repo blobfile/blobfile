@@ -253,6 +253,7 @@ def generate_signed_url(
 
 
 def split_url(path: str) -> Tuple[str, str]:
-    url = urllib.parse.urlparse(path)
-    assert url.scheme == "gs"
-    return url.netloc, url.path[1:]
+    assert path.startswith("gs://")
+    path = path[len("gs://") :]
+    bucket, _, obj = path.partition("/")
+    return bucket, obj

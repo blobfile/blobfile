@@ -228,6 +228,8 @@ def test_get_url(ctx):
 def test_read_write(ctx):
     contents = b"meow!\npurr\n"
     with ctx() as path:
+        path = bf.join(path, "a folder", "a.file")
+        bf.makedirs(bf.dirname(path))
         with bf.BlobFile(path, "wb") as w:
             w.write(contents)
         with bf.BlobFile(path, "rb") as r:

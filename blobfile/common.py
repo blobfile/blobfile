@@ -22,5 +22,5 @@ class Request:
 def build_url(base_url: str, template: str, **data: str) -> str:
     escaped_data = {}
     for k, v in data.items():
-        escaped_data[k] = urllib.parse.quote_plus(v)
+        escaped_data[k] = urllib.parse.quote(v, safe="")
     return base_url + template.format(**escaped_data)

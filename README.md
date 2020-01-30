@@ -54,3 +54,32 @@ There are a few bonus functions:
 * `get_url` - returns a url for a path along with the expiration for that url (or None)
 * `md5` - get the md5 hash for a path, for GCS this is fast, but for other backends this may be slow
 * `set_log_callback` - set a log callback function `log(msg: string)` to use instead of printing to stdout
+
+## Examples
+
+Write and read a file:
+
+```py
+import blobfile as bf
+
+with bf.BlobFile("gs://my-bucket/file.name", "wb") as f:
+    f.write(b"meow")
+
+print("exists:", bf.exists("gs://my-bucket/file.name"))
+
+print("contents:", bf.BlobFile("gs://my-bucket/file.name", "rb").read())
+```
+
+Parallel execution:
+
+```py
+import blobfile as bf
+import multiprocessing as mp
+import tqdm
+
+filenames = [f"{i}.ext" for i in range(1000)]
+
+with mp.Pool() as pool:
+    for filename, exists in zip(filenames, pool.imap(bf.exists, filenames)):
+        print(filename, exists)
+```

@@ -885,7 +885,7 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
 
 
 def _sharded_listdir_worker(
-    prefixes: mp.Queue[Tuple[str, str, bool]], items: mp.Queue[Optional[str]]
+    prefixes: "mp.Queue[Tuple[str, str, bool]]", items: "mp.Queue[Optional[str]]"
 ) -> None:
     while True:
         base, prefix, exact = prefixes.get(True)

@@ -680,11 +680,16 @@ def glob(pattern: str) -> Iterator[str]:
                 get_names = _azure_get_names
 
             regexp = ""
-            for c in pattern:
-                if c == "*":
+            for tok in re.split("([*]+)", pattern):
+                if tok == "":
+                    continue
+                if tok == "*":
                     regexp += r"[^/]*"
+                elif tok == "**":
+                    regexp += r".*"
                 else:
-                    regexp += re.escape(c)
+                    regexp += re.escape(tok)
+
             re_pattern = re.compile(regexp + r"/?$")
             seen = set()
             for result in it:

@@ -9,7 +9,7 @@ sp.run(
         "--typeguard-packages=blobfile",
         "-s",
         "-k",
-        "test_listdir_sharded[_get_temp_gcs_path]",
+        "test_glob[_get_temp_gcs_path]",
     ]
     + sys.argv[1:],
     check=True,

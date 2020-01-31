@@ -442,10 +442,13 @@ def test_glob(ctx):
         assert_listing_equal(bf.join(dirpath, "*/test.txt"), ["subdir/test.txt"])
         assert_listing_equal(bf.join(dirpath, "*/*.txt"), ["subdir/test.txt"])
         if "://" in path:
+            # local glob doesn't handle ** the same way as remote glob
             assert_listing_equal(
                 bf.join(dirpath, "**.txt"),
                 ["test.txt", "subdir/test.txt", "subdir/subsubdir/test.txt"],
             )
+        else:
+            assert_listing_equal(bf.join(dirpath, "**.txt"), ["test.txt"])
         assert_listing_equal(bf.join(dirpath, "*/test"), [])
         assert_listing_equal(bf.join(dirpath, "subdir/test.txt"), ["subdir/test.txt"])
 

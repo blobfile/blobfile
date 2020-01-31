@@ -370,6 +370,7 @@ def test_listdir_sharded(ctx):
         bf.makedirs(bf.join(dirpath, "c"))
         with bf.BlobFile(bf.join(dirpath, "c/a"), "wb") as w:
             w.write(contents)
+        # this should also test shard_prefix_length=2 but that takes too long
         assert sorted(list(bf.listdir(dirpath, shard_prefix_length=1))) == [
             "a",
             "aa",

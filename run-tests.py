@@ -3,5 +3,6 @@ import sys
 
 sp.run(["pip", "install", "-e", "."], check=True)
 sp.run(
-    ["pytest", "blobfile", "--typeguard-packages=blobfile"] + sys.argv[1:], check=True
+    ["pytest", "blobfile"] + sys.argv[1:], check=True
 )
+# "--typeguard-packages=blobfile" does not seem to work with mp.Queue[T]

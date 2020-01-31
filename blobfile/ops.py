@@ -833,7 +833,8 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
     to query them more quickly.  `shard_prefix_length` will do multiple queries in parallel, querying
     each possible prefix independently.
 
-    Using `shard_prefix_length` will only consider prefixes that are not 
+    Using `shard_prefix_length` will only consider prefixes that are not unusual characters
+    (mostly these are ascii values < 0x20) some of these could technically show up in a path.
     """
     if not path.endswith("/"):
         path += "/"

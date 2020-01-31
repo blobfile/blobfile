@@ -26,7 +26,6 @@ from typing import (
     Iterator,
     Mapping,
     Any,
-    IO,
     TextIO,
     BinaryIO,
     cast,
@@ -885,10 +884,10 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
         raise Exception("unrecognized path")
 
 
-def _sharded_listdir_worker(prefixes: mp.Queue, items: mp.Queue) -> None:
+def _sharded_listdir_worker(
+    prefixes: mp.Queue[Tuple[str, str, bool]], items: mp.Queue[Optional[str]]
+) -> None:
     while True:
-        base: str
-        prefix: str
         base, prefix, exact = prefixes.get(True)
         if exact:
             if exists(base + prefix):
@@ -1142,7 +1141,7 @@ def walk(
             yield (root, sorted(dirnames), sorted(filenames))
     elif _is_google_path(top) or _is_azure_path(top):
         assert topdown
-        dq = collections.deque()
+        dq: collections.deque[str] = collections.deque()
         dq.append(top)
         while len(dq) > 0:
             cur = dq.popleft()
@@ -1692,7 +1691,7 @@ def BlobFile(
     path: str,
     mode: Literal["r", "rb", "w", "wb"] = "r",
     buffer_size: int = io.DEFAULT_BUFFER_SIZE,
-) -> IO:
+):
     """
     Open a local or remote file for reading or writing
     """
@@ -1808,7 +1807,7 @@ def LocalBlobFile(
     path: str,
     mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r",
     cache_dir: Optional[str] = None,
-) -> IO:
+):
     """
     Like BlobFile() but in the case that the path is a remote file, all operations take place
     on a local copy of that file.

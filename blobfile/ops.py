@@ -646,18 +646,31 @@ def exists(path: str) -> bool:
 
 def glob(pattern: str) -> Iterator[str]:
     """
-    Find files and directories matching a pattern, globs can be slow when using blob storage
-    because 
+    Find files and directories matching a pattern. Supports * and **
+
+    For local paths, this function uses glob.glob() which has special handling for * and **
+    that is not quite the same as remote paths.  See https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#different-behavior-for-dot-files-in-local-file-system_1 for more information.
+    
+    Globs can be slow when using remote paths because all object paths matching the part of
+    the pattern before the first glob will be retrieved and then filtered on the local machine.
+    If few items have the prefix, this is fast, but if you did something like:
+
+        glob("gs://my-bucket/*/a/b/c/d/e/f/g.txt")
+
+    This will have to examine all objects in the bucket, so if the bucket has millions of items,
+    this can be slow.
     """
     assert "?" not in pattern and "[" not in pattern and "]" not in pattern
+
     if _is_local_path(pattern):
-        for filepath in local_glob.glob(pattern):
+        for filepath in local_glob.iglob(pattern, recursive=True):
             if filepath.endswith(os.sep):
                 filepath = filepath[:-1]
             yield filepath
     elif _is_google_path(pattern) or _is_azure_path(pattern):
         if "*" in pattern:
             prefix, _, _ = pattern.partition("*")
+
             if _is_google_path(pattern):
                 bucket, blob_prefix = google.split_url(prefix)
                 assert "*" not in bucket
@@ -679,18 +692,17 @@ def glob(pattern: str) -> Iterator[str]:
                 root = f"as://{account}-{container}"
                 get_names = _azure_get_names
 
+            tokens = [t for t in re.split("([*]+)", pattern) if t != ""]
             regexp = ""
-            for tok in re.split("([*]+)", pattern):
-                if tok == "":
-                    continue
+            for tok in tokens:
                 if tok == "*":
                     regexp += r"[^/]*"
                 elif tok == "**":
                     regexp += r".*"
                 else:
                     regexp += re.escape(tok)
-
             re_pattern = re.compile(regexp + r"/?$")
+
             seen = set()
             for result in it:
                 for name in get_names(result):

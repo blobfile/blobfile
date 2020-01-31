@@ -260,8 +260,10 @@ def find_symbols(node, symbol_name_to_import):
             elif isinstance(n, ast.Name):
                 path_parts.append(n.id)
                 break
+            elif isinstance(n, ast.Call):
+                break
             else:
-                raise Exception(f"unrecognized node {n}")
+                raise Exception(f"unrecognized node {n}: {astor.to_source(n)}")
             n = n.value
         path = ".".join(path_parts[::-1])
         result.append(path)
@@ -345,10 +347,14 @@ def node_to_defines(node, symbol_name_to_import):
             define_args.append(arg_str)
         define_text += ", ".join(define_args)
         if node.returns is None:
-            raise Exception(
-                f"definition missing return type: {astor.to_source(node).strip()}"
-            )
-        define_text += f") -> {astor.to_source(node.returns).strip()}:"
+            define_text += f"):"
+            # had to remove return value of BlobFile to fix pyright error
+            # but then this error is raised
+            # raise Exception(
+            #     f"definition missing return type: {astor.to_source(node).strip()}"
+            # )
+        else:
+            define_text += f") -> {astor.to_source(node.returns).strip()}:"
         returns_locals, returns_imports = get_locals_and_imports(
             node.returns, symbol_name_to_import
         )

@@ -884,9 +884,9 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
         raise Exception("unrecognized path")
 
 
-def _sharded_listdir_worker(
-    prefixes: "mp.Queue[Tuple[str, str, bool]]", items: "mp.Queue[Optional[str]]"
-) -> None:
+# the Queues cannot be annotated without breaking pyimport when running pytest
+# they should be mp.Queue[Tuple[str, str, bool]] and mp.Queue[str]
+def _sharded_listdir_worker(prefixes: mp.Queue, items: mp.Queue) -> None:
     while True:
         base, prefix, exact = prefixes.get(True)
         if exact:

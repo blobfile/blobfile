@@ -36,7 +36,7 @@ Some are inspired by existing `os.path` and `shutil` functions:
 
 * `copy` - copy a file from one path to another, will do a remote copy between two remote paths on the same blob storage service
 * `exists` - returns `True` if the file or directory exists
-* `glob` - return files matching a pattern, on GCS this only supports a single `*` operator.  In addition, it can be slow if the `*` appears early in the pattern since GCS can only do prefix matches; all additional filtering must happen locally
+* `glob` - return files matching a pattern, on GCS this supports the `*` and `**` operators.  It can be slow if the wildcard appears early in the pattern since this implementation must enumerate all objects matching the part before the pattern; all additional filtering must happen locally
 * `isdir` - returns `True` if the path is a directory
 * `listdir` - list contents of a directory as a generator
 * `makedirs` - ensure that a directory and all parent directories exist
@@ -80,6 +80,6 @@ import tqdm
 filenames = [f"{i}.ext" for i in range(1000)]
 
 with mp.Pool() as pool:
-    for filename, exists in zip(filenames, pool.imap(bf.exists, filenames)):
-        print(filename, exists)
+    for filename, exists in tqdm.tqdm(zip(filenames, pool.imap(bf.exists, filenames)), total=len(filenames)):
+        pass
 ```

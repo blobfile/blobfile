@@ -60,6 +60,12 @@ AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
 # these seem to be expired manually, but we don't currently detect that
 AZURE_SHARED_KEY_EXPIRATION_SECONDS = 24 * 60 * 60
 
+# https://cloud.google.com/storage/docs/naming
+# https://www.w3.org/TR/xml/#charsets
+INVALID_CHARS = (
+    set().union(range(0x0, 0x9)).union(range(0xB, 0xE)).union(range(0xE, 0x20))
+)
+
 
 class Stat(NamedTuple):
     size: int
@@ -572,6 +578,8 @@ def _azure_get_names(
     result: Mapping[str, Any], skip_item_name: str = ""
 ) -> Iterator[str]:
     blobs = result["Blobs"]
+    if blobs is None:
+        return
     if "Blob" in blobs:
         if isinstance(blobs["Blob"], dict):
             blobs["Blob"] = [blobs["Blob"]]
@@ -671,11 +679,6 @@ def glob(pattern: str) -> Iterator[str]:
                 root = f"as://{account}-{container}"
                 get_names = _azure_get_names
 
-            # TODO: update tests
-            # TODO: support ** -> how to implement?
-            #  when scanning pattern if c == "*" and next_c == "*": += r".*", then skip index
-            #  or tokenize pattern first, then process
-            #  if tok == "*", if tok == "**", else: re.escape(tok)
             regexp = ""
             for c in pattern:
                 if c == "*":
@@ -780,31 +783,31 @@ def isdir(path: str) -> bool:
         raise Exception("unrecognized path")
 
 
-def _google_list_suffixes(prefix: str) -> Iterator[str]:
-    bucket, blob = google.split_url(prefix)
-    it = _create_google_page_iterator(
-        url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
-        method="GET",
-        params=dict(delimiter="/", prefix=blob),
-    )
+def _list_suffixes(prefix: str, exclude_prefix: bool) -> Iterator[str]:
+    if _is_google_path(prefix):
+        bucket, blob = google.split_url(prefix)
+        it = _create_google_page_iterator(
+            url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+            method="GET",
+            params=dict(delimiter="/", prefix=blob),
+        )
+        get_names = _google_get_names
+    elif _is_azure_path(prefix):
+        account, container, blob = azure.split_url(prefix)
+        it = _create_azure_page_iterator(
+            url=azure.build_url(account, "/{container}", container=container),
+            method="GET",
+            params=dict(comp="list", restype="container", prefix=blob, delimiter="/"),
+        )
+        get_names = _azure_get_names
+    else:
+        raise Exception("unrecognized path")
+
     for result in it:
-        for name in _google_get_names(result, blob):
+        for name in get_names(result, skip_item_name=blob if exclude_prefix else ""):
             yield _strip_slash(name[len(blob) :])
 
 
-def _azure_list_suffixes(prefix: str) -> Iterator[str]:
-    account, container, blob = azure.split_url(prefix)
-    it = _create_azure_page_iterator(
-        url=azure.build_url(account, "/{container}", container=container),
-        method="GET",
-        params=dict(comp="list", restype="container", prefix=blob, delimiter="/"),
-    )
-    for result in it:
-        for name in _azure_get_names(result, blob):
-            yield _strip_slash(name[len(blob) :])
-
-
-# TODO: add tests for listdir with shard_prefix_length
 def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
     """
     Returns an iterator of the contents of the directory at `path`
@@ -812,6 +815,8 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
     If your filenames are uniformly distributed (like hashes) then you can use `shard_prefix_length`
     to query them more quickly.  `shard_prefix_length` will do multiple queries in parallel, querying
     each possible prefix independently.
+
+    Using `shard_prefix_length` will only consider prefixes that are not 
     """
     if not path.endswith("/"):
         path += "/"
@@ -824,25 +829,29 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
             yield d
     elif _is_google_path(path) or _is_azure_path(path):
         if shard_prefix_length == 0:
-            if _is_google_path(path):
-                yield from _google_list_suffixes(path)
-            elif _is_azure_path(path):
-                yield from _azure_list_suffixes(path)
-            else:
-                raise Exception("unrecognized path")
+            yield from _list_suffixes(path, exclude_prefix=True)
         else:
             prefixes = mp.Queue()
             items = mp.Queue()
             tasks_enqueued = 0
 
-            # https://cloud.google.com/storage/docs/naming#objectnames
-            valid_chars = [i for i in range(256) if i not in (ord("\b"), ord("\r"))]
-            for chars in itertools.product(valid_chars, repeat=shard_prefix_length):
-                prefix = ""
-                for c in chars:
-                    prefix += chr(c)
-                prefixes.put((path, prefix))
-                tasks_enqueued += 1
+            valid_chars = [
+                i for i in range(256) if i not in INVALID_CHARS and i != ord("/")
+            ]
+            for repeat in range(1, shard_prefix_length + 1):
+                for chars in itertools.product(valid_chars, repeat=repeat):
+                    prefix = ""
+                    for c in chars:
+                        prefix += chr(c)
+                    # we need to check for exact matches for shorter prefix lengths
+                    # if we only searched for prefixes of length `shard_prefix_length`
+                    # we would skip shorter names, for instance "a" would be skipped if we
+                    # we had `shard_prefix_length=2`
+                    # instead we check for an exact match for everything shorter than
+                    # our `shard_prefix_length`
+                    exact = repeat != shard_prefix_length
+                    prefixes.put((path, prefix, exact))
+                    tasks_enqueued += 1
 
             tasks_done = 0
             with mp.Pool(
@@ -862,15 +871,14 @@ def _sharded_listdir_worker(prefixes: mp.Queue, items: mp.Queue) -> None:
     while True:
         base: str
         prefix: str
-        base, prefix = prefixes.get(True)
-        if _is_google_path(base):
-            it = _google_list_suffixes(base + prefix)
-        elif _is_azure_path(base):
-            it = _azure_list_suffixes(base + prefix)
+        base, prefix, exact = prefixes.get(True)
+        if exact:
+            if exists(base + prefix):
+                items.put(prefix)
         else:
-            raise Exception("unrecognized path")
-        for item in it:
-            items.put(prefix + item)
+            it = _list_suffixes(base + prefix, exclude_prefix=False)
+            for item in it:
+                items.put(prefix + item)
         items.put(None)  # indicate that we have finished this path
 
 

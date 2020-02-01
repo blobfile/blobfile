@@ -716,21 +716,22 @@ def glob(pattern: str) -> Iterator[str]:
 
         prefix, _, _ = pattern.partition("*")
 
-        def split_tokens(s):
+        def split_tokens(s: str) -> List[str]:
             return [t for t in re.split("([*]+)", s) if t != ""]
 
+        def tokens_to_regexp(tokens: Sequence[str]) -> re.Pattern[str]:
+            regexp = ""
+            for tok in tokens:
+                if tok == "*":
+                    regexp += r"[^/]*"
+                elif tok == "**":
+                    regexp += r".*"
+                else:
+                    regexp += re.escape(tok)
+            return re.compile(regexp + r"/?$")
+
         tokens = split_tokens(pattern)
-
-        regexp = ""
-        for tok in tokens:
-            if tok == "*":
-                regexp += r"[^/]*"
-            elif tok == "**":
-                regexp += r".*"
-            else:
-                regexp += re.escape(tok)
-        re_pattern = re.compile(regexp + r"/?$")
-
+        re_pattern = tokens_to_regexp(tokens)
         if _is_google_path(pattern):
             bucket, _ = google.split_url(prefix)
             assert "*" not in bucket

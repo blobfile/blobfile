@@ -36,7 +36,7 @@ Some are inspired by existing `os.path` and `shutil` functions:
 
 * `copy` - copy a file from one path to another, will do a remote copy between two remote paths on the same blob storage service
 * `exists` - returns `True` if the file or directory exists
-* `glob` - return files matching a pattern, on GCS this supports the `*` and `**` operators.  It can be slow if the wildcard appears early in the pattern since this implementation must enumerate all objects matching the part before the pattern; all additional filtering must happen locally
+* `glob` - return files matching a glob-style pattern as a generator.  Globs can have [surprising performance characteristics](https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#efficiency-consideration:-using-wildcards-over-many-objects) when used with blob storage.  Character ranges are not supported in patterns.
 * `isdir` - returns `True` if the path is a directory
 * `listdir` - list contents of a directory as a generator
 * `makedirs` - ensure that a directory and all parent directories exist

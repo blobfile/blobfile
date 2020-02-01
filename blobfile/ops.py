@@ -777,7 +777,7 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
     For local paths, this function uses glob.glob() which has special handling for * and **
     that is not quite the same as remote paths.  See https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#different-behavior-for-dot-files-in-local-file-system_1 for more information.
 
-    Globs can have confusing performance, see https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#different-behavior-for-dot-files-in-local-file-system_1 for more information.
+    Globs can have confusing performance, see https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#efficiency-consideration:-using-wildcards-over-many-objects for more information.
 
     You can set `parallel=True` to use multiple processes to perform the glob.  It's likely
     that the results will no longer be in order.

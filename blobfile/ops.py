@@ -30,6 +30,7 @@ from typing import (
     BinaryIO,
     cast,
     NamedTuple,
+    List,
 )
 from typing_extensions import Literal, Protocol, runtime_checkable
 
@@ -639,6 +640,53 @@ def exists(path: str) -> bool:
         raise Exception("unrecognized path")
 
 
+def _string_overlap(s1:str, s2:str) -> int:
+    length = min(len(s1), len(s2))
+    for i in range(length):
+        if s1[i] != s2[i]:
+            return i
+    return length
+
+
+def _split_path(path: str) -> List[str]:
+    # a/b/c => a/, b/, c
+    # a/b/ => a/, b/
+    # /a/b/c => /, a/, b/, c
+    parts = []
+    part = ""
+    for c in path:
+        part += c
+        if c == "/":
+            parts.append(part)
+            part = ""
+    if part != "":
+        parts.append(part)
+    return parts
+
+
+def _expand_implicit_dirs(root: str, it: Iterator[str]) -> Iterator[str]:
+    # blob storage does not always have definitions for each intermediate dir
+    # if we have a listing like
+    #  gs://test/a/b
+    #  gs://test/a/b/c/d
+    # then we emit an entry "gs://test/a/b/c/" for the implicit dir "c"
+    # requires that iterator return objects in sorted order
+    previous_item = root
+    for item in it:
+        # find the overlap between the previous_item and the current
+        offset = _string_overlap(previous_item, item)
+        relpath = item[offset:]
+        cur = item[:offset]
+        if len(relpath) == 0:
+            yield cur
+        else:
+            for part in _split_path(relpath):
+                cur += part
+                yield cur
+        assert item >= previous_item
+        previous_item = item
+
+
 def glob(pattern: str) -> Iterator[str]:
     """
     Find files and directories matching a pattern. Supports * and **
@@ -656,76 +704,46 @@ def glob(pattern: str) -> Iterator[str]:
                 filepath = filepath[:-1]
             yield filepath
     elif _is_google_path(pattern) or _is_azure_path(pattern):
-        if "*" in pattern:
-            prefix, _, _ = pattern.partition("*")
+        # TODO: 
+        # dirpatterns = pattern.split("/")
+        # for pattern in dirpatterns:
+        #     pass
 
-            if _is_google_path(pattern):
-                bucket, blob_prefix = google.split_url(prefix)
-                assert "*" not in bucket
-                it = _create_google_page_iterator(
-                    url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
-                    method="GET",
-                    params=dict(prefix=blob_prefix),
-                )
-                root = f"gs://{bucket}"
-                get_names = _google_get_names
-            else:
-                account, container, blob_prefix = azure.split_url(prefix)
-                assert "*" not in account and "*" not in container
-                it = _create_azure_page_iterator(
-                    url=azure.build_url(account, "/{container}", container=container),
-                    method="GET",
-                    params=dict(comp="list", restype="container", prefix=blob_prefix),
-                )
-                root = f"as://{account}-{container}"
-                get_names = _azure_get_names
-
-            # TODO: if **, do no delimiter search
-
-            # for dirpattern in pattern.split("/"):
-            #     pass
-
-            def split_tokens(s):
-                return [t for t in re.split("([*]+)", s) if t != ""]
-
-            tokens = split_tokens(pattern)
-
-            regexp = ""
-            for tok in tokens:
-                if tok == "*":
-                    regexp += r"[^/]*"
-                elif tok == "**":
-                    regexp += r".*"
-                else:
-                    regexp += re.escape(tok)
-            re_pattern = re.compile(regexp + r"/?$")
-
-            seen = set()
-            for result in it:
-                for name in get_names(result):
-                    # TODO: there has to be a simpler way to do this
-                    # I shouldn't need a set of all results
-                    # expand out implicit directories in case the glob matches one of those
-                    parts = name.split("/")
-                    cur = ""
-                    for i, part in enumerate(parts):
-                        cur += part
-                        if i < len(parts) - 1:
-                            cur += "/"
-                        # since we're looking at implicit directories, don't double
-                        # process the same item multiple times
-                        if cur in seen:
-                            continue
-                        seen.add(cur)
-                        filepath = join(root, cur)
-                        if bool(re_pattern.match(filepath)):
-                            if filepath == prefix and filepath.endswith("/"):
-                                # we matched the parent directory
-                                continue
-                            yield _strip_slash(filepath)
-        else:
+        if "*" not in pattern:
             if exists(pattern):
                 yield _strip_slash(pattern)
+            return
+
+        prefix, _, _ = pattern.partition("*")
+
+        def split_tokens(s):
+            return [t for t in re.split("([*]+)", s) if t != ""]
+
+        tokens = split_tokens(pattern)
+
+        regexp = ""
+        for tok in tokens:
+            if tok == "*":
+                regexp += r"[^/]*"
+            elif tok == "**":
+                regexp += r".*"
+            else:
+                regexp += re.escape(tok)
+        re_pattern = re.compile(regexp + r"/?$")
+
+        if _is_google_path(pattern):
+            bucket, _ = google.split_url(prefix)
+            assert "*" not in bucket
+        else:
+            account, container, _ = azure.split_url(prefix)
+            assert "*" not in account and "*" not in container
+
+        for path in _expand_implicit_dirs(root=prefix, it=_list_blobs(path=prefix)):
+            if bool(re_pattern.match(path)):
+                if path == prefix and path.endswith("/"):
+                    # we matched the parent directory
+                    continue
+                yield _strip_slash(path)
     else:
         raise Exception("unrecognized path")
 
@@ -799,7 +817,7 @@ def isdir(path: str) -> bool:
         raise Exception("unrecognized path")
 
 
-def _list_blobs(path: str, delimiter: str) -> Iterator[str]:
+def _list_blobs(path: str, delimiter: Optional[str]=None) -> Iterator[str]:
     params = {}
     if delimiter is not None:
         params["delimiter"] = delimiter
@@ -812,6 +830,7 @@ def _list_blobs(path: str, delimiter: str) -> Iterator[str]:
             params=dict(prefix=prefix, **params),
         )
         get_names = _google_get_names
+        root = f"gs://{bucket}/"
     elif _is_azure_path(path):
         account, container, prefix = azure.split_url(path)
         it = _create_azure_page_iterator(
@@ -820,19 +839,20 @@ def _list_blobs(path: str, delimiter: str) -> Iterator[str]:
             params=dict(comp="list", restype="container", prefix=prefix, **params),
         )
         get_names = _azure_get_names
+        root = f"as://{account}-{container}/"
     else:
         raise Exception("unrecognized path")
 
     for result in it:
         for name in get_names(result):
-            yield path[:-len(prefix)] + name
+            yield root + name
 
 
 def _list_blobs_in_dir(dirpath: str, exclude_dirpath: bool) -> Iterator[str]:
-    for blob in _list_blobs(path=dirpath, delimiter="/"):
-        if exclude_dirpath and blob == dirpath:
+    for path in _list_blobs(path=dirpath, delimiter="/"):
+        if exclude_dirpath and path == dirpath:
             continue
-        yield _strip_slash(blob[len(dirpath) :])
+        yield _strip_slash(path[len(dirpath) :])
 
 
 def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:

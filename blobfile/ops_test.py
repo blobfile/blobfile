@@ -457,6 +457,7 @@ def test_glob(ctx):
         assert_listing_equal(bf.join(dirpath, "*"), ["ab", "bb", "subdir", "test.txt"])
         assert_listing_equal(bf.join(dirpath, "subdir"), ["subdir"])
         assert_listing_equal(bf.join(dirpath, "subdir/"), ["subdir"])
+        assert_listing_equal(bf.join(dirpath, "*/"), ["subdir"])
         assert_listing_equal(bf.join(dirpath, "*dir"), ["subdir"])
         assert_listing_equal(bf.join(dirpath, "subdir/*dir"), ["subdir/subsubdir"])
         assert_listing_equal(bf.join(dirpath, "subdir/*dir/"), ["subdir/subsubdir"])

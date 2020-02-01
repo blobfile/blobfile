@@ -561,20 +561,18 @@ def _create_azure_page_iterator(
 
 
 def _google_get_names(
-    result: Mapping[str, Any], skip_item_name: str = ""
+    result: Mapping[str, Any]
 ) -> Iterator[str]:
     if "prefixes" in result:
         for p in result["prefixes"]:
             yield p
     if "items" in result:
         for item in result["items"]:
-            if item["name"] == skip_item_name:
-                continue
             yield item["name"]
 
 
 def _azure_get_names(
-    result: Mapping[str, Any], skip_item_name: str = ""
+    result: Mapping[str, Any]
 ) -> Iterator[str]:
     blobs = result["Blobs"]
     if blobs is None:
@@ -583,8 +581,6 @@ def _azure_get_names(
         if isinstance(blobs["Blob"], dict):
             blobs["Blob"] = [blobs["Blob"]]
         for b in blobs["Blob"]:
-            if b["Name"] == skip_item_name:
-                continue
             yield b["Name"]
     if "BlobPrefix" in blobs:
         if isinstance(blobs["BlobPrefix"], dict):
@@ -649,15 +645,8 @@ def glob(pattern: str) -> Iterator[str]:
 
     For local paths, this function uses glob.glob() which has special handling for * and **
     that is not quite the same as remote paths.  See https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#different-behavior-for-dot-files-in-local-file-system_1 for more information.
-    
-    Globs can be slow when using remote paths because all object paths matching the part of
-    the pattern before the first glob will be retrieved and then filtered on the local machine.
-    If few items have the prefix, this is fast, but if you did something like:
 
-        glob("gs://my-bucket/*/a/b/c/d/e/f/g.txt")
-
-    This will have to examine all objects in the bucket, so if the bucket has millions of items,
-    this can be slow.
+    Globs can have confusing performance, see https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#different-behavior-for-dot-files-in-local-file-system_1 for more information.
     """
     assert "?" not in pattern and "[" not in pattern and "]" not in pattern
 
@@ -691,7 +680,16 @@ def glob(pattern: str) -> Iterator[str]:
                 root = f"as://{account}-{container}"
                 get_names = _azure_get_names
 
-            tokens = [t for t in re.split("([*]+)", pattern) if t != ""]
+            # TODO: if **, do no delimiter search
+
+            # for dirpattern in pattern.split("/"):
+            #     pass
+
+            def split_tokens(s):
+                return [t for t in re.split("([*]+)", s) if t != ""]
+
+            tokens = split_tokens(pattern)
+
             regexp = ""
             for tok in tokens:
                 if tok == "*":
@@ -705,6 +703,8 @@ def glob(pattern: str) -> Iterator[str]:
             seen = set()
             for result in it:
                 for name in get_names(result):
+                    # TODO: there has to be a simpler way to do this
+                    # I shouldn't need a set of all results
                     # expand out implicit directories in case the glob matches one of those
                     parts = name.split("/")
                     cur = ""
@@ -799,29 +799,40 @@ def isdir(path: str) -> bool:
         raise Exception("unrecognized path")
 
 
-def _list_suffixes(prefix: str, exclude_prefix: bool) -> Iterator[str]:
-    if _is_google_path(prefix):
-        bucket, blob = google.split_url(prefix)
+def _list_blobs(path: str, delimiter: str) -> Iterator[str]:
+    params = {}
+    if delimiter is not None:
+        params["delimiter"] = delimiter
+
+    if _is_google_path(path):
+        bucket, prefix = google.split_url(path)
         it = _create_google_page_iterator(
             url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
             method="GET",
-            params=dict(delimiter="/", prefix=blob),
+            params=dict(prefix=prefix, **params),
         )
         get_names = _google_get_names
-    elif _is_azure_path(prefix):
-        account, container, blob = azure.split_url(prefix)
+    elif _is_azure_path(path):
+        account, container, prefix = azure.split_url(path)
         it = _create_azure_page_iterator(
             url=azure.build_url(account, "/{container}", container=container),
             method="GET",
-            params=dict(comp="list", restype="container", prefix=blob, delimiter="/"),
+            params=dict(comp="list", restype="container", prefix=prefix, **params),
         )
         get_names = _azure_get_names
     else:
         raise Exception("unrecognized path")
 
     for result in it:
-        for name in get_names(result, skip_item_name=blob if exclude_prefix else ""):
-            yield _strip_slash(name[len(blob) :])
+        for name in get_names(result):
+            yield path[:-len(prefix)] + name
+
+
+def _list_blobs_in_dir(dirpath: str, exclude_dirpath: bool) -> Iterator[str]:
+    for blob in _list_blobs(path=dirpath, delimiter="/"):
+        if exclude_dirpath and blob == dirpath:
+            continue
+        yield _strip_slash(blob[len(dirpath) :])
 
 
 def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
@@ -846,7 +857,7 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
             yield d
     elif _is_google_path(path) or _is_azure_path(path):
         if shard_prefix_length == 0:
-            yield from _list_suffixes(path, exclude_prefix=True)
+            yield from _list_blobs_in_dir(path, exclude_dirpath=True)
         else:
             prefixes = mp.Queue()
             items = mp.Queue()
@@ -893,7 +904,7 @@ def _sharded_listdir_worker(prefixes: mp.Queue, items: mp.Queue) -> None:
             if exists(base + prefix):
                 items.put(prefix)
         else:
-            it = _list_suffixes(base + prefix, exclude_prefix=False)
+            it = _list_blobs_in_dir(base + prefix, exclude_dirpath=False)
             for item in it:
                 items.put(prefix + item)
         items.put(None)  # indicate that we have finished this path

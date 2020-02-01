@@ -42,7 +42,6 @@ setup_dict = dict(
             "imageio-ffmpeg",
             "azure-cli",
             "google-cloud-storage",
-            "typeguard",
         ]
     },
     python_requires=">=3.7.0",

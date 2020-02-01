@@ -951,8 +951,8 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
     Returns an iterator of the contents of the directory at `path`
 
     If your filenames are uniformly distributed (like hashes) then you can use `shard_prefix_length`
-    to query them more quickly.  `shard_prefix_length` will do multiple queries in parallel, querying
-    each possible prefix independently.
+    to query them more quickly.  `shard_prefix_length` will do multiple queries in parallel,
+    querying each possible prefix independently.
 
     Using `shard_prefix_length` will only consider prefixes that are not unusual characters
     (mostly these are ascii values < 0x20) some of these could technically show up in a path.

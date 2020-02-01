@@ -404,9 +404,7 @@ def test_walk(ctx):
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
-@pytest.mark.parametrize(
-    "parallel", [False, True]
-)
+@pytest.mark.parametrize("parallel", [False, True])
 def test_glob(ctx, parallel):
     contents = b"meow!"
     with ctx() as path:

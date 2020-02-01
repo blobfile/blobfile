@@ -565,9 +565,7 @@ def _create_azure_page_iterator(
         p["marker"] = result["NextMarker"]
 
 
-def _google_get_names(
-    result: Mapping[str, Any]
-) -> Iterator[str]:
+def _google_get_names(result: Mapping[str, Any]) -> Iterator[str]:
     if "prefixes" in result:
         for p in result["prefixes"]:
             yield p
@@ -576,9 +574,7 @@ def _google_get_names(
             yield item["name"]
 
 
-def _azure_get_names(
-    result: Mapping[str, Any]
-) -> Iterator[str]:
+def _azure_get_names(result: Mapping[str, Any]) -> Iterator[str]:
     blobs = result["Blobs"]
     if blobs is None:
         return
@@ -644,7 +640,7 @@ def exists(path: str) -> bool:
         raise Exception("unrecognized path")
 
 
-def _string_overlap(s1:str, s2:str) -> int:
+def _string_overlap(s1: str, s2: str) -> int:
     length = min(len(s1), len(s2))
     for i in range(length):
         if s1[i] != s2[i]:
@@ -721,13 +717,18 @@ class _GlobTask(NamedTuple):
     cur: str
     rem: Sequence[str]
 
+
 class _GlobEntry(NamedTuple):
     path: str
+
 
 class _GlobTaskComplete(NamedTuple):
     pass
 
-def _process_glob_task(root: str, t:_GlobTask) -> Iterator[Union[_GlobTask, _GlobEntry]]:
+
+def _process_glob_task(
+    root: str, t: _GlobTask
+) -> Iterator[Union[_GlobTask, _GlobEntry]]:
     cur = t.cur + t.rem[0]
     rem = t.rem[1:]
     if "**" in cur:
@@ -747,17 +748,21 @@ def _process_glob_task(root: str, t:_GlobTask) -> Iterator[Union[_GlobTask, _Glo
                     yield _GlobEntry(_strip_slash(blobpath))
                 else:
                     assert path.startswith(root)
-                    yield _GlobTask(blobpath[len(root):], rem)
+                    yield _GlobTask(blobpath[len(root) :], rem)
     else:
         if len(rem) == 0:
-            path = root+cur
+            path = root + cur
             if exists(path):
                 yield _GlobEntry(_strip_slash(path))
         else:
             yield _GlobTask(cur, rem)
 
 
-def _glob_worker(root: str, tasks: mp.Queue[_GlobTask], results: mp.Queue[Union[_GlobEntry, _GlobTask, _GlobTaskComplete]]) -> None:
+def _glob_worker(
+    root: str,
+    tasks: mp.Queue[_GlobTask],
+    results: mp.Queue[Union[_GlobEntry, _GlobTask, _GlobTaskComplete]],
+) -> None:
     while True:
         t = tasks.get()
         for r in _process_glob_task(root=root, t=t):
@@ -775,7 +780,7 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
     Globs can have confusing performance, see https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#different-behavior-for-dot-files-in-local-file-system_1 for more information.
 
     You can set `parallel=True` to use multiple processes to perform the glob.  It's likely
-    that the results will no longer be in order if that happens.
+    that the results will no longer be in order.
     """
     assert "?" not in pattern and "[" not in pattern and "]" not in pattern
 
@@ -808,8 +813,7 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
             results = mp.Queue()
 
             tasks_done = 0
-            with mp.Pool(initializer=_glob_worker, initargs=(root, tasks, results)
-            ):
+            with mp.Pool(initializer=_glob_worker, initargs=(root, tasks, results)):
                 while tasks_done < tasks_enqueued:
                     r = results.get()
                     if isinstance(r, _GlobEntry):
@@ -904,7 +908,7 @@ def isdir(path: str) -> bool:
         raise Exception("unrecognized path")
 
 
-def _list_blobs(path: str, delimiter: Optional[str]=None) -> Iterator[str]:
+def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[str]:
     params = {}
     if delimiter is not None:
         params["delimiter"] = delimiter
@@ -1002,7 +1006,9 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
         raise Exception("unrecognized path")
 
 
-def _sharded_listdir_worker(prefixes: mp.Queue[Tuple[str, str, bool]], items: mp.Queue[Optional[str]]) -> None:
+def _sharded_listdir_worker(
+    prefixes: mp.Queue[Tuple[str, str, bool]], items: mp.Queue[Optional[str]]
+) -> None:
     while True:
         base, prefix, exact = prefixes.get(True)
         if exact:

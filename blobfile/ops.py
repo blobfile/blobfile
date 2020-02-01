@@ -578,16 +578,16 @@ def _azure_get_names(
     blobs = result["Blobs"]
     if blobs is None:
         return
-    if "Blob" in blobs:
-        if isinstance(blobs["Blob"], dict):
-            blobs["Blob"] = [blobs["Blob"]]
-        for b in blobs["Blob"]:
-            yield b["Name"]
     if "BlobPrefix" in blobs:
         if isinstance(blobs["BlobPrefix"], dict):
             blobs["BlobPrefix"] = [blobs["BlobPrefix"]]
         for bp in blobs["BlobPrefix"]:
             yield bp["Name"]
+    if "Blob" in blobs:
+        if isinstance(blobs["Blob"], dict):
+            blobs["Blob"] = [blobs["Blob"]]
+        for b in blobs["Blob"]:
+            yield b["Name"]
 
 
 def _google_isfile(path: str) -> Tuple[bool, Mapping[str, Any]]:
@@ -687,6 +687,32 @@ def _expand_implicit_dirs(root: str, it: Iterator[str]) -> Iterator[str]:
         previous_item = item
 
 
+def _compile_pattern(s: str):
+    tokens = [t for t in re.split("([*]+)", s) if t != ""]
+    regexp = ""
+    for tok in tokens:
+        if tok == "*":
+            regexp += r"[^/]*"
+        elif tok == "**":
+            regexp += r".*"
+        else:
+            regexp += re.escape(tok)
+    return re.compile(regexp + r"/?$")
+
+
+def _glob_full(pattern: str) -> Iterator[str]:
+    prefix, _, _ = pattern.partition("*")
+
+    re_pattern = _compile_pattern(pattern)
+
+    for path in _expand_implicit_dirs(root=prefix, it=_list_blobs(path=prefix)):
+        if bool(re_pattern.match(path)):
+            if path == prefix and path.endswith("/"):
+                # we matched the parent directory
+                continue
+            yield _strip_slash(path)
+
+
 def glob(pattern: str) -> Iterator[str]:
     """
     Find files and directories matching a pattern. Supports * and **
@@ -709,37 +735,46 @@ def glob(pattern: str) -> Iterator[str]:
                 yield _strip_slash(pattern)
             return
 
-        prefix, _, _ = pattern.partition("*")
-
-        def split_tokens(s: str) -> List[str]:
-            return [t for t in re.split("([*]+)", s) if t != ""]
-
-        def tokens_to_regexp(tokens: Sequence[str]):
-            regexp = ""
-            for tok in tokens:
-                if tok == "*":
-                    regexp += r"[^/]*"
-                elif tok == "**":
-                    regexp += r".*"
-                else:
-                    regexp += re.escape(tok)
-            return re.compile(regexp + r"/?$")
-
-        tokens = split_tokens(pattern)
-        re_pattern = tokens_to_regexp(tokens)
         if _is_google_path(pattern):
-            bucket, _ = google.split_url(prefix)
+            bucket, blob_prefix = google.split_url(pattern)
             assert "*" not in bucket
+            root = f"gs://{bucket}/"
         else:
-            account, container, _ = azure.split_url(prefix)
+            account, container, blob_prefix = azure.split_url(pattern)
             assert "*" not in account and "*" not in container
+            root = f"as://{account}-{container}/"
 
-        for path in _expand_implicit_dirs(root=prefix, it=_list_blobs(path=prefix)):
-            if bool(re_pattern.match(path)):
-                if path == prefix and path.endswith("/"):
-                    # we matched the parent directory
-                    continue
-                yield _strip_slash(path)
+        stack = []
+        stack.append(("", _split_path(blob_prefix)))
+        while len(stack) > 0:
+            cur, rem = stack.pop()
+            part = rem[0]
+            if "**" in part:
+                yield from _glob_full(root + cur + "".join(rem))
+            elif "*" in part:
+                re_pattern = _compile_pattern(root + cur + part)
+                prefix, _, _ = part.partition("*")
+                path = root + cur + prefix
+                for blobpath in _list_blobs(path=path, delimiter="/"):
+                    # in the case of dirname/* we should not return the path dirname/
+                    if blobpath == path and blobpath.endswith("/"):
+                        # we matched the parent directory
+                        continue
+                    if bool(re_pattern.match(blobpath)):
+                        if len(rem) == 1:
+                            yield _strip_slash(blobpath)
+                        else:
+                            assert path.startswith(root)
+                            stack.append((blobpath[len(root):], rem[1:]))
+            else:
+                cur += part
+                if len(rem) == 1:
+                    path = root+cur
+                    if exists(path):
+                        yield _strip_slash(path)
+                else:
+                    stack.append((cur, rem[1:]))
+        return
     else:
         raise Exception("unrecognized path")
 
@@ -1197,7 +1232,9 @@ def walk(
             dirnames = []
             filenames = []
             for result in it:
-                for name in get_names(result, blob):
+                for name in get_names(result):
+                    if name == blob:
+                        continue
                     name = name[len(blob) :]
                     if name.endswith("/"):
                         dirnames.append(name[:-1])

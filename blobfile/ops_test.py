@@ -404,7 +404,10 @@ def test_walk(ctx):
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
-def test_glob(ctx):
+@pytest.mark.parametrize(
+    "parallel", [False, True]
+)
+def test_glob(ctx, parallel):
     contents = b"meow!"
     with ctx() as path:
         dirpath = bf.dirname(path)
@@ -417,7 +420,7 @@ def test_glob(ctx):
 
         def assert_listing_equal(path, desired):
             desired = sorted([bf.join(dirpath, p) for p in desired])
-            actual = sorted(list(bf.glob(path)))
+            actual = sorted(list(bf.glob(path, parallel=parallel)))
             assert actual == desired, f"{actual} != {desired}"
 
         assert_listing_equal(bf.join(dirpath, "*b"), ["ab", "bb"])

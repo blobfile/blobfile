@@ -19,7 +19,7 @@ class BuildPyCommand(setuptools.command.build_py.build_py):
 
 setup_dict = dict(
     name="blobfile",
-    version="0.11.0",
+    version="0.12.0",
     description="Read GCS and local paths with the same interface, clone of tensorflow.io.gfile",
     long_description=README,
     long_description_content_type="text/markdown",
@@ -45,7 +45,7 @@ setup_dict = dict(
             "typeguard",
         ]
     },
-    python_requires=">=3.6.0",
+    python_requires=">=3.7.0",
     # indicate that we have type information
     package_data={"blobfile": ["*.pyi", "py.typed"]},
     # mypy cannot find type information in zip files

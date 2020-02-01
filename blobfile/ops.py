@@ -1,3 +1,6 @@
+# https://mypy.readthedocs.io/en/stable/common_issues.html#using-classes-that-are-generic-in-stubs-but-not-at-runtime
+from __future__ import annotations
+
 import calendar
 import os
 import tempfile
@@ -31,6 +34,7 @@ from typing import (
     cast,
     NamedTuple,
     List,
+    Union,
 )
 from typing_extensions import Literal, Protocol, runtime_checkable
 
@@ -713,7 +717,55 @@ def _glob_full(pattern: str) -> Iterator[str]:
             yield _strip_slash(path)
 
 
-def glob(pattern: str) -> Iterator[str]:
+class _GlobTask(NamedTuple):
+    cur: str
+    rem: Sequence[str]
+
+class _GlobEntry(NamedTuple):
+    path: str
+
+class _GlobTaskComplete(NamedTuple):
+    pass
+
+def _process_glob_task(root: str, t:_GlobTask) -> Iterator[Union[_GlobTask, _GlobEntry]]:
+    cur = t.cur + t.rem[0]
+    rem = t.rem[1:]
+    if "**" in cur:
+        for path in _glob_full(root + cur + "".join(rem)):
+            yield _GlobEntry(path)
+    elif "*" in cur:
+        re_pattern = _compile_pattern(root + cur)
+        prefix, _, _ = cur.partition("*")
+        path = root + prefix
+        for blobpath in _list_blobs(path=path, delimiter="/"):
+            # in the case of dirname/* we should not return the path dirname/
+            if blobpath == path and blobpath.endswith("/"):
+                # we matched the parent directory
+                continue
+            if bool(re_pattern.match(blobpath)):
+                if len(rem) == 0:
+                    yield _GlobEntry(_strip_slash(blobpath))
+                else:
+                    assert path.startswith(root)
+                    yield _GlobTask(blobpath[len(root):], rem)
+    else:
+        if len(rem) == 0:
+            path = root+cur
+            if exists(path):
+                yield _GlobEntry(_strip_slash(path))
+        else:
+            yield _GlobTask(cur, rem)
+
+
+def _glob_worker(root: str, tasks: mp.Queue[_GlobTask], results: mp.Queue[Union[_GlobEntry, _GlobTask, _GlobTaskComplete]]) -> None:
+    while True:
+        t = tasks.get()
+        for r in _process_glob_task(root=root, t=t):
+            results.put(r)
+        results.put(_GlobTaskComplete())
+
+
+def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
     """
     Find files and directories matching a pattern. Supports * and **
 
@@ -721,6 +773,9 @@ def glob(pattern: str) -> Iterator[str]:
     that is not quite the same as remote paths.  See https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#different-behavior-for-dot-files-in-local-file-system_1 for more information.
 
     Globs can have confusing performance, see https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#different-behavior-for-dot-files-in-local-file-system_1 for more information.
+
+    You can set `parallel=True` to use multiple processes to perform the glob.  It's likely
+    that the results will no longer be in order if that happens.
     """
     assert "?" not in pattern and "[" not in pattern and "]" not in pattern
 
@@ -744,37 +799,38 @@ def glob(pattern: str) -> Iterator[str]:
             assert "*" not in account and "*" not in container
             root = f"as://{account}-{container}/"
 
-        stack = []
-        stack.append(("", _split_path(blob_prefix)))
-        while len(stack) > 0:
-            cur, rem = stack.pop()
-            part = rem[0]
-            if "**" in part:
-                yield from _glob_full(root + cur + "".join(rem))
-            elif "*" in part:
-                re_pattern = _compile_pattern(root + cur + part)
-                prefix, _, _ = part.partition("*")
-                path = root + cur + prefix
-                for blobpath in _list_blobs(path=path, delimiter="/"):
-                    # in the case of dirname/* we should not return the path dirname/
-                    if blobpath == path and blobpath.endswith("/"):
-                        # we matched the parent directory
-                        continue
-                    if bool(re_pattern.match(blobpath)):
-                        if len(rem) == 1:
-                            yield _strip_slash(blobpath)
-                        else:
-                            assert path.startswith(root)
-                            stack.append((blobpath[len(root):], rem[1:]))
-            else:
-                cur += part
-                if len(rem) == 1:
-                    path = root+cur
-                    if exists(path):
-                        yield _strip_slash(path)
-                else:
-                    stack.append((cur, rem[1:]))
-        return
+        initial_task = _GlobTask("", _split_path(blob_prefix))
+
+        if parallel:
+            tasks = mp.Queue()
+            tasks.put(initial_task)
+            tasks_enqueued = 1
+            results = mp.Queue()
+
+            tasks_done = 0
+            with mp.Pool(initializer=_glob_worker, initargs=(root, tasks, results)
+            ):
+                while tasks_done < tasks_enqueued:
+                    r = results.get()
+                    if isinstance(r, _GlobEntry):
+                        yield r.path
+                    elif isinstance(r, _GlobTask):
+                        tasks.put(r)
+                        tasks_enqueued += 1
+                    elif isinstance(r, _GlobTaskComplete):
+                        tasks_done += 1
+                    else:
+                        raise Exception("invalid result")
+        else:
+            dq: collections.deque[_GlobTask] = collections.deque()
+            dq.append(initial_task)
+            while len(dq) > 0:
+                t = dq.popleft()
+                for r in _process_glob_task(root=root, t=t):
+                    if isinstance(r, _GlobEntry):
+                        yield r.path
+                    else:
+                        dq.append(r)
     else:
         raise Exception("unrecognized path")
 
@@ -946,9 +1002,7 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
         raise Exception("unrecognized path")
 
 
-# the Queues cannot be annotated without breaking pyimport when running pytest
-# they should be mp.Queue[Tuple[str, str, bool]] and mp.Queue[str]
-def _sharded_listdir_worker(prefixes: mp.Queue, items: mp.Queue) -> None:
+def _sharded_listdir_worker(prefixes: mp.Queue[Tuple[str, str, bool]], items: mp.Queue[Optional[str]]) -> None:
     while True:
         base, prefix, exact = prefixes.get(True)
         if exact:

@@ -704,11 +704,6 @@ def glob(pattern: str) -> Iterator[str]:
                 filepath = filepath[:-1]
             yield filepath
     elif _is_google_path(pattern) or _is_azure_path(pattern):
-        # TODO: 
-        # dirpatterns = pattern.split("/")
-        # for pattern in dirpatterns:
-        #     pass
-
         if "*" not in pattern:
             if exists(pattern):
                 yield _strip_slash(pattern)
@@ -719,7 +714,7 @@ def glob(pattern: str) -> Iterator[str]:
         def split_tokens(s: str) -> List[str]:
             return [t for t in re.split("([*]+)", s) if t != ""]
 
-        def tokens_to_regexp(tokens: Sequence[str]) -> re.Pattern[str]:
+        def tokens_to_regexp(tokens: Sequence[str]):
             regexp = ""
             for tok in tokens:
                 if tok == "*":

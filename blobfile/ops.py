@@ -1096,7 +1096,7 @@ def remove(path: str) -> None:
                 account, "/{container}/{blob}", container=container, blob=blob
             ),
             method="DELETE",
-            success_codes=(204, 404),
+            success_codes=(202, 404),
         )
         with _execute_azure_api_request(req) as resp:
             if resp.status == 404:

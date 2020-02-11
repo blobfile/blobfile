@@ -224,12 +224,22 @@ def generate_signed_url(key: Mapping[str, str], url: str) -> Tuple[str, float]:
 
 
 def split_url(path: str) -> Tuple[str, str, str]:
-    if not path.startswith("as://"):
+    if not path.startswith("https://"):
         raise Error(f"invalid path {path}")
-    path = path[len("as://") :]
-    bucket, _, obj = path.partition("/")
-    account, _, container = bucket.partition("-")
+    parts = path[len("https://") :].split("/")
+    if len(parts) < 2:
+        raise Error(f"invalid path {path}")
+    hostname = parts[0]
+    container = parts[1]
+    if not hostname.endswith(".blob.core.windows.net"):
+        raise Error(f"invalid path {path}")
+    obj = "/".join(parts[2:])
+    account = hostname.split(".")[0]
     return account, container, obj
+
+
+def combine_url(account: str, container: str, obj: str) -> str:
+    return f"https://{account}.blob.core.windows.net/{container}/{obj}"
 
 
 def sign_with_shared_key(req: Request, key: str) -> str:

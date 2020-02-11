@@ -406,7 +406,8 @@ def _is_google_path(path: str) -> bool:
 
 def _is_azure_path(path: str) -> bool:
     url = urllib.parse.urlparse(path)
-    return url.scheme == "as"
+    assert url.netloc is not None
+    return url.scheme == "https" and url.netloc.endswith(".blob.core.windows.net")
 
 
 def copy(
@@ -831,12 +832,12 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
             bucket, blob_prefix = google.split_url(pattern)
             if "*" in bucket:
                 raise Error("wildcards cannot be used in bucket name")
-            root = f"gs://{bucket}/"
+            root = google.combine_url(bucket, "")
         else:
             account, container, blob_prefix = azure.split_url(pattern)
             if "*" in account or "*" in container:
                 raise Error("wildcards cannot be used in account or container")
-            root = f"as://{account}-{container}/"
+            root = azure.combine_url(account, container, "")
 
         initial_task = _GlobTask("", _split_path(blob_prefix))
 
@@ -955,7 +956,7 @@ def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[str]:
             params=dict(prefix=prefix, **params),
         )
         get_names = _google_get_names
-        root = f"gs://{bucket}/"
+        root = google.combine_url(bucket, "")
     elif _is_azure_path(path):
         account, container, prefix = azure.split_url(path)
         it = _create_azure_page_iterator(
@@ -964,7 +965,7 @@ def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[str]:
             params=dict(comp="list", restype="container", prefix=prefix, **params),
         )
         get_names = _azure_get_names
-        root = f"as://{account}-{container}/"
+        root = azure.combine_url(account, container, "")
     else:
         raise Error(f"unrecognized path: path={path}")
 
@@ -1352,9 +1353,12 @@ def basename(path: str) -> str:
 
     For GCS, this is the part after the bucket
     """
-    if _is_google_path(path) or _is_azure_path(path):
-        url = urllib.parse.urlparse(path)
-        return url.path[1:].split("/")[-1]
+    if _is_google_path(path):
+        _, obj = google.split_url(path)
+        return obj.split("/")[-1]
+    elif _is_azure_path(path):
+        _, _, obj = azure.split_url(path)
+        return obj.split("/")[-1]
     else:
         return os.path.basename(path)
 
@@ -1365,16 +1369,22 @@ def dirname(path: str) -> str:
 
     If this is a GCS path, the root directory is gs://<bucket name>/
     """
-    if _is_google_path(path) or _is_azure_path(path):
-        url = urllib.parse.urlparse(path)
-        urlpath = _strip_slash(url.path[1:])
-
-        base = f"{url.scheme}://{url.netloc}"
-        if "/" in urlpath:
-            urlpath = "/".join(urlpath.split("/")[:-1])
-            return f"{base}/{urlpath}"
+    if _is_google_path(path):
+        bucket, obj = google.split_url(path)
+        obj = _strip_slash(obj)
+        if "/" in obj:
+            obj = "/".join(obj.split("/")[:-1])
+            return google.combine_url(bucket, obj)
         else:
-            return base
+            return google.combine_url(bucket, "")[:-1]
+    elif _is_azure_path(path):
+        account, container, obj = azure.split_url(path)
+        obj = _strip_slash(obj)
+        if "/" in obj:
+            obj = "/".join(obj.split("/")[:-1])
+            return azure.combine_url(account, container, obj)
+        else:
+            return azure.combine_url(account, container, "")[:-1]
     else:
         return os.path.dirname(path)
 
@@ -1397,16 +1407,21 @@ def _join2(a: str, b: str) -> str:
             a += "/"
         if "://" in b:
             raise Error("cannot join two fully qualified paths")
-        parsed_a = urllib.parse.urlparse(a)
-        newpath = urllib.parse.urljoin(parsed_a.path, b)
-        if not newpath.startswith("/"):
-            # urljoin has special handling for http:// urls
-            # urllib.parse.urljoin("http://a/b/c/d;p?q", "../../../g") works fine
-            # urllib.parse.urljoin("gs://a/b/c/d;p?q", "../../../g") does not
-            # urllib.parse.urljoin("/b/c/d;p?q", "../../../g") is just "g"
-            # see https://tools.ietf.org/html/rfc3986.html 5.4.2
-            newpath = "/" + newpath
-        return f"{parsed_a.scheme}://{parsed_a.netloc}" + newpath
+
+        if _is_google_path(a):
+            bucket, obj = google.split_url(a)
+            obj = urllib.parse.urljoin(obj, b)
+            if obj.startswith("/"):
+                obj = obj[1:]
+            return google.combine_url(bucket, obj)
+        elif _is_azure_path(a):
+            account, container, obj = azure.split_url(a)
+            obj = urllib.parse.urljoin(obj, b)
+            if obj.startswith("/"):
+                obj = obj[1:]
+            return azure.combine_url(account, container, obj)
+        else:
+            raise Error(f"unrecognized path: path={a}")
     else:
         raise Error(f"unrecognized path: path={a}")
 

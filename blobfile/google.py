@@ -258,3 +258,7 @@ def split_url(path: str) -> Tuple[str, str]:
     path = path[len("gs://") :]
     bucket, _, obj = path.partition("/")
     return bucket, obj
+
+
+def combine_url(bucket: str, obj: str) -> str:
+    return f"gs://{bucket}/{obj}"

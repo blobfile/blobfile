@@ -28,7 +28,8 @@ import blobfile as bf
 from . import ops, azure
 
 GCS_TEST_BUCKET = "csh-test-2"
-AS_TEST_BUCKET = "cshteststorage2-testcontainer"
+AS_TEST_ACCOUNT = "cshteststorage2"
+AS_TEST_CONTAINER = "testcontainer"
 
 
 @contextlib.contextmanager
@@ -52,8 +53,10 @@ def _get_temp_gcs_path():
 @contextlib.contextmanager
 def _get_temp_as_path():
     random_id = "".join(random.choice(string.ascii_lowercase) for i in range(16))
-    path = f"as://{AS_TEST_BUCKET}/" + random_id
-    account, _, container = AS_TEST_BUCKET.partition("-")
+    path = (
+        f"https://{AS_TEST_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}/"
+        + random_id
+    )
     yield path + "/file.name"
     sp.run(
         [
@@ -62,9 +65,9 @@ def _get_temp_as_path():
             "blob",
             "delete-batch",
             "--account-name",
-            account,
+            AS_TEST_ACCOUNT,
             "--source",
-            container,
+            AS_TEST_CONTAINER,
             "--pattern",
             f"{random_id}/*",
         ],
@@ -74,7 +77,7 @@ def _get_temp_as_path():
 
 
 def _write_contents(path, contents):
-    if path.startswith("as://"):
+    if ".blob.core.windows.net" in path:
         with tempfile.TemporaryDirectory() as tmpdir:
             assert isinstance(tmpdir, str)
             account, container, blob = azure.split_url(path)
@@ -107,7 +110,7 @@ def _write_contents(path, contents):
 
 
 def _read_contents(path):
-    if path.startswith("as://"):
+    if ".blob.core.windows.net" in path:
         with tempfile.TemporaryDirectory() as tmpdir:
             assert isinstance(tmpdir, str)
             account, container, blob = azure.split_url(path)
@@ -151,11 +154,11 @@ def test_basename():
         ("gs://a/b/", ""),
         ("gs://a/b", "b"),
         ("gs://a/b/c/test.filename", "test.filename"),
-        ("as://a", ""),
-        ("as://a/", ""),
-        ("as://a/b/", ""),
-        ("as://a/b", "b"),
-        ("as://a/b/c/test.filename", "test.filename"),
+        ("https://a.blob.core.windows.net/b", ""),
+        ("https://a.blob.core.windows.net/b/", ""),
+        ("https://a.blob.core.windows.net/b/c/", ""),
+        ("https://a.blob.core.windows.net/b/c", "c"),
+        ("https://a.blob.core.windows.net/b/c/test.filename", "test.filename"),
     ]
     for input_, desired_output in testcases:
         actual_output = bf.basename(input_)
@@ -174,11 +177,26 @@ def test_dirname():
         ("gs://a/b", "gs://a"),
         ("gs://a/b/c/test.filename", "gs://a/b/c"),
         ("gs://a/b/c/", "gs://a/b"),
-        ("as://a", "as://a"),
-        ("as://a/", "as://a"),
-        ("as://a/b", "as://a"),
-        ("as://a/b/c/test.filename", "as://a/b/c"),
-        ("as://a/b/c/", "as://a/b"),
+        (
+            "https://a.blob.core.windows.net/container",
+            "https://a.blob.core.windows.net/container",
+        ),
+        (
+            "https://a.blob.core.windows.net/container/",
+            "https://a.blob.core.windows.net/container",
+        ),
+        (
+            "https://a.blob.core.windows.net/container/b",
+            "https://a.blob.core.windows.net/container",
+        ),
+        (
+            "https://a.blob.core.windows.net/container/b/c/test.filename",
+            "https://a.blob.core.windows.net/container/b/c",
+        ),
+        (
+            "https://a.blob.core.windows.net/container/b/c/",
+            "https://a.blob.core.windows.net/container/b",
+        ),
     ]
     for input_, desired_output in testcases:
         actual_output = bf.dirname(input_)
@@ -200,11 +218,31 @@ def test_join():
         ("gs://a/b/", "/c/", "gs://a/c/"),
         ("gs://a/b/", "../c/", "gs://a/c/"),
         ("gs://a/b/", "../../c/", "gs://a/c/"),
-        ("as://a", "b", "as://a/b"),
-        ("as://a/b", "c", "as://a/b/c"),
-        ("as://a/b/", "c", "as://a/b/c"),
-        ("as://a/b/", "c/", "as://a/b/c/"),
-        ("as://a/b/", "/c/", "as://a/c/"),
+        (
+            "https://a.blob.core.windows.net/container",
+            "b",
+            "https://a.blob.core.windows.net/container/b",
+        ),
+        (
+            "https://a.blob.core.windows.net/container/b",
+            "c",
+            "https://a.blob.core.windows.net/container/b/c",
+        ),
+        (
+            "https://a.blob.core.windows.net/container/b/",
+            "c",
+            "https://a.blob.core.windows.net/container/b/c",
+        ),
+        (
+            "https://a.blob.core.windows.net/container/b/",
+            "c/",
+            "https://a.blob.core.windows.net/container/b/c/",
+        ),
+        (
+            "https://a.blob.core.windows.net/container/b/",
+            "/c/",
+            "https://a.blob.core.windows.net/container/c/",
+        ),
     ]
     for input_a, input_b, desired_output in testcases:
         actual_output = bf.join(input_a, input_b)

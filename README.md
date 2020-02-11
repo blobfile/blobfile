@@ -21,16 +21,19 @@ with bf.BlobFile("gs://my-bucket-name/cats", "wb") as w:
 
 Here are the functions:
 
-* `BlobFile` - like `open()` but works with `gs://` paths too, data is streamed to/from the remote file.
-    * Reading is done without downloading the entire remote file.
-    * Writing is done to the remote file directly, but only in chunks of a few MB in size.  `flush()` will not cause an early write.
-    * Appending is not implemented.
-    * You can specify a `buffer_size` on creation to buffer more data and potentially make reading more efficient.
-* `LocalBlobFile` - like `BlobFile()` but operations take place on a local file.
-    * Reading is done by downloading the file during the constructor.
-    * Writing is done by uploading the file on `close()` or during destruction.
-    * Appending is done by downloading the file during construction and uploading on `close()`.
-    * You can pass a `cache_dir` parameter to cache files for reading.  You are reponsible for cleaning up the cache directory.
+* `BlobFile` - like `open()` but works with `gs://` paths too, data can be streamed to/from the remote file.  It accepts the following arguments:
+    * `streaming`:
+        * The default for `streaming` is `True` when `mode` is in `"r", "rb"` and `False` when `mode` is in `"w", "wb", "a", "ab"`.
+        * `streaming=True`:
+            * Reading is done without downloading the entire remote file.
+            * Writing is done to the remote file directly, but only in chunks of a few MB in size.  `flush()` will not cause an early write.
+            * Appending is not implemented.
+        * `streaming=False`: 
+            * Reading is done by downloading the remote file to a local file during the constructor.
+            * Writing is done by uploading the file on `close()` or during destruction.
+            * Appending is done by downloading the file during construction and uploading on `close()`.
+    * `buffer_size`: number of bytes to buffer, this can potentially make reading more efficient.
+    * `cache_dir`: a directory in which to cache files for reading, only valid if `streaming=False` and `mode` is in `"r", "rb"`.   You are reponsible for cleaning up the cache directory.
 
 Some are inspired by existing `os.path` and `shutil` functions:
 

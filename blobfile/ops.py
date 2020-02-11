@@ -510,11 +510,13 @@ def copy(
             return md5(dst)
         return
 
-    for attempt, backoff in enumerate(_exponential_sleep_generator(
-        initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX
-    )):
+    for attempt, backoff in enumerate(
+        _exponential_sleep_generator(initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX)
+    ):
         try:
-            with BlobFile(src, "rb") as src_f, BlobFile(dst, "wb") as dst_f:
+            with BlobFile(src, "rb", streaming=True) as src_f, BlobFile(
+                dst, "wb", streaming=True
+            ) as dst_f:
                 m = hashlib.md5()
                 while True:
                     block = src_f.read(CHUNK_SIZE)
@@ -1844,70 +1846,129 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
 
 
 @overload
-def BlobFile(path: str, mode: Literal["rb"], buffer_size: int = ...) -> BinaryIO:
+def BlobFile(
+    path: str,
+    mode: Literal["rb"],
+    streaming: Optional[bool] = ...,
+    buffer_size: int = ...,
+    cache_dir: Optional[str] = ...,
+) -> BinaryIO:
     ...
 
 
 @overload
-def BlobFile(path: str, mode: Literal["wb"], buffer_size: int = ...) -> BinaryIO:
+def BlobFile(
+    path: str,
+    mode: Literal["wb"],
+    streaming: Optional[bool] = ...,
+    buffer_size: int = ...,
+    cache_dir: Optional[str] = ...,
+) -> BinaryIO:
     ...
 
 
 @overload
-def BlobFile(path: str, mode: Literal["r"], buffer_size: int = ...) -> TextIO:
+def BlobFile(
+    path: str,
+    mode: Literal["ab"],
+    streaming: Optional[bool] = ...,
+    buffer_size: int = ...,
+    cache_dir: Optional[str] = ...,
+) -> BinaryIO:
     ...
 
 
 @overload
-def BlobFile(path: str, mode: Literal["w"], buffer_size: int = ...) -> TextIO:
+def BlobFile(
+    path: str,
+    mode: Literal["r"],
+    streaming: Optional[bool] = ...,
+    buffer_size: int = ...,
+    cache_dir: Optional[str] = ...,
+) -> TextIO:
+    ...
+
+
+@overload
+def BlobFile(
+    path: str,
+    mode: Literal["w"],
+    streaming: Optional[bool] = ...,
+    buffer_size: int = ...,
+    cache_dir: Optional[str] = ...,
+) -> TextIO:
+    ...
+
+
+@overload
+def BlobFile(
+    path: str,
+    mode: Literal["a"],
+    streaming: Optional[bool] = ...,
+    buffer_size: int = ...,
+    cache_dir: Optional[str] = ...,
+) -> TextIO:
     ...
 
 
 def BlobFile(
     path: str,
     mode: Literal["r", "rb", "w", "wb"] = "r",
+    streaming: Optional[bool] = None,
     buffer_size: int = io.DEFAULT_BUFFER_SIZE,
+    cache_dir: Optional[str] = None,
 ):
     """
     Open a local or remote file for reading or writing
     """
     if path.endswith("/"):
         raise Error(f"path must specify a file, not a directory: path={path}")
-    mode = mode
-    assert mode in ("w", "wb", "r", "rb")
-    if _is_local_path(path):
-        f = io.FileIO(path, mode=mode)
-        if "r" in mode:
-            f = io.BufferedReader(f, buffer_size=buffer_size)
-        else:
-            f = io.BufferedWriter(f, buffer_size=buffer_size)
-    elif _is_google_path(path):
-        if mode in ("w", "wb"):
-            f = _GoogleStreamingWriteFile(path)
-        elif mode in ("r", "rb"):
-            f = _GoogleStreamingReadFile(path)
-            f = io.BufferedReader(f, buffer_size=buffer_size)
-        else:
-            raise Error(f"unsupported mode {mode}")
-    elif _is_azure_path(path):
-        if mode in ("w", "wb"):
-            f = _AzureStreamingWriteFile(path)
-        elif mode in ("r", "rb"):
-            f = _AzureStreamingReadFile(path)
-            f = io.BufferedReader(f, buffer_size=buffer_size)
-        else:
-            raise Error(f"unsupported mode {mode}")
-    else:
-        raise Error(f"unrecognized path: path={path}")
 
-    # this should be a protocol so we don't have to cast
-    # but the standard library does not seem to have a file-like protocol
-    binary_f = cast(BinaryIO, f)
-    if "b" in mode:
-        return binary_f
+    if streaming is None:
+        streaming = mode in ("r", "rb")
+
+    if streaming:
+        if mode not in ("w", "wb", "r", "rb"):
+            raise Error(f"invalid mode for streaming file: mode={mode}")
+        if cache_dir is not None:
+            raise Error("cannot specify cache_dir for streaming files")
+        if _is_local_path(path):
+            f = io.FileIO(path, mode=mode)
+            if "r" in mode:
+                f = io.BufferedReader(f, buffer_size=buffer_size)
+            else:
+                f = io.BufferedWriter(f, buffer_size=buffer_size)
+        elif _is_google_path(path):
+            if mode in ("w", "wb"):
+                f = _GoogleStreamingWriteFile(path)
+            elif mode in ("r", "rb"):
+                f = _GoogleStreamingReadFile(path)
+                f = io.BufferedReader(f, buffer_size=buffer_size)
+            else:
+                raise Error(f"unsupported mode {mode}")
+        elif _is_azure_path(path):
+            if mode in ("w", "wb"):
+                f = _AzureStreamingWriteFile(path)
+            elif mode in ("r", "rb"):
+                f = _AzureStreamingReadFile(path)
+                f = io.BufferedReader(f, buffer_size=buffer_size)
+            else:
+                raise Error(f"unsupported mode {mode}")
+        else:
+            raise Error(f"unrecognized path: path={path}")
+
+        # this should be a protocol so we don't have to cast
+        # but the standard library does not seem to have a file-like protocol
+        binary_f = cast(BinaryIO, f)
+        if "b" in mode:
+            return binary_f
+        else:
+            text_f = io.TextIOWrapper(binary_f, encoding="utf8")
+            return cast(TextIO, text_f)
     else:
-        text_f = io.TextIOWrapper(binary_f, encoding="utf8")
-        return cast(TextIO, text_f)
+        return LocalBlobFile(
+            path=path, mode=mode, buffer_size=buffer_size, cache_dir=cache_dir
+        )
 
 
 class _ProxyFile(io.FileIO):
@@ -1940,42 +2001,60 @@ class _ProxyFile(io.FileIO):
 
 @overload
 def LocalBlobFile(
-    path: str, mode: Literal["rb"], cache_dir: Optional[str] = ...
+    path: str,
+    mode: Literal["rb"],
+    buffer_size: int = ...,
+    cache_dir: Optional[str] = ...,
 ) -> BinaryIO:
     ...
 
 
 @overload
 def LocalBlobFile(
-    path: str, mode: Literal["wb"], cache_dir: Optional[str] = ...
+    path: str,
+    mode: Literal["wb"],
+    buffer_size: int = ...,
+    cache_dir: Optional[str] = ...,
 ) -> BinaryIO:
     ...
 
 
 @overload
 def LocalBlobFile(
-    path: str, mode: Literal["ab"], cache_dir: Optional[str] = ...
+    path: str,
+    mode: Literal["ab"],
+    buffer_size: int = ...,
+    cache_dir: Optional[str] = ...,
 ) -> BinaryIO:
     ...
 
 
 @overload
 def LocalBlobFile(
-    path: str, mode: Literal["r"], cache_dir: Optional[str] = ...
+    path: str,
+    mode: Literal["r"],
+    buffer_size: int = ...,
+    cache_dir: Optional[str] = ...,
 ) -> TextIO:
     ...
 
 
 @overload
 def LocalBlobFile(
-    path: str, mode: Literal["w"], cache_dir: Optional[str] = ...
+    path: str,
+    mode: Literal["w"],
+    buffer_size: int = ...,
+    cache_dir: Optional[str] = ...,
 ) -> TextIO:
     ...
 
 
 @overload
 def LocalBlobFile(
-    path: str, mode: Literal["a"], cache_dir: Optional[str] = ...
+    path: str,
+    mode: Literal["a"],
+    buffer_size: int = ...,
+    cache_dir: Optional[str] = ...,
 ) -> TextIO:
     ...
 
@@ -1983,6 +2062,7 @@ def LocalBlobFile(
 def LocalBlobFile(
     path: str,
     mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r",
+    buffer_size: int = io.DEFAULT_BUFFER_SIZE,
     cache_dir: Optional[str] = None,
 ):
     """
@@ -1999,7 +2079,11 @@ def LocalBlobFile(
         raise Error(f"path must specify a file, not a directory: path={path}")
     remote_path = None
     tmp_dir = None
-    assert mode in ("w", "wb", "r", "rb", "a", "ab")
+    if mode not in ("w", "wb", "r", "rb", "a", "ab"):
+        raise Error(f"invalid mode: mode={mode}")
+
+    if cache_dir is not None and mode not in ("r", "rb"):
+        raise Error("cache_dir only supported in read mode")
 
     if _is_google_path(path) or _is_azure_path(path):
         remote_path = path
@@ -2087,6 +2171,10 @@ def LocalBlobFile(
     f = _ProxyFile(
         local_path=local_path, mode=mode, tmp_dir=tmp_dir, remote_path=remote_path
     )
+    if "r" in mode:
+        f = io.BufferedReader(f, buffer_size=buffer_size)
+    else:
+        f = io.BufferedWriter(f, buffer_size=buffer_size)
     binary_f = cast(BinaryIO, f)
     if "b" in mode:
         return binary_f

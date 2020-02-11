@@ -13,7 +13,8 @@ class Request:
         headers: Optional[Mapping[str, str]] = None,
         data: Any = None,
         success_codes: Sequence[int] = (200,),
-        retry_codes: Sequence[int] = (429, 500, 502, 503, 504),
+        # https://cloud.google.com/storage/docs/resumable-uploads#practices
+        retry_codes: Sequence[int] = (408, 429, 500, 502, 503, 504),
     ) -> None:
         self.url = url
         self.method = method

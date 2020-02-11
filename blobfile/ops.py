@@ -71,6 +71,15 @@ INVALID_CHARS = (
 )
 
 
+class _GoogleResumableUploadFailure(RequestFailure):
+    """
+    An internal error used to handle the case when a GCS resumable upload
+    failed in a recoverable way
+    """
+
+    pass
+
+
 class Stat(NamedTuple):
     size: int
     mtime: float
@@ -493,6 +502,7 @@ def copy(
             return md5(dst)
         return
 
+    # _GoogleResumableUploadFailure
     with BlobFile(src, "rb") as src_f, BlobFile(dst, "wb") as dst_f:
         m = hashlib.md5()
         while True:
@@ -633,7 +643,7 @@ def exists(path: str) -> bool:
             return True
         return isdir(path)
     else:
-        Error(f"unrecognized path: path={path}")
+        raise Error(f"unrecognized path: path={path}")
 
 
 def _string_overlap(s1: str, s2: str) -> int:
@@ -835,7 +845,7 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
                     else:
                         dq.append(r)
     else:
-        Error(f"unrecognized path: path={pattern}")
+        raise Error(f"unrecognized path: path={pattern}")
 
 
 def _strip_slash(path: str) -> str:
@@ -904,7 +914,7 @@ def isdir(path: str) -> bool:
                     "BlobPrefix" in result["Blobs"] or "Blob" in result["Blobs"]
                 )
     else:
-        Error(f"unrecognized path: path={path}")
+        raise Error(f"unrecognized path: path={path}")
 
 
 def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[str]:
@@ -931,7 +941,7 @@ def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[str]:
         get_names = _azure_get_names
         root = f"as://{account}-{container}/"
     else:
-        Error(f"unrecognized path: path={path}")
+        raise Error(f"unrecognized path: path={path}")
 
     for result in it:
         for name in get_names(result):
@@ -1002,7 +1012,7 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
                         continue
                     yield item
     else:
-        Error(f"unrecognized path: path={path}")
+        raise Error(f"unrecognized path: path={path}")
 
 
 def _sharded_listdir_worker(
@@ -1052,7 +1062,7 @@ def makedirs(path: str) -> None:
         with _execute_azure_api_request(req):
             pass
     else:
-        Error(f"unrecognized path: path={path}")
+        raise Error(f"unrecognized path: path={path}")
 
 
 def remove(path: str) -> None:
@@ -1094,7 +1104,7 @@ def remove(path: str) -> None:
                     f"The system cannot find the path specified: '{path}'"
                 )
     else:
-        Error(f"unrecognized path: path={path}")
+        raise Error(f"unrecognized path: path={path}")
 
 
 def rmdir(path: str) -> None:
@@ -1121,7 +1131,7 @@ def rmdir(path: str) -> None:
     elif _is_azure_path(path):
         _, _, blob = azure.split_url(path)
     else:
-        Error(f"unrecognized path: path={path}")
+        raise Error(f"unrecognized path: path={path}")
 
     if blob == "":
         raise Error(f"Cannot delete bucket: '{path}'")
@@ -1161,7 +1171,7 @@ def rmdir(path: str) -> None:
         with _execute_azure_api_request(req):
             pass
     else:
-        Error(f"unrecognized path: path={path}")
+        raise Error(f"unrecognized path: path={path}")
 
 
 def stat(path: str) -> Stat:
@@ -1188,7 +1198,7 @@ def stat(path: str) -> Stat:
         t = calendar.timegm(ts)
         return Stat(size=int(metadata["Content-Length"]), mtime=t)
     else:
-        Error(f"unrecognized path: path={path}")
+        raise Error(f"unrecognized path: path={path}")
 
 
 def rmtree(path: str) -> None:
@@ -1245,7 +1255,7 @@ def rmtree(path: str) -> None:
                 with _execute_azure_api_request(req):
                     pass
     else:
-        Error(f"unrecognized path: path={path}")
+        raise Error(f"unrecognized path: path={path}")
 
 
 def walk(
@@ -1293,7 +1303,7 @@ def walk(
                 )
                 get_names = _azure_get_names
             else:
-                Error(f"unrecognized path: path={top}")
+                raise Error(f"unrecognized path: path={top}")
             dirnames = []
             filenames = []
             for result in it:
@@ -1308,7 +1318,7 @@ def walk(
             yield (_strip_slash(cur), dirnames, filenames)
             dq.extend(join(cur, dirname) for dirname in dirnames)
     else:
-        Error(f"unrecognized path: path={top}")
+        raise Error(f"unrecognized path: path={top}")
 
 
 def basename(path: str) -> str:
@@ -1373,7 +1383,7 @@ def _join2(a: str, b: str) -> str:
             newpath = "/" + newpath
         return f"{parsed_a.scheme}://{parsed_a.netloc}" + newpath
     else:
-        Error(f"unrecognized path: path={a}")
+        raise Error(f"unrecognized path: path={a}")
 
 
 def get_url(path: str) -> Tuple[str, Optional[float]]:
@@ -1395,7 +1405,7 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
     elif _is_local_path(path):
         return f"file://{path}", None
     else:
-        Error(f"unrecognized path: path={path}")
+        raise Error(f"unrecognized path: path={path}")
 
 
 def _block_md5(f: BinaryIO) -> bytes:
@@ -1731,8 +1741,17 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
             success_codes=(200, 201) if finalize else (308,),
         )
 
-        with _execute_google_api_request(req):
-            pass
+        try:
+            with _execute_google_api_request(req):
+                pass
+        except RequestFailure as e:
+            # https://cloud.google.com/storage/docs/resumable-uploads#practices
+            if e.response.status in (404, 410):
+                raise _GoogleResumableUploadFailure(
+                    message=e.message, request=e.request, response=e.response
+                )
+            else:
+                raise
 
 
 class _AzureStreamingWriteFile(_StreamingWriteFile):
@@ -1856,7 +1875,7 @@ def BlobFile(
         else:
             raise Error(f"unsupported mode {mode}")
     else:
-        Error(f"unrecognized path: path={path}")
+        raise Error(f"unrecognized path: path={path}")
 
     # this should be a protocol so we don't have to cast
     # but the standard library does not seem to have a file-like protocol

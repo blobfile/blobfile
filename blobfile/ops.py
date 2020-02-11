@@ -44,7 +44,7 @@ import xmltodict
 import filelock
 
 from . import google, azure
-from .common import Request
+from .common import Request, Error, RequestFailure
 
 
 EARLY_EXPIRATION_SECONDS = 5 * 60
@@ -185,7 +185,6 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
             )
 
         with _execute_request(build_req) as resp:
-            assert resp.status == 200, f"unexpected status {resp.status}"
             result = json.load(resp)
             return result["access_token"], now + float(result["expires_in"])
     elif _is_gce_instance():
@@ -198,11 +197,10 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
             )
 
         with _execute_request(build_req) as resp:
-            assert resp.status == 200, f"unexpected status {resp.status}"
             result = json.load(resp)
             return result["access_token"], now + float(result["expires_in"])
     else:
-        raise Exception("no google credentials found")
+        raise Error("no google credentials found")
 
 
 def _azure_get_access_token(account: str) -> Tuple[Any, float]:
@@ -221,7 +219,6 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
             )
 
         with _execute_request(build_req) as resp:
-            assert resp.status == 200, f"unexpected status {resp.status}"
             result = json.load(resp)
             auth = (azure.OAUTH_TOKEN, result["access_token"])
 
@@ -238,7 +235,6 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
                 return azure.make_api_request(req, auth=auth)
 
             with _execute_request(build_req) as resp:
-                assert resp.status == 200, f"unexpected status {resp.status}"
                 out = json.load(resp)
                 # check if we found the storage account we are looking for
                 for obj in out["value"]:
@@ -257,7 +253,6 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
                 return azure.make_api_request(req, auth=auth)
 
             with _execute_request(build_req) as resp:
-                assert resp.status == 200, f"unexpected status {resp.status}"
                 result = json.load(resp)
                 for key in result["keys"]:
                     if key["permissions"] == "FULL":
@@ -266,11 +261,11 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
                             now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
                         )
                 else:
-                    raise Exception(
+                    raise Error(
                         f"storage account {account} did not have any keys defined"
                     )
 
-        raise Exception(f"storage account id not found for storage account {account}")
+        raise Error(f"storage account id not found for storage account {account}")
     else:
         # we have a service account, get an oauth token
         def build_req() -> Request:
@@ -279,7 +274,6 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
             )
 
         with _execute_request(build_req) as resp:
-            assert resp.status == 200, f"unexpected status {resp.status}"
             result = json.load(resp)
             return (
                 (azure.OAUTH_TOKEN, result["access_token"]),
@@ -291,13 +285,11 @@ def _azure_get_sas_token(account: str) -> Tuple[Any, float]:
     def build_req() -> Request:
         req = azure.create_user_delegation_sas_request(account=account)
         auth = global_azure_access_token_manager.get_token(key=account)
-        assert (
-            auth[0] == azure.OAUTH_TOKEN
-        ), "only oauth tokens can be used to get sas tokens"
+        if auth[0] != azure.OAUTH_TOKEN:
+            raise Error("only oauth tokens can be used to get sas tokens")
         return azure.make_api_request(req, auth=auth)
 
     with _execute_request(build_req) as resp:
-        assert resp.status == 200, f"unexpected status {resp.status}"
         out = xmltodict.parse(resp)
         t = time.time() + AZURE_SAS_TOKEN_EXPIRATION_SECONDS
         return out["UserDelegationKey"], t
@@ -342,10 +334,7 @@ def _execute_google_api_request(req: Request) -> urllib3.HTTPResponse:
     return _execute_request(build_req)
 
 
-def _execute_request(
-    build_req: Callable[[], Request],
-    retry_statuses: Sequence[int] = (429, 500, 502, 503, 504),
-) -> urllib3.HTTPResponse:
+def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
     for attempt, backoff in enumerate(_exponential_sleep_generator(0.1, maximum=60.0)):
         req = build_req()
         url = req.url
@@ -365,10 +354,16 @@ def _execute_request(
                 retries=False,
                 redirect=False,
             )
-            if resp.status in retry_statuses:
+            if resp.status in req.retry_codes:
                 err = f"request failed with status {resp.status}"
-            else:
+            elif resp.status in req.success_codes:
                 return resp
+            else:
+                raise RequestFailure(
+                    message=f"unexpected status {resp.status}",
+                    request=req,
+                    response=resp,
+                )
         except (
             urllib3.exceptions.ConnectTimeoutError,
             urllib3.exceptions.ReadTimeoutError,
@@ -433,11 +428,11 @@ def copy(
                 ),
                 method="POST",
                 params=params,
+                success_codes=(200, 404),
             )
             with _execute_google_api_request(req) as resp:
                 if resp.status == 404:
                     raise FileNotFoundError(f"src file '{src}' not found")
-                assert resp.status == 200, f"unexpected status {resp.status}"
                 result = json.load(resp)
                 if result["done"]:
                     if return_md5:
@@ -466,12 +461,12 @@ def copy(
                     blob=src_blob,
                 )
             },
+            success_codes=(202, 404),
         )
 
         with _execute_azure_api_request(req) as resp:
             if resp.status == 404:
                 raise FileNotFoundError(f"src file '{src}' not found")
-            assert resp.status == 202, f"unexpected status {resp.status}"
             copy_id = resp.headers["x-ms-copy-id"]
             copy_status = resp.headers["x-ms-copy-status"]
 
@@ -489,10 +484,11 @@ def copy(
                 method="GET",
             )
             with _execute_azure_api_request(req) as resp:
-                assert resp.status == 200, f"unexpected status {resp.status}"
-                assert resp.headers["x-ms-copy-id"] == copy_id
+                if resp.headers["x-ms-copy-id"] != copy_id:
+                    raise Error("copy id mismatch")
                 copy_status = resp.headers["x-ms-copy-status"]
-        assert copy_status == "success"
+        if copy_status != "success":
+            raise Error(f"invalid copy status {copy_status}")
         if return_md5:
             return md5(dst)
         return
@@ -523,7 +519,7 @@ def _calc_range(start: Optional[int] = None, end: Optional[int] = None) -> str:
         else:
             return f"bytes=-{-int(end)}"
     else:
-        raise Exception("invalid range")
+        raise Error("invalid range")
 
 
 def _create_google_page_iterator(
@@ -599,9 +595,9 @@ def _google_isfile(path: str) -> Tuple[bool, Mapping[str, Any]]:
             "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
         ),
         method="GET",
+        success_codes=(200, 404),
     )
     with _execute_google_api_request(req) as resp:
-        assert resp.status in (200, 404), f"unexpected status {resp.status}"
         return resp.status == 200, json.load(resp)
 
 
@@ -614,9 +610,9 @@ def _azure_isfile(path: str) -> Tuple[bool, Mapping[str, Any]]:
             account, "/{container}/{blob}", container=container, blob=blob
         ),
         method="HEAD",
+        success_codes=(200, 404),
     )
     with _execute_azure_api_request(req) as resp:
-        assert resp.status in (200, 404), f"unexpected status {resp.status}"
         return resp.status == 200, resp.headers
 
 
@@ -637,7 +633,7 @@ def exists(path: str) -> bool:
             return True
         return isdir(path)
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
 
 def _string_overlap(s1: str, s2: str) -> int:
@@ -782,7 +778,8 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
     You can set `parallel=True` to use multiple processes to perform the glob.  It's likely
     that the results will no longer be in order.
     """
-    assert "?" not in pattern and "[" not in pattern and "]" not in pattern
+    if "?" in pattern or "[" in pattern or "]" in pattern:
+        raise Error("advanced glob queries are not supported")
 
     if _is_local_path(pattern):
         for filepath in local_glob.iglob(pattern, recursive=True):
@@ -797,11 +794,13 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
 
         if _is_google_path(pattern):
             bucket, blob_prefix = google.split_url(pattern)
-            assert "*" not in bucket
+            if "*" in bucket:
+                raise Error("wildcards cannot be used in bucket name")
             root = f"gs://{bucket}/"
         else:
             account, container, blob_prefix = azure.split_url(pattern)
-            assert "*" not in account and "*" not in container
+            if "*" in account or "*" in container:
+                raise Error("wildcards cannot be used in account or container")
             root = f"as://{account}-{container}/"
 
         initial_task = _GlobTask("", _split_path(blob_prefix))
@@ -824,7 +823,7 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
                     elif isinstance(r, _GlobTaskComplete):
                         tasks_done += 1
                     else:
-                        raise Exception("invalid result")
+                        raise Error("invalid result")
         else:
             dq: collections.deque[_GlobTask] = collections.deque()
             dq.append(initial_task)
@@ -836,7 +835,7 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
                     else:
                         dq.append(r)
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
 
 def _strip_slash(path: str) -> str:
@@ -905,7 +904,7 @@ def isdir(path: str) -> bool:
                     "BlobPrefix" in result["Blobs"] or "Blob" in result["Blobs"]
                 )
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
 
 def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[str]:
@@ -932,7 +931,7 @@ def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[str]:
         get_names = _azure_get_names
         root = f"as://{account}-{container}/"
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
     for result in it:
         for name in get_names(result):
@@ -1003,7 +1002,7 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
                         continue
                     yield item
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
 
 def _sharded_listdir_worker(
@@ -1036,8 +1035,8 @@ def makedirs(path: str) -> None:
             method="POST",
             params=dict(uploadType="media", name=blob),
         )
-        with _execute_google_api_request(req) as resp:
-            assert resp.status == 200, f"unexpected status {resp.status}"
+        with _execute_google_api_request(req):
+            pass
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
@@ -1048,11 +1047,12 @@ def makedirs(path: str) -> None:
             ),
             method="PUT",
             headers={"x-ms-blob-type": "BlockBlob"},
+            success_codes=(201,),
         )
-        with _execute_azure_api_request(req) as resp:
-            assert resp.status == 201, f"unexpected status {resp.status}"
+        with _execute_azure_api_request(req):
+            pass
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
 
 def remove(path: str) -> None:
@@ -1070,13 +1070,13 @@ def remove(path: str) -> None:
                 "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
             ),
             method="DELETE",
+            success_codes=(204, 404),
         )
         with _execute_google_api_request(req) as resp:
             if resp.status == 404:
                 raise FileNotFoundError(
                     f"The system cannot find the path specified: '{path}'"
                 )
-            assert resp.status == 204, f"unexpected status {resp.status}"
     elif _is_azure_path(path):
         account, container, blob = azure.split_url(path)
         if blob == "" or blob.endswith("/"):
@@ -1086,15 +1086,15 @@ def remove(path: str) -> None:
                 account, "/{container}/{blob}", container=container, blob=blob
             ),
             method="DELETE",
+            success_codes=(204, 404),
         )
         with _execute_azure_api_request(req) as resp:
             if resp.status == 404:
                 raise FileNotFoundError(
                     f"The system cannot find the path specified: '{path}'"
                 )
-            assert resp.status == 202, f"unexpected status {resp.status}"
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
 
 def rmdir(path: str) -> None:
@@ -1121,10 +1121,10 @@ def rmdir(path: str) -> None:
     elif _is_azure_path(path):
         _, _, blob = azure.split_url(path)
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
     if blob == "":
-        raise Exception(f"Cannot delete bucket: '{path}'")
+        raise Error(f"Cannot delete bucket: '{path}'")
     it = listdir(path)
     try:
         next(it)
@@ -1145,9 +1145,10 @@ def rmdir(path: str) -> None:
                 "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
             ),
             method="DELETE",
+            success_codes=(204,),
         )
-        with _execute_google_api_request(req) as resp:
-            assert resp.status == 204, f"unexpected status {resp.status}"
+        with _execute_google_api_request(req):
+            pass
     elif _is_azure_path(path):
         account, container, blob = azure.split_url(path)
         req = Request(
@@ -1155,11 +1156,12 @@ def rmdir(path: str) -> None:
                 account, "/{container}/{blob}", container=container, blob=blob
             ),
             method="DELETE",
+            success_codes=(202,),
         )
-        with _execute_azure_api_request(req) as resp:
-            assert resp.status == 202, f"unexpected status {resp.status}"
+        with _execute_azure_api_request(req):
+            pass
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
 
 def stat(path: str) -> Stat:
@@ -1186,7 +1188,7 @@ def stat(path: str) -> Stat:
         t = calendar.timegm(ts)
         return Stat(size=int(metadata["Content-Length"]), mtime=t)
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
 
 def rmtree(path: str) -> None:
@@ -1214,11 +1216,12 @@ def rmtree(path: str) -> None:
                         "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=item
                     ),
                     method="DELETE",
-                )
-                with _execute_google_api_request(req) as resp:
                     # 404 is allowed in case a failed request successfully deleted the file
                     # before erroring out
-                    assert resp.status in (204, 404), f"unexpected status {resp.status}"
+                    success_codes=(204, 404),
+                )
+                with _execute_google_api_request(req):
+                    pass
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
@@ -1235,13 +1238,14 @@ def rmtree(path: str) -> None:
                         account, "/{container}/{blob}", container=container, blob=item
                     ),
                     method="DELETE",
-                )
-                with _execute_azure_api_request(req) as resp:
                     # 404 is allowed in case a failed request successfully deleted the file
                     # before erroring out
-                    assert resp.status in (202, 404), f"unexpected status {resp.status}"
+                    success_codes=(202, 404),
+                )
+                with _execute_azure_api_request(req):
+                    pass
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
 
 def walk(
@@ -1262,7 +1266,8 @@ def walk(
                 root = root[:-1]
             yield (root, sorted(dirnames), sorted(filenames))
     elif _is_google_path(top) or _is_azure_path(top):
-        assert topdown
+        if not topdown:
+            raise Error("only topdown mode currently supported")
         dq: collections.deque[str] = collections.deque()
         dq.append(top)
         while len(dq) > 0:
@@ -1288,7 +1293,7 @@ def walk(
                 )
                 get_names = _azure_get_names
             else:
-                raise Exception("unrecognized path")
+                raise Error("unrecognized path")
             dirnames = []
             filenames = []
             for result in it:
@@ -1303,7 +1308,7 @@ def walk(
             yield (_strip_slash(cur), dirnames, filenames)
             dq.extend(join(cur, dirname) for dirname in dirnames)
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
 
 def basename(path: str) -> str:
@@ -1355,7 +1360,8 @@ def _join2(a: str, b: str) -> str:
     elif _is_google_path(a) or _is_azure_path(a):
         if not a.endswith("/"):
             a += "/"
-        assert "://" not in b
+        if "://" in b:
+            raise Error("cannot join two fully qualified paths")
         parsed_a = urllib.parse.urlparse(a)
         newpath = urllib.parse.urljoin(parsed_a.path, b)
         if not newpath.startswith("/"):
@@ -1367,7 +1373,7 @@ def _join2(a: str, b: str) -> str:
             newpath = "/" + newpath
         return f"{parsed_a.scheme}://{parsed_a.netloc}" + newpath
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
 
 def get_url(path: str) -> Tuple[str, Optional[float]]:
@@ -1389,7 +1395,7 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
     elif _is_local_path(path):
         return f"file://{path}", None
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
 
 def _block_md5(f: BinaryIO) -> bytes:
@@ -1416,9 +1422,9 @@ def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> bool:
             # https://docs.microsoft.com/en-us/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations
             "If-Match": etag,
         },
+        success_codes=(200, 412),
     )
     with _execute_azure_api_request(req) as resp:
-        assert resp.status in (200, 412), f"unexpected status {resp.status}"
         return resp.status == 200
 
 
@@ -1589,13 +1595,13 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
             method="GET",
             params=dict(alt="media"),
             headers={"Range": _calc_range(start=offset)},
+            success_codes=(206, 416),
         )
         resp = _execute_google_api_request(req)
         if resp.status == 416:
             # likely the file was truncated while we were reading it
             # return an empty file and indicate to the caller what happened
             return io.BytesIO(), _RangeError()
-        assert resp.status == 206, f"unexpected status {resp.status}"
         # we don't decode content, so this is actually a ReadableBinaryFile
         return resp, None
 
@@ -1617,13 +1623,13 @@ class _AzureStreamingReadFile(_StreamingReadFile):
             ),
             method="GET",
             headers={"Range": _calc_range(start=offset)},
+            success_codes=(206, 416),
         )
         resp = _execute_azure_api_request(req)
         if resp.status == 416:
             # likely the file was truncated while we were reading it
             # return an empty file and indicate to the caller what happened
             return io.BytesIO(), _RangeError()
-        assert resp.status == 206, f"unexpected status {resp.status}"
         # we don't decode content, so this is actually a ReadableBinaryFile
         return resp, None
 
@@ -1696,7 +1702,6 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
             headers={"Content-Type": "application/json; charset=UTF-8"},
         )
         with _execute_google_api_request(req) as resp:
-            assert resp.status == 200, f"unexpected status {resp.status}"
             self._upload_url = resp.headers["Location"]
         super().__init__(chunk_size=GOOGLE_CHUNK_SIZE)
 
@@ -1718,16 +1723,16 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
             # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
             headers["Content-Range"] = f"bytes */{total_size}"
 
-        req = Request(url=self._upload_url, data=chunk, headers=headers, method="PUT")
+        req = Request(
+            url=self._upload_url,
+            data=chunk,
+            headers=headers,
+            method="PUT",
+            success_codes=(200, 201) if finalize else (308,),
+        )
 
-        with _execute_google_api_request(req) as resp:
-            if finalize:
-                assert resp.status in (200, 201), f"unexpected status {resp.status}"
-            else:
-                # 308 is the expected response
-                assert (
-                    resp.status == 308
-                ), f"unexpected status {resp.status} at offset {self._offset}"
+        with _execute_google_api_request(req):
+            pass
 
 
 class _AzureStreamingWriteFile(_StreamingWriteFile):
@@ -1739,15 +1744,19 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         # premium block blob storage supports block blobs and append blobs
         # https://azure.microsoft.com/en-us/blog/azure-premium-block-blob-storage-is-now-generally-available/
         req = Request(
-            url=self._url, method="PUT", headers={"x-ms-blob-type": "AppendBlob"}
+            url=self._url,
+            method="PUT",
+            headers={"x-ms-blob-type": "AppendBlob"},
+            success_codes=(201, 409),
         )
         with _execute_azure_api_request(req) as resp:
             if resp.status == 409:
                 # a blob already exists with a different type so we failed to create the new one
                 remove(path)
-                with _execute_azure_api_request(req) as resp:
+                retry_req: Request = copy.copy(req)
+                retry_req.success_codes = (201,)
+                with _execute_azure_api_request(retry_req):
                     pass
-            assert resp.status == 201, f"unexpected status {resp.status}"
         self._md5 = hashlib.md5()
         super().__init__(chunk_size=AZURE_MAX_CHUNK_SIZE)
 
@@ -1767,11 +1776,12 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                 params=dict(comp="appendblock"),
                 data=data,
                 headers={"x-ms-blob-condition-appendpos": str(self._offset + start)},
+                # https://docs.microsoft.com/en-us/rest/api/storageservices/append-block#remarks
+                success_codes=(201, 412),
             )
 
-            with _execute_azure_api_request(req) as resp:
-                # https://docs.microsoft.com/en-us/rest/api/storageservices/append-block#remarks
-                assert resp.status in (201, 412), f"unexpected status {resp.status}"
+            with _execute_azure_api_request(req):
+                pass
 
             # azure does not calculate md5s for us, we have to do that manually
             # https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
@@ -1785,8 +1795,8 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                     ).decode("utf8")
                 },
             )
-            with _execute_azure_api_request(req) as resp:
-                assert resp.status == 200, f"unexpected status {resp.status}"
+            with _execute_azure_api_request(req):
+                pass
 
             start += AZURE_MAX_CHUNK_SIZE
 
@@ -1819,7 +1829,8 @@ def BlobFile(
     """
     Open a local or remote file for reading or writing
     """
-    assert not path.endswith("/")
+    if path.endswith("/"):
+        raise Error(f"path must specify a file, not a directory: path={path}")
     mode = mode
     assert mode in ("w", "wb", "r", "rb")
     if _is_local_path(path):
@@ -1835,7 +1846,7 @@ def BlobFile(
             f = _GoogleStreamingReadFile(path)
             f = io.BufferedReader(f, buffer_size=buffer_size)
         else:
-            raise Exception(f"unsupported mode {mode}")
+            raise Error(f"unsupported mode {mode}")
     elif _is_azure_path(path):
         if mode in ("w", "wb"):
             f = _AzureStreamingWriteFile(path)
@@ -1843,9 +1854,9 @@ def BlobFile(
             f = _AzureStreamingReadFile(path)
             f = io.BufferedReader(f, buffer_size=buffer_size)
         else:
-            raise Exception(f"unsupported mode {mode}")
+            raise Error(f"unsupported mode {mode}")
     else:
-        raise Exception("unrecognized path")
+        raise Error("unrecognized path")
 
     # this should be a protocol so we don't have to cast
     # but the standard library does not seem to have a file-like protocol
@@ -1942,7 +1953,8 @@ def LocalBlobFile(
     If `cache_dir` is specified and a remote file is opened in read mode, its contents will be
     cached locally.  It is the user's responsibility to clean up this directory.
     """
-    assert not path.endswith("/")
+    if path.endswith("/"):
+        raise Error(f"path must specify a file, not a directory: path={path}")
     remote_path = None
     tmp_dir = None
     assert mode in ("w", "wb", "r", "rb", "a", "ab")
@@ -1960,7 +1972,10 @@ def LocalBlobFile(
                 local_path = join(tmp_dir, basename(path))
                 copy(remote_path, local_path)
             else:
-                assert _is_local_path(cache_dir), "cache dir must be a local path"
+                if not _is_local_path(cache_dir):
+                    raise Error(
+                        f"cache dir must be a local path: cache_dir={cache_dir}"
+                    )
                 makedirs(cache_dir)
                 path_md5 = hashlib.md5(path.encode("utf8")).hexdigest()
                 lock_path = join(cache_dir, f"{path_md5}.lock")
@@ -1984,7 +1999,7 @@ def LocalBlobFile(
                         else:
                             remote_hexdigest = None
                     else:
-                        raise Exception("unrecognized path")
+                        raise Error(f"unrecognized path: path={path}")
 
                     perform_copy = False
                     if remote_hexdigest is None:
@@ -2025,7 +2040,7 @@ def LocalBlobFile(
     elif _is_local_path(path):
         local_path = path
     else:
-        raise Exception("unrecognized path")
+        raise Error(f"unrecognized path: path={path}")
 
     f = _ProxyFile(
         local_path=local_path, mode=mode, tmp_dir=tmp_dir, remote_path=remote_path

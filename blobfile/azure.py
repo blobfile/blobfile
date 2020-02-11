@@ -13,7 +13,7 @@ from typing import Mapping, Tuple
 import xmltodict
 
 from . import common
-from .common import Request
+from .common import Request, Error
 
 SHARED_KEY = "shared_key"
 OAUTH_TOKEN = "oauth_token"
@@ -26,7 +26,7 @@ def load_credentials() -> Mapping[str, str]:
     if "AZURE_APPLICATION_CREDENTIALS" in os.environ:
         creds_path = os.environ["AZURE_APPLICATION_CREDENTIALS"]
         if not os.path.exists(creds_path):
-            raise Exception(
+            raise Error(
                 f"credentials not found at {creds_path} specified by environment variable 'AZURE_APPLICATION_CREDENTIALS'"
             )
         with open(creds_path) as f:
@@ -44,7 +44,8 @@ def load_credentials() -> Mapping[str, str]:
     default_creds_path = os.path.expanduser("~/.azure/accessTokens.json")
     if os.path.exists(default_creds_path):
         default_profile_path = os.path.expanduser("~/.azure/azureProfile.json")
-        assert os.path.exists(default_profile_path), f"missing {default_profile_path}"
+        if not os.path.exists(default_profile_path):
+            raise Error(f"missing {default_profile_path}")
         with open(default_profile_path, "rb") as f:
             # this file has a UTF-8 BOM
             profile = json.loads(f.read().decode("utf-8-sig"))
@@ -64,7 +65,7 @@ def load_credentials() -> Mapping[str, str]:
                 token["subscriptions"] = subscriptions
                 return token
 
-    raise Exception(
+    raise Error(
         """Azure credentials not found, please do one of the following:
 
 1) Log in with 'az login', blobfile will use your default credentials to lookup your storage account key
@@ -223,7 +224,8 @@ def generate_signed_url(key: Mapping[str, str], url: str) -> Tuple[str, float]:
 
 
 def split_url(path: str) -> Tuple[str, str, str]:
-    assert path.startswith("as://")
+    if not path.startswith("as://"):
+        raise Error(f"invalid path {path}")
     path = path[len("as://") :]
     bucket, _, obj = path.partition("/")
     account, _, container = bucket.partition("-")

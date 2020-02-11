@@ -19,6 +19,7 @@ from .ops import (
     BlobFile,
     LocalBlobFile,
 )
+from .common import Request, Error, RequestFailure
 
 __all__ = [
     "copy",
@@ -40,4 +41,7 @@ __all__ = [
     "set_log_callback",
     "BlobFile",
     "LocalBlobFile",
+    "Request",
+    "Error",
+    "RequestFailure",
 ]

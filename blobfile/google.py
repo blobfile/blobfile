@@ -15,7 +15,7 @@ from Cryptodome.Hash import SHA256
 from Cryptodome.PublicKey import RSA
 
 from . import common
-from .common import Request
+from .common import Request, Error
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
 
@@ -112,7 +112,7 @@ def _load_credentials() -> Tuple[Mapping[str, Any], Optional[str]]:
 def create_access_token_request(scopes: List[str]) -> Request:
     creds, err = _load_credentials()
     if err is not None:
-        raise Exception(err)
+        raise Error(err)
     if "private_key" in creds:
         # looks like GCS does not support the no-oauth flow https://developers.google.com/identity/protocols/OAuth2ServiceAccount#jwt-auth
         return _create_token_request(
@@ -125,7 +125,7 @@ def create_access_token_request(scopes: List[str]) -> Request:
             client_secret=creds["client_secret"],
         )
     else:
-        raise Exception("credentials not recognized")
+        raise Error("credentials not recognized")
 
 
 def have_credentials() -> bool:
@@ -173,14 +173,14 @@ def generate_signed_url(
     # https://cloud.google.com/storage/docs/access-control/signing-urls-manually
     creds, err = _load_credentials()
     if err is not None:
-        raise Exception(err)
+        raise Error(err)
     if "private_key" not in creds:
-        raise Exception(
+        raise Error(
             "private key not found in credentials, please set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to point to a JSON key for a service account to use this call"
         )
 
     if expiration > MAX_EXPIRATION:
-        raise Exception(
+        raise Error(
             f"expiration can't be longer than {MAX_EXPIRATION} seconds (7 days)."
         )
 
@@ -253,7 +253,8 @@ def generate_signed_url(
 
 
 def split_url(path: str) -> Tuple[str, str]:
-    assert path.startswith("gs://")
+    if not path.startswith("gs://"):
+        raise Error(f"invalid path {path}")
     path = path[len("gs://") :]
     bucket, _, obj = path.partition("/")
     return bucket, obj

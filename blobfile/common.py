@@ -1,6 +1,7 @@
 import urllib
+import urllib3
 
-from typing import Mapping, Optional, Any
+from typing import Mapping, Optional, Any, Sequence
 
 
 class Request:
@@ -11,12 +12,16 @@ class Request:
         params: Optional[Mapping[str, str]] = None,
         headers: Optional[Mapping[str, str]] = None,
         data: Any = None,
+        success_codes: Sequence[int] = (200,),
+        retry_codes: Sequence[int] = (429, 500, 502, 503, 504),
     ) -> None:
         self.url = url
         self.method = method
         self.params = params
         self.headers = headers
         self.data = data
+        self.success_codes = success_codes
+        self.retry_codes = retry_codes
 
     def __repr__(self):
         return f"<Request method={self.method} url={self.url}>"
@@ -27,3 +32,20 @@ def build_url(base_url: str, template: str, **data: str) -> str:
     for k, v in data.items():
         escaped_data[k] = urllib.parse.quote(v, safe="")
     return base_url + template.format(**escaped_data)
+
+
+class Error(Exception):
+    """Base class for blobfile exceptions."""
+
+    pass
+
+
+class RequestFailure(Error):
+    """
+    A request failed, possibly after some number of retries
+    """
+
+    def __init__(self, message: str, request: Request, response: urllib3.HTTPResponse):
+        self.message = message
+        self.request = request
+        self.response = response

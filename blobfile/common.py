@@ -50,9 +50,6 @@ class RequestFailure(Error):
         self.message = message
         self.request = request
         self.response = response
-
-    def __repr__(self):
-        return f"RequestFailure(message={self.message}, request={self.request}, response={self.response})"
-
-    def __str__(self):
-        return repr(self)
+        super().__init__(
+            f"message={self.message}, request={self.request}, response={self.response}"
+        )

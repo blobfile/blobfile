@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import calendar
+import copy as python_copy
 import os
 import tempfile
 import hashlib
@@ -16,9 +17,10 @@ import re
 import shutil
 import collections
 import itertools
-import threading
+import random
 import ssl
 import socket
+import threading
 import multiprocessing as mp
 from typing import (
     overload,
@@ -47,6 +49,10 @@ from . import google, azure
 from .common import Request, Error, RequestFailure
 
 
+BACKOFF_INITIAL = 0.1
+BACKOFF_MAX = 60.0
+BACKOFF_JITTER = 0.1
+RETRY_LOG_THRESHOLD = 1
 EARLY_EXPIRATION_SECONDS = 5 * 60
 CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 30
@@ -316,7 +322,7 @@ def _exponential_sleep_generator(
 ) -> Iterator[float]:
     value = initial
     while True:
-        yield value
+        yield value + random.random() * BACKOFF_JITTER
         value *= multiplier
         if value > maximum:
             value = maximum
@@ -344,7 +350,9 @@ def _execute_google_api_request(req: Request) -> urllib3.HTTPResponse:
 
 
 def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
-    for attempt, backoff in enumerate(_exponential_sleep_generator(0.1, maximum=60.0)):
+    for attempt, backoff in enumerate(
+        _exponential_sleep_generator(initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX)
+    ):
         req = build_req()
         url = req.url
         if req.params is not None:
@@ -379,7 +387,7 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
             urllib3.exceptions.ProtocolError,
         ) as e:
             err = e
-        if attempt >= 1:
+        if attempt >= RETRY_LOG_THRESHOLD:
             _log_callback(
                 f"blobfile error {err} when executing http request {req}, sleeping {backoff} seconds"
             )
@@ -502,18 +510,32 @@ def copy(
             return md5(dst)
         return
 
-    # _GoogleResumableUploadFailure
-    with BlobFile(src, "rb") as src_f, BlobFile(dst, "wb") as dst_f:
-        m = hashlib.md5()
-        while True:
-            block = src_f.read(CHUNK_SIZE)
-            if block == b"":
-                break
-            if return_md5:
-                m.update(block)
-            dst_f.write(block)
-        if return_md5:
-            return m.hexdigest()
+    for backoff in _exponential_sleep_generator(
+        initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX
+    ):
+        try:
+            with BlobFile(src, "rb") as src_f, BlobFile(dst, "wb") as dst_f:
+                m = hashlib.md5()
+                while True:
+                    block = src_f.read(CHUNK_SIZE)
+                    if block == b"":
+                        break
+                    if return_md5:
+                        m.update(block)
+                    dst_f.write(block)
+                if return_md5:
+                    return m.hexdigest()
+        except _GoogleResumableUploadFailure as e:
+            # currently this is the only type of failure we retry
+            # if this failure occurs, the upload must be restarted from the beginning
+            # https://cloud.google.com/storage/docs/resumable-uploads#practices
+            # https://github.com/googleapis/gcs-resumable-upload/issues/15#issuecomment-249324122
+            _log_callback(
+                f"error {e} when executing a resumable upload to {dst}, sleeping for {backoff:.1f} seconds"
+            )
+            time.sleep(backoff)
+        else:
+            break
 
 
 def _calc_range(start: Optional[int] = None, end: Optional[int] = None) -> str:
@@ -1543,9 +1565,9 @@ class _StreamingReadFile(io.RawIOBase):
             ) as e:
                 err = e
             self.failures += 1
-            if attempt >= 3:
+            if attempt >= RETRY_LOG_THRESHOLD:
                 _log_callback(
-                    f"error {err} when executing readinto({len(b)}) at offset {self._offset} on file {self._path}, sleeping for {backoff} seconds"
+                    f"error {err} when executing readinto({len(b)}) at offset {self._offset} on file {self._path}, sleeping for {backoff:.1f} seconds"
                 )
             time.sleep(backoff)
         self._offset += n
@@ -1772,7 +1794,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             if resp.status == 409:
                 # a blob already exists with a different type so we failed to create the new one
                 remove(path)
-                retry_req: Request = copy.copy(req)
+                retry_req: Request = python_copy.copy(req)
                 retry_req.success_codes = (201,)
                 with _execute_azure_api_request(retry_req):
                     pass

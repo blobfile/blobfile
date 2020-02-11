@@ -510,9 +510,9 @@ def copy(
             return md5(dst)
         return
 
-    for backoff in _exponential_sleep_generator(
+    for attempt, backoff in enumerate(_exponential_sleep_generator(
         initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX
-    ):
+    )):
         try:
             with BlobFile(src, "rb") as src_f, BlobFile(dst, "wb") as dst_f:
                 m = hashlib.md5()
@@ -530,9 +530,10 @@ def copy(
             # if this failure occurs, the upload must be restarted from the beginning
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
             # https://github.com/googleapis/gcs-resumable-upload/issues/15#issuecomment-249324122
-            _log_callback(
-                f"error {e} when executing a resumable upload to {dst}, sleeping for {backoff:.1f} seconds"
-            )
+            if attempt >= RETRY_LOG_THRESHOLD:
+                _log_callback(
+                    f"error {e} when executing a resumable upload to {dst}, sleeping for {backoff:.1f} seconds"
+                )
             time.sleep(backoff)
         else:
             break

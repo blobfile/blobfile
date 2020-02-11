@@ -18,6 +18,9 @@ class Request:
         self.headers = headers
         self.data = data
 
+    def __repr__(self):
+        return f"<Request method={self.method} url={self.url}>"
+
 
 def build_url(base_url: str, template: str, **data: str) -> str:
     escaped_data = {}

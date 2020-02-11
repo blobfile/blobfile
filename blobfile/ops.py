@@ -375,9 +375,9 @@ def _execute_request(
             urllib3.exceptions.ProtocolError,
         ) as e:
             err = e
-        if attempt >= 3:
+        if attempt >= 1:
             _log_callback(
-                f"error {err} when executing http request {req}, sleeping {backoff} seconds"
+                f"blobfile error {err} when executing http request {req}, sleeping {backoff} seconds"
             )
         time.sleep(backoff)
     assert False, "unreachable"

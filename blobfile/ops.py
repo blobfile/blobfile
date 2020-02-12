@@ -894,6 +894,12 @@ def _strip_slash(path: str) -> str:
         return path
 
 
+def _strip_slashes(path: str) -> str:
+    while path.endswith("/"):
+        path = path[:-1]
+    return path
+
+
 def isdir(path: str) -> bool:
     """
     Return true if a path is an existing directory
@@ -1419,7 +1425,7 @@ def dirname(path: str) -> str:
     """
     if _is_google_path(path):
         bucket, obj = google.split_url(path)
-        obj = _strip_slash(obj)
+        obj = _strip_slashes(obj)
         if "/" in obj:
             obj = "/".join(obj.split("/")[:-1])
             return google.combine_url(bucket, obj)
@@ -1427,7 +1433,7 @@ def dirname(path: str) -> str:
             return google.combine_url(bucket, "")[:-1]
     elif _is_azure_path(path):
         account, container, obj = azure.split_url(path)
-        obj = _strip_slash(obj)
+        obj = _strip_slashes(obj)
         if "/" in obj:
             obj = "/".join(obj.split("/")[:-1])
             return azure.combine_url(account, container, obj)

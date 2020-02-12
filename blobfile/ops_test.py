@@ -179,18 +179,25 @@ def test_dirname():
         ("a/b", "a"),
         ("a/b/c", "a/b"),
         ("a/b/c/", "a/b/c"),
+        ("a/b/c/////", "a/b/c"),
         ("", ""),
         ("gs://a", "gs://a"),
         ("gs://a/", "gs://a"),
+        ("gs://a/////", "gs://a"),
         ("gs://a/b", "gs://a"),
         ("gs://a/b/c/test.filename", "gs://a/b/c"),
         ("gs://a/b/c/", "gs://a/b"),
+        ("gs://a/b/c/////", "gs://a/b"),
         (
             "https://a.blob.core.windows.net/container",
             "https://a.blob.core.windows.net/container",
         ),
         (
             "https://a.blob.core.windows.net/container/",
+            "https://a.blob.core.windows.net/container",
+        ),
+        (
+            "https://a.blob.core.windows.net/container/////",
             "https://a.blob.core.windows.net/container",
         ),
         (
@@ -203,6 +210,10 @@ def test_dirname():
         ),
         (
             "https://a.blob.core.windows.net/container/b/c/",
+            "https://a.blob.core.windows.net/container/b",
+        ),
+        (
+            "https://a.blob.core.windows.net/container/b/c//////",
             "https://a.blob.core.windows.net/container/b",
         ),
     ]

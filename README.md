@@ -58,10 +58,11 @@ There are a few bonus functions:
 * `md5` - get the md5 hash for a path, for GCS this is fast, but for other backends this may be slow
 * `set_log_callback` - set a log callback function `log(msg: string)` to use instead of printing to stdout
 
-An some exceptions:
+## Errors
 
-* `Error` - base class for exceptions raised by this library
+* `Error` - base class for library-specific exceptions
 * `RequestFailure` - a request has failed permanently, has `message:str`, `request:Request`, and `response:urllib3.HTTPResponse` attributes.
+* The following generic exceptions are raised from some functions to make the behavior similar to the original versions: `FileNotFoundError`, `FileExistsError`, `IsADirectoryError`, `NotADirectoryError`, `OSError`, `ValueError`, `io.UnsupportedOperation`
 
 ## Examples
 

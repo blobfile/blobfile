@@ -830,8 +830,8 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
         raise Error("Advanced glob queries are not supported")
 
     if _is_local_path(pattern):
-        pattern = os.path.normpath(pattern)
         for filepath in local_glob.iglob(pattern, recursive=True):
+            filepath = os.path.normpath(filepath)
             if filepath.endswith(os.sep):
                 filepath = filepath[:-1]
             yield filepath

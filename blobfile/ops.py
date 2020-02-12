@@ -830,6 +830,7 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
         raise Error("Advanced glob queries are not supported")
 
     if _is_local_path(pattern):
+        pattern = os.path.normpath(pattern)
         for filepath in local_glob.iglob(pattern, recursive=True):
             if filepath.endswith(os.sep):
                 filepath = filepath[:-1]
@@ -1340,6 +1341,7 @@ def walk(
         return
 
     if _is_local_path(top):
+        top = os.path.normpath(top)
         for root, dirnames, filenames in os.walk(
             top=top, topdown=topdown, onerror=onerror
         ):

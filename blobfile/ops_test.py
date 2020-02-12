@@ -224,6 +224,7 @@ def test_join():
         ("gs://a/b/", "c", "gs://a/b/c"),
         ("gs://a/b/", "c/", "gs://a/b/c/"),
         ("gs://a/b/", "/c/", "gs://a/c/"),
+        ("gs://a/b/", "../c", "gs://a/c"),
         ("gs://a/b/", "../c/", "gs://a/c/"),
         ("gs://a/b/", "../../c/", "gs://a/c/"),
         (
@@ -249,6 +250,21 @@ def test_join():
         (
             "https://a.blob.core.windows.net/container/b/",
             "/c/",
+            "https://a.blob.core.windows.net/container/c/",
+        ),
+        (
+            "https://a.blob.core.windows.net/container/b/",
+            "../c",
+            "https://a.blob.core.windows.net/container/c",
+        ),
+        (
+            "https://a.blob.core.windows.net/container/b/",
+            "../c/",
+            "https://a.blob.core.windows.net/container/c/",
+        ),
+        (
+            "https://a.blob.core.windows.net/container/b/",
+            "../../c/",
             "https://a.blob.core.windows.net/container/c/",
         ),
     ]

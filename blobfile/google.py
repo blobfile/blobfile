@@ -125,7 +125,7 @@ def create_access_token_request(scopes: List[str]) -> Request:
             client_secret=creds["client_secret"],
         )
     else:
-        raise Error("credentials not recognized")
+        raise Error("Credentials not recognized")
 
 
 def have_credentials() -> bool:
@@ -176,13 +176,11 @@ def generate_signed_url(
         raise Error(err)
     if "private_key" not in creds:
         raise Error(
-            "private key not found in credentials, please set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to point to a JSON key for a service account to use this call"
+            "Private key not found in credentials.  Please set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to point to a JSON key for a service account to use this call"
         )
 
     if expiration > MAX_EXPIRATION:
-        raise Error(
-            f"expiration can't be longer than {MAX_EXPIRATION} seconds (7 days)."
-        )
+        raise Error(f"Expiration can't be longer than {MAX_EXPIRATION} seconds.")
 
     escaped_object_name = urllib.parse.quote(name, safe="")
     canonical_uri = f"/{bucket}/{escaped_object_name}"
@@ -254,9 +252,11 @@ def generate_signed_url(
 
 def split_url(path: str) -> Tuple[str, str]:
     if not path.startswith("gs://"):
-        raise Error(f"invalid path {path}")
+        raise Error(f"Invalid path: '{path}'")
     path = path[len("gs://") :]
     bucket, _, obj = path.partition("/")
+    if bucket == "":
+        raise Error(f"Invalid path: '{path}'")
     return bucket, obj
 
 

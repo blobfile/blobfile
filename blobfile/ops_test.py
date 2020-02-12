@@ -27,9 +27,17 @@ import numpy as np
 import blobfile as bf
 from . import ops, azure
 
-GCS_TEST_BUCKET = "csh-test-2"
+GCS_TEST_BUCKET = "csh-test-3"
 AS_TEST_ACCOUNT = "cshteststorage2"
-AS_TEST_CONTAINER = "testcontainer"
+AS_TEST_CONTAINER = "testcontainer2"
+
+AZURE_VALID_CONTAINER = (
+    f"https://{AS_TEST_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}"
+)
+AZURE_INVALID_CONTAINER = f"https://{AS_TEST_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}-does-not-exist"
+AZURE_INVALID_ACCOUNT = f"https://{AS_TEST_ACCOUNT}-does-not-exist.blob.core.windows.net/{AS_TEST_CONTAINER}"
+GCS_VALID_BUCKET = f"gs://{GCS_TEST_BUCKET}"
+GCS_INVALID_BUCKET = f"gs://{GCS_TEST_BUCKET}-does-not-exist"
 
 
 @contextlib.contextmanager
@@ -597,6 +605,99 @@ def test_exists(ctx):
         assert not bf.exists(path)
         _write_contents(path, contents)
         assert bf.exists(path)
+
+
+def test_more_exists():
+    testcases = [
+        (AZURE_INVALID_CONTAINER, False),
+        (AZURE_INVALID_CONTAINER + "/", False),
+        (AZURE_INVALID_CONTAINER + "//", False),
+        (AZURE_INVALID_CONTAINER + "/invalid.file", False),
+        (GCS_INVALID_BUCKET, False),
+        (GCS_INVALID_BUCKET + "/", False),
+        (GCS_INVALID_BUCKET + "//", False),
+        (GCS_INVALID_BUCKET + "/invalid.file", False),
+        # azure uses a hostname for each account, if that host does not exist
+        # the request fails due to "[Errno -2] Name or service not known when executing http request"
+        # (AZURE_INVALID_ACCOUNT, False),
+        # (AZURE_INVALID_ACCOUNT + "/", False),
+        # (AZURE_INVALID_ACCOUNT + "//", False),
+        # (AZURE_INVALID_ACCOUNT + "/invalid.file", False),
+        (AZURE_VALID_CONTAINER, True),
+        (AZURE_VALID_CONTAINER + "/", True),
+        (AZURE_VALID_CONTAINER + "//", False),
+        (AZURE_VALID_CONTAINER + "/invalid.file", False),
+        (GCS_VALID_BUCKET, True),
+        (GCS_VALID_BUCKET + "/", True),
+        (GCS_VALID_BUCKET + "//", False),
+        (GCS_VALID_BUCKET + "/invalid.file", False),
+        (f"/does-not-exist", False),
+        (f"/", True),
+    ]
+    for path, should_exist in testcases:
+        assert bf.exists(path) == should_exist
+
+
+# @pytest.mark.parametrize(
+#     "base_path", [AZURE_INVALID_ACCOUNT, AZURE_INVALID_CONTAINER, GCS_INVALID_BUCKET]
+# )
+@pytest.mark.parametrize("base_path", [AZURE_INVALID_CONTAINER, GCS_INVALID_BUCKET])
+def test_invalid_paths(base_path):
+    for suffix in ["", "/", "//", "/invalid.file", "/invalid/dir/"]:
+        path = base_path + suffix
+        print(path)
+        if path.endswith("/"):
+            expected_error = IsADirectoryError
+        else:
+            expected_error = FileNotFoundError
+        list(bf.glob(path))
+        if suffix == "":
+            for pattern in ["*", "**"]:
+                try:
+                    list(bf.glob(path + pattern))
+                except bf.Error as e:
+                    assert "Wildcards cannot be used" in e.message
+        else:
+            for pattern in ["*", "**"]:
+                list(bf.glob(path + pattern))
+        with pytest.raises(FileNotFoundError):
+            list(bf.listdir(path))
+        assert not bf.exists(path)
+        assert not bf.isdir(path)
+        with pytest.raises(expected_error):
+            bf.remove(path)
+        if suffix in ("", "/"):
+            try:
+                bf.rmdir(path)
+            except bf.Error as e:
+                assert "Cannot delete bucket" in e.message
+        else:
+            bf.rmdir(path)
+        with pytest.raises(NotADirectoryError):
+            bf.rmtree(path)
+        with pytest.raises(FileNotFoundError):
+            bf.stat(path)
+        bf.get_url(path)
+        with pytest.raises(FileNotFoundError):
+            bf.md5(path)
+        with pytest.raises(bf.Error):
+            bf.makedirs(path)
+        list(bf.walk(path))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_path = os.path.join(tmpdir, "test.txt")
+            with pytest.raises(expected_error):
+                bf.copy(path, local_path)
+            with open(local_path, "w") as f:
+                f.write("meow")
+            with pytest.raises(expected_error):
+                bf.copy(local_path, path)
+        for streaming in [False, True]:
+            with pytest.raises(expected_error):
+                with bf.BlobFile(path, "rb", streaming=streaming) as f:
+                    f.read()
+            with pytest.raises(expected_error):
+                with bf.BlobFile(path, "wb", streaming=streaming) as f:
+                    f.write(b"meow")
 
 
 @pytest.mark.parametrize("buffer_size", [1, 100])

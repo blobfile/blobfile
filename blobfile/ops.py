@@ -215,7 +215,7 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
             result = json.load(resp)
             return result["access_token"], now + float(result["expires_in"])
     else:
-        raise Error("no google credentials found")
+        raise Error("No google credentials found")
 
 
 def _azure_get_access_token(account: str) -> Tuple[Any, float]:
@@ -277,10 +277,10 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
                         )
                 else:
                     raise Error(
-                        f"storage account {account} did not have any keys defined"
+                        f"Storage account did not have any keys defined: '{account}'"
                     )
 
-        raise Error(f"storage account id not found for storage account {account}")
+        raise Error(f"Storage account ID not found for storage account: '{account}'")
     else:
         # we have a service account, get an oauth token
         def build_req() -> Request:
@@ -301,7 +301,7 @@ def _azure_get_sas_token(account: str) -> Tuple[Any, float]:
         req = azure.create_user_delegation_sas_request(account=account)
         auth = global_azure_access_token_manager.get_token(key=account)
         if auth[0] != azure.OAUTH_TOKEN:
-            raise Error("only oauth tokens can be used to get sas tokens")
+            raise Error("Only oauth tokens can be used to get SAS tokens")
         return azure.make_api_request(req, auth=auth)
 
     with _execute_request(build_req) as resp:
@@ -389,7 +389,7 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
             err = e
         if attempt >= RETRY_LOG_THRESHOLD:
             _log_callback(
-                f"blobfile error {err} when executing http request {req}, sleeping {backoff} seconds"
+                f"blobfile error {err} when executing http request {req}, sleeping for {backoff:.1f} seconds"
             )
         time.sleep(backoff)
     assert False, "unreachable"
@@ -406,7 +406,6 @@ def _is_google_path(path: str) -> bool:
 
 def _is_azure_path(path: str) -> bool:
     url = urllib.parse.urlparse(path)
-    assert url.netloc is not None
     return url.scheme == "https" and url.netloc.endswith(".blob.core.windows.net")
 
 
@@ -424,10 +423,17 @@ def copy(
 
     If `return_md5` is set to `True`, an md5 will be calculated during the copy and returned.
     """
+    # it would be best to check isdir() for remote paths, but that would
+    # involve 2 extra network requests, so just do this test instead
+    if _guess_isdir(src):
+        raise IsADirectoryError(f"Is a directory: '{src}'")
+    if _guess_isdir(dst):
+        raise IsADirectoryError(f"Is a directory: '{dst}'")
+
     if not overwrite:
         if exists(dst):
             raise FileExistsError(
-                f"destination '{dst}' already exists and overwrite is disabled"
+                f"Destination '{dst}' already exists and overwrite is disabled"
             )
 
     # special case cloud to cloud copy, don't download the file
@@ -450,7 +456,7 @@ def copy(
             )
             with _execute_google_api_request(req) as resp:
                 if resp.status == 404:
-                    raise FileNotFoundError(f"src file '{src}' not found")
+                    raise FileNotFoundError(f"Source file not found: '{src}'")
                 result = json.load(resp)
                 if result["done"]:
                     if return_md5:
@@ -484,7 +490,7 @@ def copy(
 
         with _execute_azure_api_request(req) as resp:
             if resp.status == 404:
-                raise FileNotFoundError(f"src file '{src}' not found")
+                raise FileNotFoundError(f"Source file not found: '{src}'")
             copy_id = resp.headers["x-ms-copy-id"]
             copy_status = resp.headers["x-ms-copy-status"]
 
@@ -503,10 +509,10 @@ def copy(
             )
             with _execute_azure_api_request(req) as resp:
                 if resp.headers["x-ms-copy-id"] != copy_id:
-                    raise Error("copy id mismatch")
+                    raise Error("Copy id mismatch")
                 copy_status = resp.headers["x-ms-copy-status"]
         if copy_status != "success":
-            raise Error(f"invalid copy status {copy_status}")
+            raise Error(f"Invalid copy status: '{copy_status}'")
         if return_md5:
             return md5(dst)
         return
@@ -528,6 +534,8 @@ def copy(
                     dst_f.write(block)
                 if return_md5:
                     return m.hexdigest()
+                else:
+                    return
         except _GoogleResumableUploadFailure as e:
             # currently this is the only type of failure we retry
             # if this failure occurs, the upload must be restarted from the beginning
@@ -538,8 +546,6 @@ def copy(
                     f"error {e} when executing a resumable upload to {dst}, sleeping for {backoff:.1f} seconds"
                 )
             time.sleep(backoff)
-        else:
-            break
 
 
 def _calc_range(start: Optional[int] = None, end: Optional[int] = None) -> str:
@@ -555,7 +561,7 @@ def _calc_range(start: Optional[int] = None, end: Optional[int] = None) -> str:
         else:
             return f"bytes=-{-int(end)}"
     else:
-        raise Error("invalid range")
+        raise Error("Invalid range")
 
 
 def _create_google_page_iterator(
@@ -564,8 +570,10 @@ def _create_google_page_iterator(
     p = dict(params).copy()
 
     while True:
-        req = Request(url=url, method=method, params=p)
+        req = Request(url=url, method=method, params=p, success_codes=(200, 404))
         with _execute_google_api_request(req) as resp:
+            if resp.status == 404:
+                return
             result = json.load(resp)
             yield result
             if "nextPageToken" not in result:
@@ -588,8 +596,12 @@ def _create_azure_page_iterator(
     else:
         d = dict(data).copy()
     while True:
-        req = Request(url=url, method=method, params=p, data=d)
+        req = Request(
+            url=url, method=method, params=p, data=d, success_codes=(200, 404)
+        )
         with _execute_azure_api_request(req) as resp:
+            if resp.status == 404:
+                return
             result = xmltodict.parse(resp)["EnumerationResults"]
             yield result
             if result["NextMarker"] is None:
@@ -669,7 +681,7 @@ def exists(path: str) -> bool:
             return True
         return isdir(path)
     else:
-        raise Error(f"unrecognized path: path={path}")
+        raise Error(f"Unrecognized path: '{path}'")
 
 
 def _string_overlap(s1: str, s2: str) -> int:
@@ -815,7 +827,7 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
     that the results will no longer be in order.
     """
     if "?" in pattern or "[" in pattern or "]" in pattern:
-        raise Error("advanced glob queries are not supported")
+        raise Error("Advanced glob queries are not supported")
 
     if _is_local_path(pattern):
         for filepath in local_glob.iglob(pattern, recursive=True):
@@ -831,12 +843,12 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
         if _is_google_path(pattern):
             bucket, blob_prefix = google.split_url(pattern)
             if "*" in bucket:
-                raise Error("wildcards cannot be used in bucket name")
+                raise Error("Wildcards cannot be used in bucket name")
             root = google.combine_url(bucket, "")
         else:
             account, container, blob_prefix = azure.split_url(pattern)
             if "*" in account or "*" in container:
-                raise Error("wildcards cannot be used in account or container")
+                raise Error("Wildcards cannot be used in account or container")
             root = azure.combine_url(account, container, "")
 
         initial_task = _GlobTask("", _split_path(blob_prefix))
@@ -859,7 +871,7 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
                     elif isinstance(r, _GlobTaskComplete):
                         tasks_done += 1
                     else:
-                        raise Error("invalid result")
+                        raise Error("Invalid result")
         else:
             dq: collections.deque[_GlobTask] = collections.deque()
             dq.append(initial_task)
@@ -871,7 +883,7 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
                     else:
                         dq.append(r)
     else:
-        raise Error(f"unrecognized path: path={pattern}")
+        raise Error(f"Unrecognized path '{pattern}'")
 
 
 def _strip_slash(path: str) -> str:
@@ -890,22 +902,26 @@ def isdir(path: str) -> bool:
     elif _is_google_path(path):
         if not path.endswith("/"):
             path += "/"
-        bucket, blob_prefix = google.split_url(path)
-        if blob_prefix == "":
+        bucket, blob = google.split_url(path)
+        if blob == "":
             req = Request(
                 url=google.build_url("/storage/v1/b/{bucket}", bucket=bucket),
                 method="GET",
+                success_codes=(200, 404),
             )
             with _execute_google_api_request(req) as resp:
                 return resp.status == 200
         else:
-            params = dict(prefix=blob_prefix, delimiter="/", maxResults="1")
+            params = dict(prefix=blob, delimiter="/", maxResults="1")
             req = Request(
                 url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
                 method="GET",
                 params=params,
+                success_codes=(200, 404),
             )
             with _execute_google_api_request(req) as resp:
+                if resp.status == 404:
+                    return False
                 result = json.load(resp)
                 return "items" in result or "prefixes" in result
     elif _is_azure_path(path):
@@ -919,6 +935,7 @@ def isdir(path: str) -> bool:
                 ),
                 method="GET",
                 params=dict(restype="container"),
+                success_codes=(200, 404),
             )
             with _execute_azure_api_request(req) as resp:
                 return resp.status == 200
@@ -933,14 +950,28 @@ def isdir(path: str) -> bool:
                     delimiter="/",
                     maxresults="1",
                 ),
+                success_codes=(200, 404),
             )
             with _execute_azure_api_request(req) as resp:
+                if resp.status == 404:
+                    return False
                 result = xmltodict.parse(resp)["EnumerationResults"]
                 return result["Blobs"] is not None and (
                     "BlobPrefix" in result["Blobs"] or "Blob" in result["Blobs"]
                 )
     else:
-        raise Error(f"unrecognized path: path={path}")
+        raise Error(f"Unrecognized path: '{path}'")
+
+
+def _guess_isdir(path: str) -> bool:
+    """
+    Guess if a path is a directory without performing network requests
+    """
+    if _is_local_path(path) and os.path.isdir(path):
+        return True
+    elif (_is_google_path(path) or _is_azure_path(path)) and path.endswith("/"):
+        return True
+    return False
 
 
 def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[str]:
@@ -967,7 +998,7 @@ def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[str]:
         get_names = _azure_get_names
         root = azure.combine_url(account, container, "")
     else:
-        raise Error(f"unrecognized path: path={path}")
+        raise Error(f"Unrecognized path: '{path}'")
 
     for result in it:
         for name in get_names(result):
@@ -992,7 +1023,7 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
     Using `shard_prefix_length` will only consider prefixes that are not unusual characters
     (mostly these are ascii values < 0x20) some of these could technically show up in a path.
     """
-    if not path.endswith("/"):
+    if (_is_google_path(path) or _is_azure_path(path)) and not path.endswith("/"):
         path += "/"
     if not exists(path):
         raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
@@ -1038,7 +1069,7 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
                         continue
                     yield item
     else:
-        raise Error(f"unrecognized path: path={path}")
+        raise Error(f"Unrecognized path: '{path}'")
 
 
 def _sharded_listdir_worker(
@@ -1070,9 +1101,13 @@ def makedirs(path: str) -> None:
             url=google.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
             method="POST",
             params=dict(uploadType="media", name=blob),
+            success_codes=(200, 400),
         )
-        with _execute_google_api_request(req):
-            pass
+        with _execute_google_api_request(req) as resp:
+            if resp.status == 400:
+                raise Error(
+                    f"Unable to create directory, bucket does not exist: '{path}'"
+                )
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
@@ -1083,12 +1118,15 @@ def makedirs(path: str) -> None:
             ),
             method="PUT",
             headers={"x-ms-blob-type": "BlockBlob"},
-            success_codes=(201,),
+            success_codes=(201, 400),
         )
-        with _execute_azure_api_request(req):
-            pass
+        with _execute_azure_api_request(req) as resp:
+            if resp.status == 400:
+                raise Error(
+                    f"Unable to create directory, account/container does not exist: '{path}'"
+                )
     else:
-        raise Error(f"unrecognized path: path={path}")
+        raise Error(f"Unrecognized path: '{path}'")
 
 
 def remove(path: str) -> None:
@@ -1098,9 +1136,13 @@ def remove(path: str) -> None:
     if _is_local_path(path):
         os.remove(path)
     elif _is_google_path(path):
-        bucket, blob = google.split_url(path)
-        if blob == "" or blob.endswith("/"):
+        if path.endswith("/"):
             raise IsADirectoryError(f"Is a directory: '{path}'")
+        bucket, blob = google.split_url(path)
+        if blob == "":
+            raise FileNotFoundError(
+                f"The system cannot find the path specified: '{path}'"
+            )
         req = Request(
             url=google.build_url(
                 "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
@@ -1114,9 +1156,13 @@ def remove(path: str) -> None:
                     f"The system cannot find the path specified: '{path}'"
                 )
     elif _is_azure_path(path):
-        account, container, blob = azure.split_url(path)
-        if blob == "" or blob.endswith("/"):
+        if path.endswith("/"):
             raise IsADirectoryError(f"Is a directory: '{path}'")
+        account, container, blob = azure.split_url(path)
+        if blob == "":
+            raise FileNotFoundError(
+                f"The system cannot find the path specified: '{path}'"
+            )
         req = Request(
             url=azure.build_url(
                 account, "/{container}/{blob}", container=container, blob=blob
@@ -1130,7 +1176,7 @@ def remove(path: str) -> None:
                     f"The system cannot find the path specified: '{path}'"
                 )
     else:
-        raise Error(f"unrecognized path: path={path}")
+        raise Error(f"Unrecognized path: '{path}'")
 
 
 def rmdir(path: str) -> None:
@@ -1157,7 +1203,7 @@ def rmdir(path: str) -> None:
     elif _is_azure_path(path):
         _, _, blob = azure.split_url(path)
     else:
-        raise Error(f"unrecognized path: path={path}")
+        raise Error(f"Unrecognized path: '{path}'")
 
     if blob == "":
         raise Error(f"Cannot delete bucket: '{path}'")
@@ -1197,7 +1243,7 @@ def rmdir(path: str) -> None:
         with _execute_azure_api_request(req):
             pass
     else:
-        raise Error(f"unrecognized path: path={path}")
+        raise Error(f"Unrecognized path: '{path}'")
 
 
 def stat(path: str) -> Stat:
@@ -1224,7 +1270,7 @@ def stat(path: str) -> Stat:
         t = calendar.timegm(ts)
         return Stat(size=int(metadata["Content-Length"]), mtime=t)
     else:
-        raise Error(f"unrecognized path: path={path}")
+        raise Error(f"Unrecognized path: '{path}'")
 
 
 def rmtree(path: str) -> None:
@@ -1281,7 +1327,7 @@ def rmtree(path: str) -> None:
                 with _execute_azure_api_request(req):
                     pass
     else:
-        raise Error(f"unrecognized path: path={path}")
+        raise Error(f"Unrecognized path: '{path}'")
 
 
 def walk(
@@ -1303,7 +1349,7 @@ def walk(
             yield (root, sorted(dirnames), sorted(filenames))
     elif _is_google_path(top) or _is_azure_path(top):
         if not topdown:
-            raise Error("only topdown mode currently supported")
+            raise Error("Only topdown mode currently supported")
         dq: collections.deque[str] = collections.deque()
         dq.append(top)
         while len(dq) > 0:
@@ -1329,7 +1375,7 @@ def walk(
                 )
                 get_names = _azure_get_names
             else:
-                raise Error(f"unrecognized path: path={top}")
+                raise Error(f"Unrecognized path: '{top}'")
             dirnames = []
             filenames = []
             for result in it:
@@ -1344,7 +1390,7 @@ def walk(
             yield (_strip_slash(cur), dirnames, filenames)
             dq.extend(join(cur, dirname) for dirname in dirnames)
     else:
-        raise Error(f"unrecognized path: path={top}")
+        raise Error(f"Unrecognized path: '{top}'")
 
 
 def basename(path: str) -> str:
@@ -1406,7 +1452,7 @@ def _join2(a: str, b: str) -> str:
         if not a.endswith("/"):
             a += "/"
         if "://" in b:
-            raise Error("cannot join two fully qualified paths")
+            raise Error("Cannot join two fully qualified paths")
 
         if _is_google_path(a):
             bucket, obj = google.split_url(a)
@@ -1421,9 +1467,9 @@ def _join2(a: str, b: str) -> str:
                 obj = obj[1:]
             return azure.combine_url(account, container, obj)
         else:
-            raise Error(f"unrecognized path: path={a}")
+            raise Error(f"Unrecognized path: '{a}'")
     else:
-        raise Error(f"unrecognized path: path={a}")
+        raise Error(f"Unrecognized path: '{a}'")
 
 
 def get_url(path: str) -> Tuple[str, Optional[float]]:
@@ -1445,7 +1491,7 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
     elif _is_local_path(path):
         return f"file://{path}", None
     else:
-        raise Error(f"unrecognized path: path={path}")
+        raise Error(f"Unrecognized path: '{path}'")
 
 
 def _block_md5(f: BinaryIO) -> bytes:
@@ -1600,7 +1646,9 @@ class _StreamingReadFile(io.RawIOBase):
         elif whence == io.SEEK_END:
             new_offset = self._size + offset
         else:
-            raise ValueError(f"invalid whence")
+            raise ValueError(
+                f"Invalid whence ({whence}, should be {io.SEEK_SET}, {io.SEEK_CUR}, or {io.SEEK_END})"
+            )
         if new_offset != self._offset:
             self._offset = new_offset
             self._f = None
@@ -1750,8 +1798,11 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
             method="POST",
             data=dict(name=name),
             headers={"Content-Type": "application/json; charset=UTF-8"},
+            success_codes=(200, 400, 404),
         )
         with _execute_google_api_request(req) as resp:
+            if resp.status in (400, 404):
+                raise FileNotFoundError(f"Not such file or directory: '{path}'")
             self._upload_url = resp.headers["Location"]
         super().__init__(chunk_size=GOOGLE_CHUNK_SIZE)
 
@@ -1806,9 +1857,11 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             url=self._url,
             method="PUT",
             headers={"x-ms-blob-type": "AppendBlob"},
-            success_codes=(201, 409),
+            success_codes=(201, 400, 404, 409),
         )
         with _execute_azure_api_request(req) as resp:
+            if resp.status in (400, 404):
+                raise FileNotFoundError(f"Not such file or directory: '{path}'")
             if resp.status == 409:
                 # a blob already exists with a different type so we failed to create the new one
                 remove(path)
@@ -1954,17 +2007,17 @@ def BlobFile(
     Returns:
         A file-like object
     """
-    if path.endswith("/"):
-        raise Error(f"path must specify a file, not a directory: path={path}")
+    if _guess_isdir(path):
+        raise IsADirectoryError(f"Is a directory: '{path}'")
 
     if streaming is None:
         streaming = mode in ("r", "rb")
 
     if streaming:
         if mode not in ("w", "wb", "r", "rb"):
-            raise Error(f"invalid mode for streaming file: mode={mode}")
+            raise Error(f"Invalid mode for streaming file: '{mode}'")
         if cache_dir is not None:
-            raise Error("cannot specify cache_dir for streaming files")
+            raise Error("Cannot specify cache_dir for streaming files")
         if _is_local_path(path):
             f = io.FileIO(path, mode=mode)
             if "r" in mode:
@@ -1978,7 +2031,7 @@ def BlobFile(
                 f = _GoogleStreamingReadFile(path)
                 f = io.BufferedReader(f, buffer_size=buffer_size)
             else:
-                raise Error(f"unsupported mode {mode}")
+                raise Error(f"Unsupported mode: '{mode}'")
         elif _is_azure_path(path):
             if mode in ("w", "wb"):
                 f = _AzureStreamingWriteFile(path)
@@ -1986,9 +2039,9 @@ def BlobFile(
                 f = _AzureStreamingReadFile(path)
                 f = io.BufferedReader(f, buffer_size=buffer_size)
             else:
-                raise Error(f"unsupported mode {mode}")
+                raise Error(f"Unsupported mode: '{mode}'")
         else:
-            raise Error(f"unrecognized path: path={path}")
+            raise Error(f"Unrecognized path: '{path}'")
 
         # this should be a protocol so we don't have to cast
         # but the standard library does not seem to have a file-like protocol
@@ -2002,28 +2055,29 @@ def BlobFile(
         remote_path = None
         tmp_dir = None
         if mode not in ("w", "wb", "r", "rb", "a", "ab"):
-            raise Error(f"invalid mode: mode={mode}")
+            raise Error(f"Invalid mode: '{mode}'")
 
         if cache_dir is not None and mode not in ("r", "rb"):
             raise Error("cache_dir only supported in read mode")
 
+        local_filename = basename(path)
+        if local_filename == "":
+            local_filename = "local.tmp"
         if _is_google_path(path) or _is_azure_path(path):
             remote_path = path
             if mode in ("a", "ab"):
                 tmp_dir = tempfile.mkdtemp()
-                local_path = join(tmp_dir, basename(path))
+                local_path = join(tmp_dir, local_filename)
                 if exists(remote_path):
                     copy(remote_path, local_path)
             elif mode in ("r", "rb"):
                 if cache_dir is None:
                     tmp_dir = tempfile.mkdtemp()
-                    local_path = join(tmp_dir, basename(path))
+                    local_path = join(tmp_dir, local_filename)
                     copy(remote_path, local_path)
                 else:
                     if not _is_local_path(cache_dir):
-                        raise Error(
-                            f"cache dir must be a local path: cache_dir={cache_dir}"
-                        )
+                        raise Error(f"cache_dir must be a local path: '{cache_dir}'")
                     makedirs(cache_dir)
                     path_md5 = hashlib.md5(path.encode("utf8")).hexdigest()
                     lock_path = join(cache_dir, f"{path_md5}.lock")
@@ -2047,7 +2101,7 @@ def BlobFile(
                             else:
                                 remote_hexdigest = None
                         else:
-                            raise Error(f"unrecognized path: path={path}")
+                            raise Error(f"Unrecognized path: '{path}'")
 
                         perform_copy = False
                         if remote_hexdigest is None:
@@ -2056,7 +2110,7 @@ def BlobFile(
                             perform_copy = True
                         else:
                             expected_local_path = join(
-                                cache_dir, remote_hexdigest, basename(path)
+                                cache_dir, remote_hexdigest, local_filename
                             )
                             perform_copy = not exists(expected_local_path)
 
@@ -2069,7 +2123,7 @@ def BlobFile(
                             # the remote file changed while we were downloading it
                             # in this case make sure we don't cache it under the wrong md5
                             local_path = join(
-                                cache_dir, local_hexdigest, basename(path)
+                                cache_dir, local_hexdigest, local_filename
                             )
                             os.makedirs(dirname(local_path), exist_ok=True)
                             if os.path.exists(local_path):
@@ -2085,16 +2139,16 @@ def BlobFile(
                         else:
                             assert remote_hexdigest is not None
                             local_path = join(
-                                cache_dir, remote_hexdigest, basename(path)
+                                cache_dir, remote_hexdigest, local_filename
                             )
                     local_path = local_path
             else:
                 tmp_dir = tempfile.mkdtemp()
-                local_path = join(tmp_dir, basename(path))
+                local_path = join(tmp_dir, local_filename)
         elif _is_local_path(path):
             local_path = path
         else:
-            raise Error(f"unrecognized path: path={path}")
+            raise Error(f"Unrecognized path: '{path}'")
 
         f = _ProxyFile(
             local_path=local_path, mode=mode, tmp_dir=tmp_dir, remote_path=remote_path

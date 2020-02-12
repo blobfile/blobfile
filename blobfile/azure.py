@@ -27,7 +27,7 @@ def load_credentials() -> Mapping[str, str]:
         creds_path = os.environ["AZURE_APPLICATION_CREDENTIALS"]
         if not os.path.exists(creds_path):
             raise Error(
-                f"credentials not found at {creds_path} specified by environment variable 'AZURE_APPLICATION_CREDENTIALS'"
+                f"Credentials not found at '{creds_path}' specified by environment variable 'AZURE_APPLICATION_CREDENTIALS'"
             )
         with open(creds_path) as f:
             return json.load(f)
@@ -45,7 +45,7 @@ def load_credentials() -> Mapping[str, str]:
     if os.path.exists(default_creds_path):
         default_profile_path = os.path.expanduser("~/.azure/azureProfile.json")
         if not os.path.exists(default_profile_path):
-            raise Error(f"missing {default_profile_path}")
+            raise Error(f"Missing default profile path: '{default_profile_path}'")
         with open(default_profile_path, "rb") as f:
             # this file has a UTF-8 BOM
             profile = json.loads(f.read().decode("utf-8-sig"))
@@ -225,14 +225,14 @@ def generate_signed_url(key: Mapping[str, str], url: str) -> Tuple[str, float]:
 
 def split_url(path: str) -> Tuple[str, str, str]:
     if not path.startswith("https://"):
-        raise Error(f"invalid path {path}")
+        raise Error(f"Invalid path: '{path}'")
     parts = path[len("https://") :].split("/")
     if len(parts) < 2:
-        raise Error(f"invalid path {path}")
+        raise Error(f"Invalid path: '{path}'")
     hostname = parts[0]
     container = parts[1]
-    if not hostname.endswith(".blob.core.windows.net"):
-        raise Error(f"invalid path {path}")
+    if not hostname.endswith(".blob.core.windows.net") or container == "":
+        raise Error(f"Invalid path: '{path}'")
     obj = "/".join(parts[2:])
     account = hostname.split(".")[0]
     return account, container, obj

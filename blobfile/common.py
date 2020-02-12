@@ -38,7 +38,9 @@ def build_url(base_url: str, template: str, **data: str) -> str:
 class Error(Exception):
     """Base class for blobfile exceptions."""
 
-    pass
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(message)
 
 
 class RequestFailure(Error):

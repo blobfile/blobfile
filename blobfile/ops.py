@@ -70,6 +70,8 @@ AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
 # these seem to be expired manually, but we don't currently detect that
 AZURE_SHARED_KEY_EXPIRATION_SECONDS = 24 * 60 * 60
 
+INVALID_HOSTNAME_STATUS = 600  # fake status for invalid hostname
+
 # https://cloud.google.com/storage/docs/naming
 # https://www.w3.org/TR/xml/#charsets
 INVALID_CHARS = (
@@ -387,12 +389,46 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
             urllib3.exceptions.ProtocolError,
         ) as e:
             err = e
+
+        if isinstance(err, urllib3.exceptions.NewConnectionError):
+            # azure accounts have unique urls and it's hard to tell apart
+            # an invalid hostname from a network error
+            # if we cannot look up the hostname, but we
+            # can look up google, then it's likely the hostname does not exist
+            url = urllib.parse.urlparse(req.url)
+            assert url.hostname is not None
+            if not _hostname_exists(url.hostname) and _hostname_exists(
+                "www.google.com"
+            ):
+                # in order to handle the azure failures in some sort-of-reasonable way
+                # create a fake response that has a special status code we can
+                # handle just like a 404
+                fake_resp = urllib3.response.HTTPResponse(
+                    status=INVALID_HOSTNAME_STATUS,
+                    body=io.BytesIO(b""),  # avoid error when using "with resp:"
+                )
+                if fake_resp.status in req.success_codes:
+                    return fake_resp
+                else:
+                    raise RequestFailure(
+                        "host does not exist", request=req, response=fake_resp
+                    )
+
         if attempt >= RETRY_LOG_THRESHOLD:
             _log_callback(
                 f"blobfile error {err} when executing http request {req}, sleeping for {backoff:.1f} seconds"
             )
         time.sleep(backoff)
     assert False, "unreachable"
+
+
+def _hostname_exists(hostname: str) -> bool:
+    try:
+        socket.gethostbyname(hostname)
+    except socket.gaierror:
+        return False
+    else:
+        return True
 
 
 def _is_local_path(path: str) -> bool:
@@ -597,10 +633,14 @@ def _create_azure_page_iterator(
         d = dict(data).copy()
     while True:
         req = Request(
-            url=url, method=method, params=p, data=d, success_codes=(200, 404)
+            url=url,
+            method=method,
+            params=p,
+            data=d,
+            success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
         )
         with _execute_azure_api_request(req) as resp:
-            if resp.status == 404:
+            if resp.status in (404, INVALID_HOSTNAME_STATUS):
                 return
             result = xmltodict.parse(resp)["EnumerationResults"]
             yield result
@@ -658,7 +698,7 @@ def _azure_isfile(path: str) -> Tuple[bool, Mapping[str, Any]]:
             account, "/{container}/{blob}", container=container, blob=blob
         ),
         method="HEAD",
-        success_codes=(200, 404),
+        success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
     )
     with _execute_azure_api_request(req) as resp:
         return resp.status == 200, resp.headers
@@ -942,7 +982,7 @@ def isdir(path: str) -> bool:
                 ),
                 method="GET",
                 params=dict(restype="container"),
-                success_codes=(200, 404),
+                success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
             )
             with _execute_azure_api_request(req) as resp:
                 return resp.status == 200
@@ -957,10 +997,10 @@ def isdir(path: str) -> bool:
                     delimiter="/",
                     maxresults="1",
                 ),
-                success_codes=(200, 404),
+                success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
             )
             with _execute_azure_api_request(req) as resp:
-                if resp.status == 404:
+                if resp.status in (404, INVALID_HOSTNAME_STATUS):
                     return False
                 result = xmltodict.parse(resp)["EnumerationResults"]
                 return result["Blobs"] is not None and (
@@ -1175,10 +1215,10 @@ def remove(path: str) -> None:
                 account, "/{container}/{blob}", container=container, blob=blob
             ),
             method="DELETE",
-            success_codes=(202, 404),
+            success_codes=(202, 404, INVALID_HOSTNAME_STATUS),
         )
         with _execute_azure_api_request(req) as resp:
-            if resp.status == 404:
+            if resp.status in (404, INVALID_HOSTNAME_STATUS):
                 raise FileNotFoundError(
                     f"The system cannot find the path specified: '{path}'"
                 )
@@ -1845,7 +1885,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
                 pass
         except RequestFailure as e:
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
-            if e.response.status in (404, 410):
+            if e.response is not None and e.response.status in (404, 410):
                 raise _GoogleResumableUploadFailure(
                     message=e.message, request=e.request, response=e.response
                 )
@@ -1865,10 +1905,10 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             url=self._url,
             method="PUT",
             headers={"x-ms-blob-type": "AppendBlob"},
-            success_codes=(201, 400, 404, 409),
+            success_codes=(201, 400, 404, 409, INVALID_HOSTNAME_STATUS),
         )
         with _execute_azure_api_request(req) as resp:
-            if resp.status in (400, 404):
+            if resp.status in (400, 404, INVALID_HOSTNAME_STATUS):
                 raise FileNotFoundError(f"Not such file or directory: '{path}'")
             if resp.status == 409:
                 # a blob already exists with a different type so we failed to create the new one

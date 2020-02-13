@@ -644,12 +644,10 @@ def test_more_exists():
         (GCS_INVALID_BUCKET + "/", False),
         (GCS_INVALID_BUCKET + "//", False),
         (GCS_INVALID_BUCKET + "/invalid.file", False),
-        # azure uses a hostname for each account, if that host does not exist
-        # the request fails due to "[Errno -2] Name or service not known when executing http request"
-        # (AZURE_INVALID_ACCOUNT, False),
-        # (AZURE_INVALID_ACCOUNT + "/", False),
-        # (AZURE_INVALID_ACCOUNT + "//", False),
-        # (AZURE_INVALID_ACCOUNT + "/invalid.file", False),
+        (AZURE_INVALID_ACCOUNT, False),
+        (AZURE_INVALID_ACCOUNT + "/", False),
+        (AZURE_INVALID_ACCOUNT + "//", False),
+        (AZURE_INVALID_ACCOUNT + "/invalid.file", False),
         (AZURE_VALID_CONTAINER, True),
         (AZURE_VALID_CONTAINER + "/", True),
         (AZURE_VALID_CONTAINER + "//", False),
@@ -665,10 +663,9 @@ def test_more_exists():
         assert bf.exists(path) == should_exist
 
 
-# @pytest.mark.parametrize(
-#     "base_path", [AZURE_INVALID_ACCOUNT, AZURE_INVALID_CONTAINER, GCS_INVALID_BUCKET]
-# )
-@pytest.mark.parametrize("base_path", [AZURE_INVALID_CONTAINER, GCS_INVALID_BUCKET])
+@pytest.mark.parametrize(
+    "base_path", [AZURE_INVALID_ACCOUNT, AZURE_INVALID_CONTAINER, GCS_INVALID_BUCKET]
+)
 def test_invalid_paths(base_path):
     for suffix in ["", "/", "//", "/invalid.file", "/invalid/dir/"]:
         path = base_path + suffix
@@ -704,7 +701,13 @@ def test_invalid_paths(base_path):
             bf.rmtree(path)
         with pytest.raises(FileNotFoundError):
             bf.stat(path)
-        bf.get_url(path)
+
+        if base_path == AZURE_INVALID_ACCOUNT:
+            with pytest.raises(bf.Error):
+                bf.get_url(path)
+        else:
+            bf.get_url(path)
+
         with pytest.raises(FileNotFoundError):
             bf.md5(path)
         with pytest.raises(bf.Error):

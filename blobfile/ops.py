@@ -424,6 +424,7 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
 
 def _hostname_exists(hostname: str) -> bool:
     try:
+        # could also try socket.create_connection(("8.8.8.8", 53), timeout=1) if this doesn't work well
         socket.gethostbyname(hostname)
     except socket.gaierror:
         return False

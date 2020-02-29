@@ -1727,7 +1727,7 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
     def __init__(self, path: str) -> None:
         isfile, self._metadata = _google_isfile(path)
         if not isfile:
-            raise FileNotFoundError(f"No such file or directory: '{path}'")
+            raise FileNotFoundError(f"No such file or bucket: '{path}'")
         super().__init__(path, int(self._metadata["size"]))
 
     def _get_file(
@@ -1851,7 +1851,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
         )
         with _execute_google_api_request(req) as resp:
             if resp.status in (400, 404):
-                raise FileNotFoundError(f"Not such file or directory: '{path}'")
+                raise FileNotFoundError(f"No such file or bucket: '{path}'")
             self._upload_url = resp.headers["Location"]
         super().__init__(chunk_size=GOOGLE_CHUNK_SIZE)
 
@@ -1910,7 +1910,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         )
         with _execute_azure_api_request(req) as resp:
             if resp.status in (400, 404, INVALID_HOSTNAME_STATUS):
-                raise FileNotFoundError(f"Not such file or directory: '{path}'")
+                raise FileNotFoundError(f"No such file or container/account does not exist: '{path}'")
             if resp.status == 409:
                 # a blob already exists with a different type so we failed to create the new one
                 remove(path)

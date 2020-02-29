@@ -26,7 +26,7 @@ assert sys.version_info >= (3, 8), "Python 3.8 or newer required to run this scr
 #   from . import package
 
 HEADER = """\
-# This file was generated automatically by export.py
+# This file was generated automatically by export-stubs.py
 
 """
 

@@ -1,4 +1,5 @@
 import os
+import shutil
 from setuptools import setup, find_packages
 import setuptools.command.build_py
 import subprocess as sp
@@ -12,8 +13,28 @@ README = open(os.path.join(SCRIPT_DIR, "README.md")).read()
 class BuildPyCommand(setuptools.command.build_py.build_py):
     def run(self):
         sp.run(
-            ["python", "scripts/export-stubs.py", "--dirpath", "blobfile"], check=True
+            [
+                "pyright",
+                "--project",
+                "pyrightconfig.json",
+                "--createstub",
+                "blobfile",
+            ],
+            check=True,
+            shell=True,
         )
+        sp.run(
+            [
+                "python",
+                "scripts/filter-stubs.py",
+                "--stubspath",
+                "typings/blobfile",
+                "--outputpath",
+                "blobfile",
+            ],
+            check=True,
+        )
+        shutil.rmtree("typings/blobfile")
         setuptools.command.build_py.build_py.run(self)
 
 

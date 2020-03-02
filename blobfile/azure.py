@@ -12,8 +12,8 @@ from typing import Mapping, Tuple
 
 import xmltodict
 
-from . import common
-from .common import Request, Error
+from blobfile import common
+from blobfile.common import Request, Error
 
 SHARED_KEY = "shared_key"
 OAUTH_TOKEN = "oauth_token"

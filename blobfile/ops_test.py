@@ -25,7 +25,7 @@ import imageio
 import numpy as np
 
 import blobfile as bf
-from . import ops, azure
+from blobfile import ops, azure
 
 GCS_TEST_BUCKET = "csh-test-3"
 AS_TEST_ACCOUNT = "cshteststorage2"

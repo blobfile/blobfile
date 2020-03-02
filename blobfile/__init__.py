@@ -1,4 +1,4 @@
-from .ops import (
+from blobfile.ops import (
     copy,
     exists,
     glob,
@@ -19,7 +19,7 @@ from .ops import (
     BlobFile,
     LocalBlobFile,
 )
-from .common import Request, Error, RequestFailure
+from blobfile.common import Request, Error, RequestFailure
 
 __all__ = [
     "copy",

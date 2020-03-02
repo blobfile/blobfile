@@ -14,8 +14,8 @@ from Cryptodome.Signature import pkcs1_15
 from Cryptodome.Hash import SHA256
 from Cryptodome.PublicKey import RSA
 
-from . import common
-from .common import Request, Error
+from blobfile import common
+from blobfile.common import Request, Error
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
 

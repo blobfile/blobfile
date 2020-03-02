@@ -26,221 +26,9 @@ assert sys.version_info >= (3, 8), "Python 3.8 or newer required to run this scr
 #   from . import package
 
 HEADER = """\
-# This file was generated automatically by export-stubs.py
+# This file was generated automatically by filter-stubs.py
 
 """
-
-# from https://github.com/timothycrosley/isort/blob/c23f76f8ed020455a78d9480ef9e52f476cf601b/isort/stdlibs/py38.py
-STDLIB_MODULES = {
-    "_dummy_thread",
-    "_thread",
-    "abc",
-    "aifc",
-    "argparse",
-    "array",
-    "ast",
-    "asynchat",
-    "asyncio",
-    "asyncore",
-    "atexit",
-    "audioop",
-    "base64",
-    "bdb",
-    "binascii",
-    "binhex",
-    "bisect",
-    "builtins",
-    "bz2",
-    "cProfile",
-    "calendar",
-    "cgi",
-    "cgitb",
-    "chunk",
-    "cmath",
-    "cmd",
-    "code",
-    "codecs",
-    "codeop",
-    "collections",
-    "colorsys",
-    "compileall",
-    "concurrent",
-    "configparser",
-    "contextlib",
-    "contextvars",
-    "copy",
-    "copyreg",
-    "crypt",
-    "csv",
-    "ctypes",
-    "curses",
-    "dataclasses",
-    "datetime",
-    "dbm",
-    "decimal",
-    "difflib",
-    "dis",
-    "distutils",
-    "doctest",
-    "dummy_threading",
-    "email",
-    "encodings",
-    "ensurepip",
-    "enum",
-    "errno",
-    "faulthandler",
-    "fcntl",
-    "filecmp",
-    "fileinput",
-    "fnmatch",
-    "formatter",
-    "fractions",
-    "ftplib",
-    "functools",
-    "gc",
-    "getopt",
-    "getpass",
-    "gettext",
-    "glob",
-    "grp",
-    "gzip",
-    "hashlib",
-    "heapq",
-    "hmac",
-    "html",
-    "http",
-    "imaplib",
-    "imghdr",
-    "imp",
-    "importlib",
-    "inspect",
-    "io",
-    "ipaddress",
-    "itertools",
-    "json",
-    "keyword",
-    "lib2to3",
-    "linecache",
-    "locale",
-    "logging",
-    "lzma",
-    "mailbox",
-    "mailcap",
-    "marshal",
-    "math",
-    "mimetypes",
-    "mmap",
-    "modulefinder",
-    "msilib",
-    "msvcrt",
-    "multiprocessing",
-    "netrc",
-    "nis",
-    "nntplib",
-    "numbers",
-    "operator",
-    "optparse",
-    "os",
-    "ossaudiodev",
-    "parser",
-    "pathlib",
-    "pdb",
-    "pickle",
-    "pickletools",
-    "pipes",
-    "pkgutil",
-    "platform",
-    "plistlib",
-    "poplib",
-    "posix",
-    "pprint",
-    "profile",
-    "pstats",
-    "pty",
-    "pwd",
-    "py_compile",
-    "pyclbr",
-    "pydoc",
-    "queue",
-    "quopri",
-    "random",
-    "re",
-    "readline",
-    "reprlib",
-    "resource",
-    "rlcompleter",
-    "runpy",
-    "sched",
-    "secrets",
-    "select",
-    "selectors",
-    "shelve",
-    "shlex",
-    "shutil",
-    "signal",
-    "site",
-    "smtpd",
-    "smtplib",
-    "sndhdr",
-    "socket",
-    "socketserver",
-    "spwd",
-    "sqlite3",
-    "ssl",
-    "stat",
-    "statistics",
-    "string",
-    "stringprep",
-    "struct",
-    "subprocess",
-    "sunau",
-    "symbol",
-    "symtable",
-    "sys",
-    "sysconfig",
-    "syslog",
-    "tabnanny",
-    "tarfile",
-    "telnetlib",
-    "tempfile",
-    "termios",
-    "test",
-    "textwrap",
-    "threading",
-    "time",
-    "timeit",
-    "tkinter",
-    "token",
-    "tokenize",
-    "trace",
-    "traceback",
-    "tracemalloc",
-    "tty",
-    "turtle",
-    "turtledemo",
-    "types",
-    "typing",
-    "unicodedata",
-    "unittest",
-    "urllib",
-    "uu",
-    "uuid",
-    "venv",
-    "warnings",
-    "wave",
-    "weakref",
-    "webbrowser",
-    "winreg",
-    "winsound",
-    "wsgiref",
-    "xdrlib",
-    "xml",
-    "xmlrpc",
-    "zipapp",
-    "zipfile",
-    "zipimport",
-    "zlib",
-}
 
 
 Define = collections.namedtuple("Define", ["name", "text", "locals", "imports"])
@@ -408,13 +196,19 @@ def indent(text):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dirpath", required=True)
+    parser.add_argument("--stubspath", required=True)
+    parser.add_argument("--outputpath", required=True)
     args = parser.parse_args()
 
-    for base, dirnames, filenames in os.walk(args.dirpath):
+    root_path = os.path.dirname(os.path.abspath(args.stubspath))
+
+    for base, dirnames, filenames in os.walk(args.stubspath):
         assert isinstance(base, str)
 
-        if "__init__.py" not in filenames:
+        relpath = os.path.relpath(base, root_path)
+        package_path = relpath.split(os.path.sep)
+
+        if "__init__.pyi" not in filenames:
             # not a python package
             continue
 
@@ -422,44 +216,37 @@ def main():
         module_name_to_exported_symbol_names = collections.defaultdict(list)
         packages_to_walk = []
 
-        def handle_module_import(name):
-            assert isinstance(base, str)
-            module_path = os.path.join(base, name)
-            if os.path.isdir(module_path) and os.path.exists(
-                os.path.join(module_path, "__init__.py")
-            ):
-                packages_to_walk.append(alias.name)
-            else:
-                root_package, _, _ = alias.name.partition(".")
-                if root_package not in STDLIB_MODULES:
-                    print(
-                        f"WARNING: {init_path} imported a module instead of a package: `{astor.to_source(node).strip()}`.  Please use `from <module> import <symbols>` instead of `import <module>`"
-                    )
-
-        init_path = os.path.join(base, "__init__.py")
+        init_path = os.path.join(base, "__init__.pyi")
         with open(init_path, "r") as f:
             init_contents = f.read()
             root = ast.parse(init_contents)
             for node in ast.iter_child_nodes(root):
                 if isinstance(node, ast.ImportFrom):
                     if node.module is None:
-                        for alias in node.names:
-                            handle_module_import(alias.name)
+                        print(
+                            f"ignoring relative import: `{astor.to_source(node).strip()}` in {init_path}"
+                        )
                     else:
                         if node.level == 0:
-                            print(
-                                f"ignoring absolute import: `{astor.to_source(node).strip()}` in {init_path}"
-                            )
-                        elif node.level == 1:
-                            if "." in node.module:
-                                print(
-                                    f"ignoring multi-level relative import: `{astor.to_source(node).strip()}` in {init_path}"
-                                )
-                            else:
+                            import_path = node.module.split(".")
+                            if (
+                                len(import_path) == len(package_path) + 1
+                                and import_path[:-1] == package_path
+                            ):
+                                module_name = import_path[-1]
+                                module_path = os.path.join(root_path, *import_path)
+                                if os.path.isdir(module_path) and os.path.exists(
+                                    os.path.join(module_path, "__init__.py")
+                                ):
+                                    packages_to_walk.append(module_name)
                                 for alias in node.names:
                                     module_name_to_exported_symbol_names[
-                                        node.module
+                                        module_name
                                     ].append(alias.name)
+                        elif node.level == 1:
+                            print(
+                                f"ignoring multi-level relative import: `{astor.to_source(node).strip()}` in {init_path}"
+                            )
                         else:
                             print(
                                 f"ignoring multi-level relative import: `{astor.to_source(node).strip()}` in {init_path}"
@@ -472,15 +259,15 @@ def main():
             raise Exception("no exported symbols found")
 
         module_name_to_public_symbol_definitions = {}
-
+        module_name_to_imports = {}
         for filename in filenames:
             assert isinstance(filename, str)
 
             if (
-                not filename.endswith(".py")
-                or filename == "__init__.py"
+                not filename.endswith(".pyi")
+                or filename == "__init__.pyi"
                 or filename.startswith("test_")
-                or filename.endswith("_test.py")
+                or filename.endswith("_test.pyi")
             ):
                 continue
 
@@ -520,7 +307,6 @@ def main():
                         if node.name.startswith("_"):
                             continue
 
-                        define_text = f"class {node.name}"
                         class_locals = []
                         class_imports = []
                         bases = []
@@ -531,29 +317,29 @@ def main():
                             )
                             class_locals.extend(locs)
                             class_imports.extend(imps)
-                        if len(bases) > 0:
-                            define_text += f"({', '.join(bases)})"
-                        define_text += ":"
 
                         for body_node in node.body:
                             for define in node_to_defines(
                                 body_node, symbol_name_to_import
                             ):
-                                define_text += "\n" + indent(define.text)
                                 class_locals.extend(define.locals)
                                 class_imports.extend(define.imports)
                         defines[node.name].append(
                             Define(
                                 name=node.name,
-                                text=define_text,
+                                text=astor.to_source(node),
                                 locals=class_locals,
                                 imports=class_imports,
                             )
                         )
 
+                module_name_to_imports[module_name] = symbol_name_to_import.values()
                 module_name_to_public_symbol_definitions[module_name] = defines
 
-        with open(os.path.join(base, "__init__.pyi"), "w") as f:
+        relpath = os.path.relpath(base, args.stubspath)
+        output_base = os.path.join(args.outputpath, relpath)
+        assert isinstance(output_base, str)
+        with open(os.path.join(output_base, "__init__.pyi"), "w") as f:
             print(f"writing {f.name}")
             f.write(HEADER)
             f.write(init_contents)
@@ -576,20 +362,20 @@ def main():
                     # we didn't add any new symbols this loop, we're done here
                     break
 
+            all_imports = module_name_to_imports[module_name]
+
             exported_defines = []
-            exported_imports = set()
             for exported_name in exported_symbols:
                 if exported_name not in symbol_definitions:
                     print("MISSING exported symbol", exported_name)
                     continue
                 for define in symbol_definitions[exported_name]:
                     exported_defines.append(define)
-                    exported_imports = exported_imports.union(set(define.imports))
 
-            with open(os.path.join(base, f"{module_name}.pyi"), "w") as f:
+            with open(os.path.join(output_base, f"{module_name}.pyi"), "w") as f:
                 print(f"writing {f.name}")
                 f.write(HEADER)
-                for imp in exported_imports:
+                for imp in all_imports:
                     if imp.kind == "from":
                         if imp.asname is None:
                             f.write(f"from {imp.module} import {imp.name}\n")

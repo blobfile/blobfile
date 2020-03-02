@@ -45,8 +45,8 @@ import urllib3
 import xmltodict
 import filelock
 
-from . import google, azure
-from .common import Request, Error, RequestFailure
+from blobfile import google, azure
+from blobfile.common import Request, Error, RequestFailure
 
 
 BACKOFF_INITIAL = 0.1
@@ -1910,7 +1910,9 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         )
         with _execute_azure_api_request(req) as resp:
             if resp.status in (400, 404, INVALID_HOSTNAME_STATUS):
-                raise FileNotFoundError(f"No such file or container/account does not exist: '{path}'")
+                raise FileNotFoundError(
+                    f"No such file or container/account does not exist: '{path}'"
+                )
             if resp.status == 409:
                 # a blob already exists with a different type so we failed to create the new one
                 remove(path)

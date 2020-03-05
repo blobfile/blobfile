@@ -145,7 +145,7 @@ def _get_http_pool() -> urllib3.PoolManager:
 
 
 def __log_callback(msg: str) -> None:
-    print(msg)
+    print(f"blobfile: {msg}")
 
 
 # pylint can't figure this out when it's a def
@@ -416,7 +416,7 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
 
         if attempt >= RETRY_LOG_THRESHOLD:
             _log_callback(
-                f"blobfile error {err} when executing http request {req}, sleeping for {backoff:.1f} seconds"
+                f"error {err} when executing http request {req}, sleeping for {backoff:.1f} seconds"
             )
         time.sleep(backoff)
     assert False, "unreachable"

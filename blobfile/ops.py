@@ -387,6 +387,12 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
             urllib3.exceptions.ConnectTimeoutError,
             urllib3.exceptions.ReadTimeoutError,
             urllib3.exceptions.ProtocolError,
+            # urllib3 wraps all errors in its own exception classes
+            # but seems to miss ssl.SSLError
+            # https://github.com/urllib3/urllib3/blob/9971e27e83a891ba7b832fa9e5d2f04bbcb1e65f/src/urllib3/response.py#L415
+            # https://github.com/urllib3/urllib3/blame/9971e27e83a891ba7b832fa9e5d2f04bbcb1e65f/src/urllib3/response.py#L437
+            # https://github.com/urllib3/urllib3/issues/1764
+            ssl.SSLError,
         ) as e:
             err = e
 
@@ -1675,6 +1681,7 @@ class _StreamingReadFile(io.RawIOBase):
             except (
                 urllib3.exceptions.ReadTimeoutError,  # haven't seen this error here, but seems possible
                 urllib3.exceptions.ProtocolError,
+                ssl.SSLError,
             ) as e:
                 err = e
             self.failures += 1

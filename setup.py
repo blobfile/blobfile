@@ -13,13 +13,7 @@ README = open(os.path.join(SCRIPT_DIR, "README.md")).read()
 class BuildPyCommand(setuptools.command.build_py.build_py):
     def run(self):
         sp.run(
-            [
-                "pyright",
-                "--project",
-                "pyrightconfig.json",
-                "--createstub",
-                "blobfile",
-            ],
+            ["pyright", "--project", "pyrightconfig.json", "--createstub", "blobfile"],
             check=True,
             shell=True,
         )

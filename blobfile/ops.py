@@ -387,6 +387,11 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
             urllib3.exceptions.ConnectTimeoutError,
             urllib3.exceptions.ReadTimeoutError,
             urllib3.exceptions.ProtocolError,
+            # we should probably only catch SSLErrors matching `DECRYPTION_FAILED_OR_BAD_RECORD_MAC`
+            # but it's not obvious what the error code will be from the logs
+            # and because we are connecting to known servers, it's likely that non-transient
+            # SSL errors will be rare, so for now catch all SSLErrors
+            urllib3.exceptions.SSLError,
             # urllib3 wraps all errors in its own exception classes
             # but seems to miss ssl.SSLError
             # https://github.com/urllib3/urllib3/blob/9971e27e83a891ba7b832fa9e5d2f04bbcb1e65f/src/urllib3/response.py#L415
@@ -422,7 +427,7 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
 
         if attempt >= RETRY_LOG_THRESHOLD:
             _log_callback(
-                f"error {err} when executing http request {req}, sleeping for {backoff:.1f} seconds"
+                f"error {err} when executing http request {req}, sleeping for {backoff:.1f} seconds before retrying"
             )
         time.sleep(backoff)
     assert False, "unreachable"
@@ -586,7 +591,7 @@ def copy(
             # https://github.com/googleapis/gcs-resumable-upload/issues/15#issuecomment-249324122
             if attempt >= RETRY_LOG_THRESHOLD:
                 _log_callback(
-                    f"error {e} when executing a resumable upload to {dst}, sleeping for {backoff:.1f} seconds"
+                    f"error {e} when executing a resumable upload to {dst}, sleeping for {backoff:.1f} seconds before retrying"
                 )
             time.sleep(backoff)
 
@@ -1681,13 +1686,14 @@ class _StreamingReadFile(io.RawIOBase):
             except (
                 urllib3.exceptions.ReadTimeoutError,  # haven't seen this error here, but seems possible
                 urllib3.exceptions.ProtocolError,
+                urllib3.exceptions.SSLError,
                 ssl.SSLError,
             ) as e:
                 err = e
             self.failures += 1
             if attempt >= RETRY_LOG_THRESHOLD:
                 _log_callback(
-                    f"error {err} when executing readinto({len(b)}) at offset {self._offset} on file {self._path}, sleeping for {backoff:.1f} seconds"
+                    f"error {err} when executing readinto({len(b)}) at offset {self._offset} on file {self._path}, sleeping for {backoff:.1f} seconds before retrying"
                 )
             time.sleep(backoff)
         self._offset += n

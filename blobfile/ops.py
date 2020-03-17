@@ -58,6 +58,9 @@ CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 30
 CHUNK_SIZE = 2 ** 20
 GOOGLE_CHUNK_SIZE = 2 ** 20
+# this chunk size should likely depend on the network speed and error rate
+# if a user doesn't like this value, it is easy to use .read() directly
+READALL_CHUNK_SIZE = CHUNK_SIZE * 128
 # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
 assert GOOGLE_CHUNK_SIZE % (256 * 1024) == 0
 # https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-append-blobs
@@ -1651,9 +1654,20 @@ class _StreamingReadFile(io.RawIOBase):
         raise NotImplementedError
 
     def readall(self) -> bytes:
-        opt_bytes = self.read(self._size - self._offset)
-        assert opt_bytes is not None, "file is in non-blocking mode"
-        return opt_bytes
+        # https://github.com/christopher-hesse/blobfile/issues/46
+        # due to a limitation of the ssl module, we cannot read more than 2**31 bytes at a time
+        # reading a huge file in a single request is probably a bad idea anyway since the request
+        # cannot be retried without re-reading the entire requested amount
+        # instead, read into a buffer and return the buffer
+        pieces = []
+        while True:
+            opt_piece = self.read(READALL_CHUNK_SIZE)
+            assert opt_piece is not None, "file is in non-blocking mode"
+            piece = opt_piece
+            if len(piece) == 0:
+                break
+            pieces.append(piece)
+        return b"".join(pieces)
 
     # https://bugs.python.org/issue27501
     def readinto(self, b: Any) -> Optional[int]:

@@ -860,7 +860,9 @@ def test_more_read_write(binary, blobfile, ctx):
             w.write(contents)
 
         with blobfile(path, read_mode) as r:
-            assert r.read() == contents
+            assert r.read(1) == contents[:1]
+            assert r.read() == contents[1:]
+            assert len(r.read()) == 0
 
         with blobfile(path, read_mode) as r:
             for i in range(len(contents)):
@@ -943,6 +945,21 @@ def test_video(blobfile, ctx):
             stream = container.streams.video[0]
             for idx, frame in enumerate(container.decode(stream)):
                 assert np.array_equal(frame.to_image(), video_data[idx])
+
+
+@pytest.mark.parametrize(
+    "ctx",
+    [_get_temp_local_path]
+    # disable remote backends because they are super slow
+    # "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
+def test_large_file(ctx):
+    contents = b"0" * 2 ** 32
+    with ctx() as path:
+        with bf.BlobFile(path, "wb", streaming=True) as f:
+            f.write(contents)
+        with bf.BlobFile(path, "rb", streaming=True) as f:
+            assert contents == f.read()
 
 
 @pytest.mark.parametrize(

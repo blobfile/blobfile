@@ -64,6 +64,14 @@ There are a few bonus functions:
 * `RequestFailure` - a request has failed permanently, has `message:str`, `request:Request`, and `response:urllib3.HTTPResponse` attributes.
 * The following generic exceptions are raised from some functions to make the behavior similar to the original versions: `FileNotFoundError`, `FileExistsError`, `IsADirectoryError`, `NotADirectoryError`, `OSError`, `ValueError`, `io.UnsupportedOperation`
 
+## Logging
+
+In order to make diagnosing stalls easier, `blobfile` will log when retrying requests.  `blobfile` will keep retrying transient errors until they succeed or a permanent error is encountered (which will raise an exception).
+
+To route those log lines, use `set_log_callback` to set a callback function which will be called whenever a log line should be printed.  The default callback prints to stdout.
+
+While `blobfile` does not use the python `logging` module, it does use `urllib3` which uses that module.  So if you configure the python `logging` module, you may need to change the settings to adjust `urllib3`'s logging.  To only log errors from `urllib3`, you can do `logging.getLogger("urllib3").setLevel(logging.ERROR)`.
+
 ## Examples
 
 Write and read a file:

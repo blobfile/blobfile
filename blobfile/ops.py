@@ -1591,7 +1591,8 @@ def md5(path: str) -> str:
     """
     Get the MD5 hash for a file in hexdigest format.
 
-    For GCS this can just look up the MD5 in the blob's metadata.
+    For GCS this will look up the MD5 in the blob's metadata, unless it's a composite object, in which case
+    it must be calculated by downloading the file.
     For Azure this can look up the MD5 if it's available, otherwise it must calculate it.
     For local paths, this must always calculate the MD5.
     """
@@ -1599,7 +1600,34 @@ def md5(path: str) -> str:
         isfile, metadata = _google_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file: '{path}'")
-        return base64.b64decode(metadata["md5Hash"]).hex()
+
+        if "md5Hash" in metadata:
+            return base64.b64decode(metadata["md5Hash"]).hex()
+
+        if "metadata" in metadata and "md5" in metadata["metadata"]:
+            # fallback to our custom hash if this is a composite object that is lacking the md5Hash field
+            return metadata["metadata"]["md5"]
+
+        # this is probably a composite object, calculate the md5 and store it on the file if the file has not changed
+        with BlobFile(path, "rb") as f:
+            result = _block_md5(f).hex()
+
+        bucket, blob = google.split_url(path)
+        req = Request(
+            url=google.build_url(
+                "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
+            ),
+            method="PATCH",
+            params=dict(ifGenerationMatch=metadata["generation"]),
+            # it looks like we can't set the underlying md5Hash, only the metadata fields
+            headers={"Content-Type": "application/json"},
+            data=dict(metadata={"md5": result}),
+            success_codes=(200, 404, 412),
+        )
+
+        with _execute_google_api_request(req):
+            pass
+        return result
     elif _is_azure_path(path):
         isfile, metadata = _azure_isfile(path)
         if not isfile:
@@ -2162,9 +2190,22 @@ def BlobFile(
                     tmp_path = join(cache_dir, f"{path_md5}.tmp")
                     with filelock.FileLock(lock_path):
                         remote_etag = ""
-                        # get the remote md5 so we can check for a local file
+                        # get some sort of consistent remote hash so we can check for a local file
                         if _is_google_path(path):
-                            remote_hexdigest = md5(path)
+                            isfile, metadata = _google_isfile(path)
+                            if not isfile:
+                                raise FileNotFoundError(f"No such file: '{path}'")
+                            if "md5Hash" in metadata:
+                                remote_hash = base64.b64decode(
+                                    metadata["md5Hash"]
+                                ).hex()
+                            else:
+                                # composite objects are missing the md5 field, use the crc32 combined with the path
+                                # and hash that instead
+                                crc32 = base64.b64decode(metadata["crc32c"]).hex()
+                                remote_hash = hashlib.md5(
+                                    (crc32 + "|" + path).encode("utf8")
+                                ).hexdigest()
                         elif _is_azure_path(path):
                             # in the azure case the remote md5 may not exist
                             # this duplicates some of md5() because we want more control
@@ -2173,22 +2214,22 @@ def BlobFile(
                                 raise FileNotFoundError(f"No such file: '{path}'")
                             remote_etag = metadata["ETag"]
                             if "Content-MD5" in metadata:
-                                remote_hexdigest = base64.b64decode(
+                                remote_hash = base64.b64decode(
                                     metadata["Content-MD5"]
                                 ).hex()
                             else:
-                                remote_hexdigest = None
+                                remote_hash = None
                         else:
                             raise Error(f"Unrecognized path: '{path}'")
 
                         perform_copy = False
-                        if remote_hexdigest is None:
+                        if remote_hash is None:
                             # there is no remote md5, copy the file
                             # and attempt to update the md5
                             perform_copy = True
                         else:
                             expected_local_path = join(
-                                cache_dir, remote_hexdigest, local_filename
+                                cache_dir, remote_hash, local_filename
                             )
                             perform_copy = not exists(expected_local_path)
 
@@ -2210,15 +2251,13 @@ def BlobFile(
                             else:
                                 os.replace(tmp_path, local_path)
 
-                            if _is_azure_path(path) and remote_hexdigest is None:
+                            if _is_azure_path(path) and remote_hash is None:
                                 _azure_maybe_update_md5(
                                     path, remote_etag, local_hexdigest
                                 )
                         else:
-                            assert remote_hexdigest is not None
-                            local_path = join(
-                                cache_dir, remote_hexdigest, local_filename
-                            )
+                            assert remote_hash is not None
+                            local_path = join(cache_dir, remote_hash, local_filename)
                     local_path = local_path
             else:
                 tmp_dir = tempfile.mkdtemp()

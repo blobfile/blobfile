@@ -39,6 +39,21 @@ AZURE_INVALID_ACCOUNT = f"https://{AS_TEST_ACCOUNT}-does-not-exist.blob.core.win
 GCS_VALID_BUCKET = f"gs://{GCS_TEST_BUCKET}"
 GCS_INVALID_BUCKET = f"gs://{GCS_TEST_BUCKET}-does-not-exist"
 
+# only run this for our docker tests, this tells gcloud to use the credentials supplied by the
+# test running script
+@pytest.mark.skipif(platform.system() != "Linux")
+@pytest.fixture(scope="session", autouse=True)
+def setup_gcloud_auth():
+    sp.run(
+        [
+            "gcloud",
+            "auth",
+            "activate-service-account",
+            f"--key-file={os.environ['GOOGLE_APPLICATION_CREDENTIALS']}",
+        ]
+    )
+    yield
+
 
 @contextlib.contextmanager
 def _get_temp_local_path():
@@ -960,6 +975,32 @@ def test_large_file(ctx):
             f.write(contents)
         with bf.BlobFile(path, "rb", streaming=True) as f:
             assert contents == f.read()
+
+
+def test_composite_objects():
+    with _get_temp_gcs_path() as remote_path:
+        with _get_temp_local_path() as local_path:
+            contents = b"0" * 2 * 2 ** 20
+            with open(local_path, "wb") as f:
+                f.write(contents)
+            sp.run(
+                [
+                    "gsutil",
+                    "-o",
+                    "GSUtil:parallel_composite_upload_threshold=1M",
+                    "cp",
+                    local_path,
+                    remote_path,
+                ],
+                check=True,
+            )
+
+        assert hashlib.md5(contents).hexdigest() == bf.md5(remote_path)
+        assert hashlib.md5(contents).hexdigest() == bf.md5(remote_path)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with bf.BlobFile(remote_path, "rb", cache_dir=tmpdir, streaming=False) as f:
+                assert f.read() == contents
 
 
 @pytest.mark.parametrize(

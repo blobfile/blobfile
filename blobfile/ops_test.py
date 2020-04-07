@@ -56,6 +56,14 @@ def setup_gcloud_auth():
 
 
 @contextlib.contextmanager
+def chdir(path):
+    original_path = os.getcwd()
+    os.chdir(path)
+    yield
+    os.chdir(original_path)
+
+
+@contextlib.contextmanager
 def _get_temp_local_path():
     with tempfile.TemporaryDirectory() as tmpdir:
         assert isinstance(tmpdir, str)
@@ -849,15 +857,15 @@ def test_create_local_intermediate_dirs():
     contents = b"meow"
     with _get_temp_local_path() as path:
         dirpath = bf.dirname(path)
-        os.chdir(dirpath)
-        for filepath in [
-            bf.join(dirpath, "dirname", "file.name"),
-            bf.join("..", bf.basename(dirpath), "file.name"),
-            "./file.name",
-            "file.name",
-        ]:
-            with bf.BlobFile(filepath, "wb") as f:
-                f.write(contents)
+        with chdir(dirpath):
+            for filepath in [
+                bf.join(dirpath, "dirname", "file.name"),
+                bf.join("..", bf.basename(dirpath), "file.name"),
+                "./file.name",
+                "file.name",
+            ]:
+                with bf.BlobFile(filepath, "wb") as f:
+                    f.write(contents)
 
 
 @pytest.mark.parametrize("binary", [True, False])

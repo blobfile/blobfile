@@ -845,6 +845,21 @@ def test_overwrite_while_reading(ctx):
             )
 
 
+def test_create_local_intermediate_dirs():
+    contents = b"meow"
+    with _get_temp_local_path() as path:
+        dirpath = bf.dirname(path)
+        os.chdir(dirpath)
+        for filepath in [
+            bf.join(dirpath, "dirname", "file.name"),
+            bf.join("..", bf.basename(dirpath), "file.name"),
+            "./file.name",
+            "file.name",
+        ]:
+            with bf.BlobFile(filepath, "wb") as f:
+                f.write(contents)
+
+
 @pytest.mark.parametrize("binary", [True, False])
 @pytest.mark.parametrize("blobfile", [bf.BlobFile, bf.LocalBlobFile])
 @pytest.mark.parametrize(

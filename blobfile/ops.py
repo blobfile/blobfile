@@ -2119,6 +2119,13 @@ def BlobFile(
     if streaming is None:
         streaming = mode in ("r", "rb")
 
+    if _is_local_path(path) and "w" in mode:
+        # local filesystems require that intermediate directories exist, but this is not required by the
+        # remote filesystems
+        # for consistency, automatically create local intermediate directories
+        if dirname(path) != "":
+            makedirs(dirname(path))
+
     if streaming:
         if mode not in ("w", "wb", "r", "rb"):
             raise Error(f"Invalid mode for streaming file: '{mode}'")

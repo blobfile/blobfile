@@ -17,6 +17,7 @@ from blobfile.ops import (
     md5,
     set_log_callback,
     BlobFile,
+    BlobFile as open,
     LocalBlobFile,
 )
 from blobfile.common import Request, Error, RequestFailure

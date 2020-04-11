@@ -1411,47 +1411,104 @@ def walk(
                 root = root[:-1]
             yield (root, sorted(dirnames), sorted(filenames))
     elif _is_google_path(top) or _is_azure_path(top):
-        if not topdown:
-            raise Error("Only topdown mode currently supported")
-        dq: collections.deque[str] = collections.deque()
-        dq.append(top)
-        while len(dq) > 0:
-            cur = dq.popleft()
-            if not cur.endswith("/"):
-                cur += "/"
+        if topdown:
+            dq: collections.deque[str] = collections.deque()
+            dq.append(top)
+            while len(dq) > 0:
+                cur = dq.popleft()
+                if not cur.endswith("/"):
+                    cur += "/"
+                if _is_google_path(top):
+                    bucket, blob = google.split_url(cur)
+                    it = _create_google_page_iterator(
+                        url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+                        method="GET",
+                        params=dict(delimiter="/", prefix=blob),
+                    )
+                    get_names = _google_get_names
+                elif _is_azure_path(top):
+                    account, container, blob = azure.split_url(cur)
+                    it = _create_azure_page_iterator(
+                        url=azure.build_url(
+                            account, "/{container}", container=container
+                        ),
+                        method="GET",
+                        params=dict(
+                            comp="list", restype="container", delimiter="/", prefix=blob
+                        ),
+                    )
+                    get_names = _azure_get_names
+                else:
+                    raise Error(f"Unrecognized path: '{top}'")
+                dirnames = []
+                filenames = []
+                for result in it:
+                    for name in get_names(result):
+                        if name == blob:
+                            continue
+                        name = name[len(blob) :]
+                        if name.endswith("/"):
+                            dirnames.append(name[:-1])
+                        else:
+                            filenames.append(name)
+                yield (_strip_slash(cur), dirnames, filenames)
+                dq.extend(join(cur, dirname) for dirname in dirnames)
+        else:
+            if not top.endswith("/"):
+                top += "/"
             if _is_google_path(top):
-                bucket, blob = google.split_url(cur)
+                bucket, blob = google.split_url(top)
                 it = _create_google_page_iterator(
                     url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
                     method="GET",
-                    params=dict(delimiter="/", prefix=blob),
+                    params=dict(prefix=blob),
                 )
                 get_names = _google_get_names
             elif _is_azure_path(top):
-                account, container, blob = azure.split_url(cur)
+                account, container, blob = azure.split_url(top)
                 it = _create_azure_page_iterator(
                     url=azure.build_url(account, "/{container}", container=container),
                     method="GET",
-                    params=dict(
-                        comp="list", restype="container", delimiter="/", prefix=blob
-                    ),
+                    params=dict(comp="list", restype="container", prefix=blob),
                 )
                 get_names = _azure_get_names
             else:
                 raise Error(f"Unrecognized path: '{top}'")
-            dirnames = []
-            filenames = []
+
+            cur = []
+            dirnames_stack = [[]]
+            filenames_stack = [[]]
             for result in it:
                 for name in get_names(result):
                     if name == blob:
                         continue
                     name = name[len(blob) :]
-                    if name.endswith("/"):
-                        dirnames.append(name[:-1])
-                    else:
-                        filenames.append(name)
-            yield (_strip_slash(cur), dirnames, filenames)
-            dq.extend(join(cur, dirname) for dirname in dirnames)
+                    parts = name.split("/")
+                    dirpath = parts[:-1]
+                    if dirpath != cur:
+                        # pop directories from the current path until we match the prefix of this new path
+                        while cur != dirpath[: len(cur)]:
+                            yield (
+                                top + "/".join(cur),
+                                dirnames_stack.pop(),
+                                filenames_stack.pop(),
+                            )
+                            cur.pop()
+                        # push directories from the new path until the current path matches it
+                        while cur != dirpath:
+                            dirname = dirpath[len(cur)]
+                            cur.append(dirname)
+                            filenames_stack.append([])
+                            # add this to child dir to the list of dirs for the parent
+                            dirnames_stack[-1].append(dirname)
+                            dirnames_stack.append([])
+                    if not name.endswith("/"):
+                        filenames_stack[-1].append(parts[-1])
+            while len(cur) > 0:
+                yield (top + "/".join(cur), dirnames_stack.pop(), filenames_stack.pop())
+                cur.pop()
+            yield (_strip_slash(top), dirnames_stack.pop(), filenames_stack.pop())
+            assert len(dirnames_stack) == 0 and len(filenames_stack) == 0
     else:
         raise Error(f"Unrecognized path: '{top}'")
 
@@ -2265,7 +2322,6 @@ def BlobFile(
                         else:
                             assert remote_hash is not None
                             local_path = join(cache_dir, remote_hash, local_filename)
-                    local_path = local_path
             else:
                 tmp_dir = tempfile.mkdtemp()
                 local_path = join(tmp_dir, local_filename)

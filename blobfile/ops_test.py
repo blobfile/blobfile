@@ -479,7 +479,8 @@ def test_listdir_sharded(ctx):
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
-def test_walk(ctx):
+@pytest.mark.parametrize("topdown", [False, True])
+def test_walk(ctx, topdown):
     contents = b"meow!"
     with ctx() as path:
         dirpath = bf.dirname(path)
@@ -490,11 +491,14 @@ def test_walk(ctx):
         b_path = bf.join(dirpath, "c/d/b")
         with bf.BlobFile(b_path, "wb") as w:
             w.write(contents)
-        assert list(bf.walk(dirpath)) == [
+        expected = [
             (dirpath, ["c"], ["a"]),
             (bf.join(dirpath, "c"), ["d"], []),
             (bf.join(dirpath, "c", "d"), [], ["b"]),
         ]
+        if not topdown:
+            expected = list(reversed(expected))
+        assert list(bf.walk(dirpath, topdown=topdown)) == expected
 
 
 @pytest.mark.parametrize(

@@ -68,7 +68,7 @@ For Google Cloud Storage and Azure Storage directories don't really exist.  Thes
 * An "implicit" directory would be if the file "a/b" exists, then we would say that the directory "a" exists.  If you delete "a/b", then that directory no longer exists because no file exists with the prefix "a/".
 * An "explicit" directory would be if the file "a/" exists.  All other files with the prefix "a/" could be deleted, and the directory "a" would still exist because of this dummy file. -->
 
-To make local behavior consistent with the remote storage systems, local directories will be created automatically when opening a file in write mode.
+To make local behavior consistent with the remote storage systems, missing local directories will be created automatically when opening a file in write mode.
 
 ### Local
 
@@ -90,11 +90,11 @@ Azure Storage URLs have the format `https://<account>.blob.core.windows.net/<con
 
 ## Logging
 
-In order to make diagnosing stalls easier, `blobfile` will log when retrying requests.  `blobfile` will keep retrying transient errors until they succeed or a permanent error is encountered (which will raise an exception).
+ `blobfile` will keep retrying transient errors until they succeed or a permanent error is encountered (which will raise an exception).  In order to make diagnosing stalls easier, `blobfile` will log when retrying requests.
 
 To route those log lines, use `set_log_callback` to set a callback function which will be called whenever a log line should be printed.  The default callback prints to stdout.
 
-While `blobfile` does not use the python `logging` module, it does use `urllib3` which uses that module.  So if you configure the python `logging` module, you may need to change the settings to adjust `urllib3`'s logging.  To only log errors from `urllib3`, you can do `logging.getLogger("urllib3").setLevel(logging.ERROR)`.
+While `blobfile` does not use the python `logging` module, it does use `urllib3` which uses that module.  So if you configure the python `logging` module, you may need to change the settings to adjust `urllib3`'s logging.  To restrict `urllib3's logging to only `ERROR` level or worse, you can do `logging.getLogger("urllib3").setLevel(logging.ERROR)`.
 
 ## Examples
 

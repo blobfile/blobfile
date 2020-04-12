@@ -1,16 +1,16 @@
 # blobfile
 
-This is a standalone clone of TensorFlow's [`gfile`](https://www.tensorflow.org/api_docs/python/tf/io/gfile/GFile), supporting both local paths and `gs://` (Google Cloud Storage) paths.
+This is a standalone clone of TensorFlow's [`gfile`](https://www.tensorflow.org/api_docs/python/tf/io/gfile/GFile), supporting local paths, `gs://` (Google Cloud Storage) paths, and Azure Storage paths.
 
-The main function is `BlobFile`, a replacement for `GFile`.  There are also a few additional functions, `basename`, `dirname`, and `join`, which mostly do the same thing as their `os.path` namesakes, only they also support `gs://` paths.  
+The main function is `BlobFile`, a replacement for `GFile`.  There are also a few additional functions, `basename`, `dirname`, and `join`, which mostly do the same thing as their `os.path` namesakes, only they also support `gs://` paths and Azure Storage paths.
 
-Installation:
+## Installation
 
 ```sh
 pip install blobfile
 ```
 
-Usage:
+## Usage
 
 ```py
 import blobfile as bf
@@ -19,9 +19,10 @@ with bf.BlobFile("gs://my-bucket-name/cats", "wb") as w:
     w.write(b"meow!")
 ```
 
+
 Here are the functions:
 
-* `BlobFile` - like `open()` but works with `gs://` paths too, data can be streamed to/from the remote file.  It accepts the following arguments:
+* `BlobFile` - like `open()` but works with remote paths too, data can be streamed to/from the remote file.  It accepts the following arguments:
     * `streaming`:
         * The default for `streaming` is `True` when `mode` is in `"r", "rb"` and `False` when `mode` is in `"w", "wb", "a", "ab"`.
         * `streaming=True`:
@@ -37,7 +38,7 @@ Here are the functions:
 
 Some are inspired by existing `os.path` and `shutil` functions:
 
-* `copy` - copy a file from one path to another, will do a remote copy between two remote paths on the same blob storage service
+* `copy` - copy a file from one path to another, this will do a remote copy between two remote paths on the same blob storage service
 * `exists` - returns `True` if the file or directory exists
 * `glob` - return files matching a glob-style pattern as a generator.  Globs can have [surprising performance characteristics](https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#efficiency-consideration:-using-wildcards-over-many-objects) when used with blob storage.  Character ranges are not supported in patterns.
 * `isdir` - returns `True` if the path is a directory
@@ -54,9 +55,32 @@ Some are inspired by existing `os.path` and `shutil` functions:
 
 There are a few bonus functions:
 
-* `get_url` - returns a url for a path along with the expiration for that url (or None)
-* `md5` - get the md5 hash for a path, for GCS this is fast, but for other backends this may be slow
+* `get_url` - returns a url for a path (usable by an HTTP client without any authentication) along with the expiration for that url (or None)
+* `md5` - get the md5 hash for a path, for GCS this is often fast, but for other backends this may be slow.  On Azure, if the md5 of a file is calculated and is missing from the file, the file will be updated with the calculated md5.
 * `set_log_callback` - set a log callback function `log(msg: string)` to use instead of printing to stdout
+
+## Paths
+
+For Google Cloud Storage and Azure Storage directories don't really exist.  These storage systems store the files in a single flat list.  The "/" separators are just part of the filenames and there is no need to call the equivalent of `os.mkdir` on one of these systems.
+
+<!-- As a result, directories can be either "implicit" or "explicit".
+
+* An "implicit" directory would be if the file "a/b" exists, then we would say that the directory "a" exists.  If you delete "a/b", then that directory no longer exists because no file exists with the prefix "a/".
+* An "explicit" directory would be if the file "a/" exists.  All other files with the prefix "a/" could be deleted, and the directory "a" would still exist because of this dummy file. -->
+
+To make local behavior consistent with the remote storage systems, local directories will be created automatically when opening a file in write mode.
+
+### Local
+
+These are just normal paths for the current machine, e.g. "/root/hello.txt"
+
+### Google Cloud Storage
+
+GCS paths have the format `gs://<bucket>/<blob>`, you cannot perform any operations on `gs://` itself.
+
+### Azure Storage
+
+Azure Storage URLs have the format `https://<account>.blob.core.windows.net/<container>/<blob>`.  The highest you can go up the hierarchy is `https://<account>.blob.core.windows.net/<container>/`, `blobfile` cannot perform any operations on `https://<account>.blob.core.windows.net/`.
 
 ## Errors
 
@@ -74,7 +98,7 @@ While `blobfile` does not use the python `logging` module, it does use `urllib3`
 
 ## Examples
 
-Write and read a file:
+### Write and read a file
 
 ```py
 import blobfile as bf
@@ -87,7 +111,7 @@ print("exists:", bf.exists("gs://my-bucket/file.name"))
 print("contents:", bf.BlobFile("gs://my-bucket/file.name", "rb").read())
 ```
 
-Parallel execution:
+### Parallel execution
 
 ```py
 import blobfile as bf
@@ -101,7 +125,7 @@ with mp.Pool() as pool:
         pass
 ```
 
-Parallel download of a single file:
+### Parallel download of a single file
 
 ```py
 import blobfile as bf
@@ -138,7 +162,7 @@ if __name__ == "__main__":
     main()
 ```
 
-Parallel copytree:
+### Parallel copytree
 
 ```py
 import blobfile as bf
@@ -201,6 +225,21 @@ def main():
 if __name__ == "__main__":
     main()
 ```
+
+## Authentication
+
+### Google Cloud Storage
+
+The environment variable `GOOGLE_APPLICATION_CREDENTIALS` will be checked, falling back to "default application credentials" if they can be found.
+
+### Azure Storage
+
+The following methods will be tried in order:
+
+1) Check the environment variable `AZURE_STORAGE_ACCOUNT_KEY` for an azure storage account key (these are per-storage account shared keys described in https://docs.microsoft.com/en-us/azure/storage/common/storage-account-keys-manage)
+2) Check the environment variable `AZURE_APPLICATION_CREDENTIALS` which should point to JSON credentials for a service principal output by the command `az ad sp create-for-rbac --name <name>`
+3) Check the environment variables `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID` corresponding to a service principal described in the previous step but without the JSON file.
+4) Use credentials from the `az` command line tool if they can be found.
 
 ## Changes
 

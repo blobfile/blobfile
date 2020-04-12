@@ -94,7 +94,7 @@ Azure Storage URLs have the format `https://<account>.blob.core.windows.net/<con
 
 To route those log lines, use `set_log_callback` to set a callback function which will be called whenever a log line should be printed.  The default callback prints to stdout.
 
-While `blobfile` does not use the python `logging` module, it does use `urllib3` which uses that module.  So if you configure the python `logging` module, you may need to change the settings to adjust `urllib3`'s logging.  To restrict `urllib3's logging to only `ERROR` level or worse, you can do `logging.getLogger("urllib3").setLevel(logging.ERROR)`.
+While `blobfile` does not use the python `logging` module, it does use `urllib3` which uses that module.  So if you configure the python `logging` module, you may need to change the settings to adjust `urllib3`'s logging.  To restrict `urllib3`'s logging to only `ERROR` level or worse, you can do `logging.getLogger("urllib3").setLevel(logging.ERROR)`.
 
 ## Examples
 

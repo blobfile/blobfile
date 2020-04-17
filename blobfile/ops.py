@@ -114,7 +114,7 @@ def _get_http_pool() -> urllib3.PoolManager:
     global _http, _http_pid
     with _http_lock:
         if _http is None or _http_pid != os.getpid():
-            # tensorflow imports requests with calls
+            # tensorflow imports requests which calls
             #   import urllib3.contrib.pyopenssl
             #   urllib3.contrib.pyopenssl.inject_into_urllib3()
             # which will monkey patch urllib3 to use pyopenssl and sometimes break things

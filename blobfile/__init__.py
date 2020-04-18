@@ -16,6 +16,7 @@ from blobfile.ops import (
     get_url,
     md5,
     set_log_callback,
+    configure,
     BlobFile,
     LocalBlobFile,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "get_url",
     "md5",
     "set_log_callback",
+    "configure",
     "BlobFile",
     "LocalBlobFile",
     "Request",

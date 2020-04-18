@@ -57,7 +57,9 @@ There are a few bonus functions:
 
 * `get_url` - returns a url for a path (usable by an HTTP client without any authentication) along with the expiration for that url (or None)
 * `md5` - get the md5 hash for a path, for GCS this is often fast, but for other backends this may be slow.  On Azure, if the md5 of a file is calculated and is missing from the file, the file will be updated with the calculated md5.
-* `set_log_callback` - set a log callback function `log(msg: string)` to use instead of printing to stdout
+* `configure` - set global configuration options for blobfile
+    * log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout
+    * connection_pool_max_size: the max size for each per-host connection pool
 
 ## Paths
 

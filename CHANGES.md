@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.6
+
+* Added `configure()` to replace `set_log_callback` and add a configurable max connection pool size.
+
 ## 0.16.5
 
 * Added `topdown=False` support to `walk()`

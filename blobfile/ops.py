@@ -54,6 +54,7 @@ BACKOFF_MAX = 60.0
 BACKOFF_JITTER = 0.1
 RETRY_LOG_THRESHOLD = 1
 EARLY_EXPIRATION_SECONDS = 5 * 60
+DEFAULT_CONNECTION_POOL_MAX_SIZE = 32
 CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 30
 CHUNK_SIZE = 2 ** 20
@@ -105,6 +106,14 @@ class ReadStats(NamedTuple):
 _http = None
 _http_pid = None
 _http_lock = threading.Lock()
+_connection_pool_max_size = DEFAULT_CONNECTION_POOL_MAX_SIZE
+
+
+def _default_log_fn(msg: str) -> None:
+    print(f"blobfile: {msg}")
+
+
+_log_callback = _default_log_fn
 
 
 def _get_http_pool() -> urllib3.PoolManager:
@@ -140,24 +149,53 @@ def _get_http_pool() -> urllib3.PoolManager:
             context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_COMPRESSION
             context.load_default_certs()
             _http_pid = os.getpid()
-            _http = urllib3.PoolManager(ssl_context=context)
+            _http = urllib3.PoolManager(
+                ssl_context=context, maxsize=_connection_pool_max_size
+            )
             # for debugging with mitmproxy
             # _http = urllib3.ProxyManager('http://localhost:8080/', ssl_context=context)
 
         return _http
 
 
-def __log_callback(msg: str) -> None:
-    print(f"blobfile: {msg}")
-
-
-# pylint can't figure this out when it's a def
-_log_callback = __log_callback
+# if another more options are added, this should probably be refactored
+#
+# class Context:
+#   # class with all blobfile functions as methods
+#   # and existing global variables as properties
+# def create_context(**config_options) -> Context:
+#   # create a context
+# _global_context = create_context()
+# def configure(**config_options) -> None:
+#   global _global_context
+#   _global_context = create_context(**config_options)
+# def copy():
+#   # proxy functions for all methods on Context
+#   return _global_context.copy()
 
 
 def set_log_callback(fn: Callable[[str], None]) -> None:
+    """
+    DEPRECATED: use configure() instead
+    """
+    configure(log_callback=fn)
+
+
+def configure(
+    log_callback: Callable[[str], None] = _default_log_fn,
+    connection_pool_max_size: int = DEFAULT_CONNECTION_POOL_MAX_SIZE,
+) -> None:
+    """
+    log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout
+    connection_pool_max_size: the max size for each per-host connection pool
+    """
     global _log_callback
-    _log_callback = fn
+    _log_callback = log_callback
+    global _http, _http_pid, _connection_pool_max_size
+    with _http_lock:
+        _http = None
+        _http_pid = None
+        _connection_pool_max_size = connection_pool_max_size
 
 
 class TokenManager:

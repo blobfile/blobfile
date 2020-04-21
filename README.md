@@ -74,7 +74,7 @@ To make local behavior consistent with the remote storage systems, missing local
 
 ### Local
 
-These are just normal paths for the current machine, e.g. "/root/hello.txt"
+These are just normal paths for the current machine, e.g. `/root/hello.txt`
 
 ### Google Cloud Storage
 
@@ -94,7 +94,7 @@ Azure Storage URLs have the format `https://<account>.blob.core.windows.net/<con
 
  `blobfile` will keep retrying transient errors until they succeed or a permanent error is encountered (which will raise an exception).  In order to make diagnosing stalls easier, `blobfile` will log when retrying requests.
 
-To route those log lines, use `set_log_callback` to set a callback function which will be called whenever a log line should be printed.  The default callback prints to stdout.
+To route those log lines, use `configure(log_callback=<fn>)` to set a callback function which will be called whenever a log line should be printed.  The default callback prints to stdout with the prefix `blobfile:`.
 
 While `blobfile` does not use the python `logging` module, it does use `urllib3` which uses that module.  So if you configure the python `logging` module, you may need to change the settings to adjust `urllib3`'s logging.  To restrict `urllib3`'s logging to only `ERROR` level or worse, you can do `logging.getLogger("urllib3").setLevel(logging.ERROR)`.
 

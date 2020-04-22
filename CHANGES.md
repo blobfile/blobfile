@@ -3,6 +3,7 @@
 ## 0.16.6
 
 * Added `configure()` to replace `set_log_callback` and add a configurable max connection pool size.
+* Make `pip install` work without having to have extra tools installed
 
 ## 0.16.5
 

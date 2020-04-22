@@ -64,8 +64,12 @@ setup_dict = dict(
     package_data={"blobfile": ["*.pyi", "py.typed"]},
     # mypy cannot find type information in zip files
     zip_safe=False,
-    cmdclass={"build_py": BuildPyCommand},
 )
+
+if os.environ.get("PACKAGE_FOR_RELEASE", "0") == "1":
+    # don't require that users have all the build requirements when doing "pip install"
+    # since these are only used for creating the stub files
+    setup_dict["cmdclass"] = {"build_py": BuildPyCommand}
 
 if os.environ.get("USE_SCM_VERSION", "0") == "1":
     setup_dict["use_scm_version"] = {

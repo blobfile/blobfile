@@ -4,6 +4,7 @@
 
 * Added `configure()` to replace `set_log_callback` and add a configurable max connection pool size.
 * Make `pip install` work without having to have extra tools installed
+* Fix bug in response reading where requests would be retried, but reading the response body would not
 
 ## 0.16.5
 

@@ -12,6 +12,7 @@ class Request:
         params: Optional[Mapping[str, str]] = None,
         headers: Optional[Mapping[str, str]] = None,
         data: Any = None,
+        preload_content: bool = True,
         success_codes: Sequence[int] = (200,),
         # https://cloud.google.com/storage/docs/resumable-uploads#practices
         retry_codes: Sequence[int] = (408, 429, 500, 502, 503, 504),
@@ -21,6 +22,7 @@ class Request:
         self.params = params
         self.headers = headers
         self.data = data
+        self.preload_content = preload_content
         self.success_codes = success_codes
         self.retry_codes = retry_codes
 

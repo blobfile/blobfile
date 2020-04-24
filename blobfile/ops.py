@@ -38,7 +38,7 @@ from typing import (
     List,
     Union,
 )
-from typing_extensions import Literal, Protocol, runtime_checkable
+from typing_extensions import Literal
 
 
 import urllib3
@@ -242,9 +242,9 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
                 scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
             )
 
-        with _execute_request(build_req) as resp:
-            result = json.load(resp)
-            return result["access_token"], now + float(result["expires_in"])
+        resp = _execute_request(build_req)
+        result = json.loads(resp.data)
+        return result["access_token"], now + float(result["expires_in"])
     elif _is_gce_instance():
         # see if the metadata server has a token for us
         def build_req() -> Request:
@@ -254,9 +254,9 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
                 headers={"Metadata-Flavor": "Google"},
             )
 
-        with _execute_request(build_req) as resp:
-            result = json.load(resp)
-            return result["access_token"], now + float(result["expires_in"])
+        resp = _execute_request(build_req)
+        result = json.loads(resp.data)
+        return result["access_token"], now + float(result["expires_in"])
     else:
         raise Error("No google credentials found")
 
@@ -276,9 +276,9 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
                 creds=creds, scope="https://management.azure.com/"
             )
 
-        with _execute_request(build_req) as resp:
-            result = json.load(resp)
-            auth = (azure.OAUTH_TOKEN, result["access_token"])
+        resp = _execute_request(build_req)
+        result = json.loads(resp.data)
+        auth = (azure.OAUTH_TOKEN, result["access_token"])
 
         # check each subscription for our account
         for subscription_id in creds["subscriptions"]:
@@ -292,15 +292,15 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
                 # return somefunc(auth=auth)
                 return azure.make_api_request(req, auth=auth)
 
-            with _execute_request(build_req) as resp:
-                out = json.load(resp)
-                # check if we found the storage account we are looking for
-                for obj in out["value"]:
-                    if obj["name"] == account:
-                        storage_account_id = obj["id"]
-                        break
-                else:
-                    continue
+            resp = _execute_request(build_req)
+            out = json.loads(resp.data)
+            # check if we found the storage account we are looking for
+            for obj in out["value"]:
+                if obj["name"] == account:
+                    storage_account_id = obj["id"]
+                    break
+            else:
+                continue
 
             def build_req() -> Request:
                 req = Request(
@@ -310,18 +310,18 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
                 )
                 return azure.make_api_request(req, auth=auth)
 
-            with _execute_request(build_req) as resp:
-                result = json.load(resp)
-                for key in result["keys"]:
-                    if key["permissions"] == "FULL":
-                        return (
-                            (azure.SHARED_KEY, key["value"]),
-                            now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
-                        )
-                else:
-                    raise Error(
-                        f"Storage account did not have any keys defined: '{account}'"
+            resp = _execute_request(build_req)
+            result = json.loads(resp.data)
+            for key in result["keys"]:
+                if key["permissions"] == "FULL":
+                    return (
+                        (azure.SHARED_KEY, key["value"]),
+                        now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
                     )
+            else:
+                raise Error(
+                    f"Storage account did not have any keys defined: '{account}'"
+                )
 
         raise Error(f"Storage account ID not found for storage account: '{account}'")
     else:
@@ -331,12 +331,12 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
                 creds=creds, scope="https://storage.azure.com/"
             )
 
-        with _execute_request(build_req) as resp:
-            result = json.load(resp)
-            return (
-                (azure.OAUTH_TOKEN, result["access_token"]),
-                now + float(result["expires_in"]),
-            )
+        resp = _execute_request(build_req)
+        result = json.loads(resp.data)
+        return (
+            (azure.OAUTH_TOKEN, result["access_token"]),
+            now + float(result["expires_in"]),
+        )
 
 
 def _azure_get_sas_token(account: str) -> Tuple[Any, float]:
@@ -347,10 +347,10 @@ def _azure_get_sas_token(account: str) -> Tuple[Any, float]:
             raise Error("Only oauth tokens can be used to get SAS tokens")
         return azure.make_api_request(req, auth=auth)
 
-    with _execute_request(build_req) as resp:
-        out = xmltodict.parse(resp)
-        t = time.time() + AZURE_SAS_TOKEN_EXPIRATION_SECONDS
-        return out["UserDelegationKey"], t
+    resp = _execute_request(build_req)
+    out = xmltodict.parse(resp.data)
+    t = time.time() + AZURE_SAS_TOKEN_EXPIRATION_SECONDS
+    return out["UserDelegationKey"], t
 
 
 global_google_access_token_manager = TokenManager(_google_get_access_token)
@@ -410,7 +410,7 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
                 headers=req.headers,
                 body=req.data,
                 timeout=urllib3.Timeout(connect=CONNECT_TIMEOUT, read=READ_TIMEOUT),
-                preload_content=False,
+                preload_content=req.preload_content,
                 retries=False,
                 redirect=False,
             )
@@ -543,16 +543,16 @@ def copy(
                 params=params,
                 success_codes=(200, 404),
             )
-            with _execute_google_api_request(req) as resp:
-                if resp.status == 404:
-                    raise FileNotFoundError(f"Source file not found: '{src}'")
-                result = json.load(resp)
-                if result["done"]:
-                    if return_md5:
-                        return base64.b64decode(result["resource"]["md5Hash"]).hex()
-                    else:
-                        return
-                params["rewriteToken"] = result["rewriteToken"]
+            resp = _execute_google_api_request(req)
+            if resp.status == 404:
+                raise FileNotFoundError(f"Source file not found: '{src}'")
+            result = json.loads(resp.data)
+            if result["done"]:
+                if return_md5:
+                    return base64.b64decode(result["resource"]["md5Hash"]).hex()
+                else:
+                    return
+            params["rewriteToken"] = result["rewriteToken"]
 
     if _is_azure_path(src) and _is_azure_path(dst):
         # https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob
@@ -577,11 +577,11 @@ def copy(
             success_codes=(202, 404),
         )
 
-        with _execute_azure_api_request(req) as resp:
-            if resp.status == 404:
-                raise FileNotFoundError(f"Source file not found: '{src}'")
-            copy_id = resp.headers["x-ms-copy-id"]
-            copy_status = resp.headers["x-ms-copy-status"]
+        resp = _execute_azure_api_request(req)
+        if resp.status == 404:
+            raise FileNotFoundError(f"Source file not found: '{src}'")
+        copy_id = resp.headers["x-ms-copy-id"]
+        copy_status = resp.headers["x-ms-copy-status"]
 
         # wait for potentially async copy operation to finish
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob
@@ -596,10 +596,10 @@ def copy(
                 ),
                 method="GET",
             )
-            with _execute_azure_api_request(req) as resp:
-                if resp.headers["x-ms-copy-id"] != copy_id:
-                    raise Error("Copy id mismatch")
-                copy_status = resp.headers["x-ms-copy-status"]
+            resp = _execute_azure_api_request(req)
+            if resp.headers["x-ms-copy-id"] != copy_id:
+                raise Error("Copy id mismatch")
+            copy_status = resp.headers["x-ms-copy-status"]
         if copy_status != "success":
             raise Error(f"Invalid copy status: '{copy_status}'")
         if return_md5:
@@ -660,13 +660,13 @@ def _create_google_page_iterator(
 
     while True:
         req = Request(url=url, method=method, params=p, success_codes=(200, 404))
-        with _execute_google_api_request(req) as resp:
-            if resp.status == 404:
-                return
-            result = json.load(resp)
-            yield result
-            if "nextPageToken" not in result:
-                break
+        resp = _execute_google_api_request(req)
+        if resp.status == 404:
+            return
+        result = json.loads(resp.data)
+        yield result
+        if "nextPageToken" not in result:
+            break
         p["pageToken"] = result["nextPageToken"]
 
 
@@ -692,13 +692,13 @@ def _create_azure_page_iterator(
             data=d,
             success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
         )
-        with _execute_azure_api_request(req) as resp:
-            if resp.status in (404, INVALID_HOSTNAME_STATUS):
-                return
-            result = xmltodict.parse(resp)["EnumerationResults"]
-            yield result
-            if result["NextMarker"] is None:
-                break
+        resp = _execute_azure_api_request(req)
+        if resp.status in (404, INVALID_HOSTNAME_STATUS):
+            return
+        result = xmltodict.parse(resp.data)["EnumerationResults"]
+        yield result
+        if result["NextMarker"] is None:
+            break
         p["marker"] = result["NextMarker"]
 
 
@@ -738,8 +738,8 @@ def _google_isfile(path: str) -> Tuple[bool, Mapping[str, Any]]:
         method="GET",
         success_codes=(200, 404),
     )
-    with _execute_google_api_request(req) as resp:
-        return resp.status == 200, json.load(resp)
+    resp = _execute_google_api_request(req)
+    return resp.status == 200, json.loads(resp.data)
 
 
 def _azure_isfile(path: str) -> Tuple[bool, Mapping[str, Any]]:
@@ -753,8 +753,8 @@ def _azure_isfile(path: str) -> Tuple[bool, Mapping[str, Any]]:
         method="HEAD",
         success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
     )
-    with _execute_azure_api_request(req) as resp:
-        return resp.status == 200, resp.headers
+    resp = _execute_azure_api_request(req)
+    return resp.status == 200, resp.headers
 
 
 def exists(path: str) -> bool:
@@ -1009,8 +1009,8 @@ def isdir(path: str) -> bool:
                 method="GET",
                 success_codes=(200, 404),
             )
-            with _execute_google_api_request(req) as resp:
-                return resp.status == 200
+            resp = _execute_google_api_request(req)
+            return resp.status == 200
         else:
             params = dict(prefix=blob, delimiter="/", maxResults="1")
             req = Request(
@@ -1019,11 +1019,11 @@ def isdir(path: str) -> bool:
                 params=params,
                 success_codes=(200, 404),
             )
-            with _execute_google_api_request(req) as resp:
-                if resp.status == 404:
-                    return False
-                result = json.load(resp)
-                return "items" in result or "prefixes" in result
+            resp = _execute_google_api_request(req)
+            if resp.status == 404:
+                return False
+            result = json.loads(resp.data)
+            return "items" in result or "prefixes" in result
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
@@ -1037,8 +1037,8 @@ def isdir(path: str) -> bool:
                 params=dict(restype="container"),
                 success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
             )
-            with _execute_azure_api_request(req) as resp:
-                return resp.status == 200
+            resp = _execute_azure_api_request(req)
+            return resp.status == 200
         else:
             req = Request(
                 url=azure.build_url(account, "/{container}", container=container),
@@ -1052,13 +1052,13 @@ def isdir(path: str) -> bool:
                 ),
                 success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
             )
-            with _execute_azure_api_request(req) as resp:
-                if resp.status in (404, INVALID_HOSTNAME_STATUS):
-                    return False
-                result = xmltodict.parse(resp)["EnumerationResults"]
-                return result["Blobs"] is not None and (
-                    "BlobPrefix" in result["Blobs"] or "Blob" in result["Blobs"]
-                )
+            resp = _execute_azure_api_request(req)
+            if resp.status in (404, INVALID_HOSTNAME_STATUS):
+                return False
+            result = xmltodict.parse(resp.data)["EnumerationResults"]
+            return result["Blobs"] is not None and (
+                "BlobPrefix" in result["Blobs"] or "Blob" in result["Blobs"]
+            )
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -1203,11 +1203,9 @@ def makedirs(path: str) -> None:
             params=dict(uploadType="media", name=blob),
             success_codes=(200, 400),
         )
-        with _execute_google_api_request(req) as resp:
-            if resp.status == 400:
-                raise Error(
-                    f"Unable to create directory, bucket does not exist: '{path}'"
-                )
+        resp = _execute_google_api_request(req)
+        if resp.status == 400:
+            raise Error(f"Unable to create directory, bucket does not exist: '{path}'")
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
@@ -1220,11 +1218,11 @@ def makedirs(path: str) -> None:
             headers={"x-ms-blob-type": "BlockBlob"},
             success_codes=(201, 400),
         )
-        with _execute_azure_api_request(req) as resp:
-            if resp.status == 400:
-                raise Error(
-                    f"Unable to create directory, account/container does not exist: '{path}'"
-                )
+        resp = _execute_azure_api_request(req)
+        if resp.status == 400:
+            raise Error(
+                f"Unable to create directory, account/container does not exist: '{path}'"
+            )
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -1250,11 +1248,11 @@ def remove(path: str) -> None:
             method="DELETE",
             success_codes=(204, 404),
         )
-        with _execute_google_api_request(req) as resp:
-            if resp.status == 404:
-                raise FileNotFoundError(
-                    f"The system cannot find the path specified: '{path}'"
-                )
+        resp = _execute_google_api_request(req)
+        if resp.status == 404:
+            raise FileNotFoundError(
+                f"The system cannot find the path specified: '{path}'"
+            )
     elif _is_azure_path(path):
         if path.endswith("/"):
             raise IsADirectoryError(f"Is a directory: '{path}'")
@@ -1270,11 +1268,11 @@ def remove(path: str) -> None:
             method="DELETE",
             success_codes=(202, 404, INVALID_HOSTNAME_STATUS),
         )
-        with _execute_azure_api_request(req) as resp:
-            if resp.status in (404, INVALID_HOSTNAME_STATUS):
-                raise FileNotFoundError(
-                    f"The system cannot find the path specified: '{path}'"
-                )
+        resp = _execute_azure_api_request(req)
+        if resp.status in (404, INVALID_HOSTNAME_STATUS):
+            raise FileNotFoundError(
+                f"The system cannot find the path specified: '{path}'"
+            )
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -1329,8 +1327,7 @@ def rmdir(path: str) -> None:
             method="DELETE",
             success_codes=(204,),
         )
-        with _execute_google_api_request(req):
-            pass
+        _execute_google_api_request(req)
     elif _is_azure_path(path):
         account, container, blob = azure.split_url(path)
         req = Request(
@@ -1340,8 +1337,7 @@ def rmdir(path: str) -> None:
             method="DELETE",
             success_codes=(202,),
         )
-        with _execute_azure_api_request(req):
-            pass
+        _execute_azure_api_request(req)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -1402,8 +1398,7 @@ def rmtree(path: str) -> None:
                     # before erroring out
                     success_codes=(204, 404),
                 )
-                with _execute_google_api_request(req):
-                    pass
+                _execute_google_api_request(req)
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
@@ -1424,8 +1419,7 @@ def rmtree(path: str) -> None:
                     # before erroring out
                     success_codes=(202, 404),
                 )
-                with _execute_azure_api_request(req):
-                    pass
+                _execute_azure_api_request(req)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -1678,8 +1672,8 @@ def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> bool:
         },
         success_codes=(200, 412),
     )
-    with _execute_azure_api_request(req) as resp:
-        return resp.status == 200
+    resp = _execute_azure_api_request(req)
+    return resp.status == 200
 
 
 def md5(path: str) -> str:
@@ -1720,8 +1714,7 @@ def md5(path: str) -> str:
             success_codes=(200, 404, 412),
         )
 
-        with _execute_google_api_request(req):
-            pass
+        _execute_google_api_request(req)
         return result
     elif _is_azure_path(path):
         isfile, metadata = _azure_isfile(path)
@@ -1748,17 +1741,6 @@ class _RangeError:
     """
 
 
-@runtime_checkable
-class ReadableBinaryFile(Protocol):
-    # self should probably not need to be annotated
-    # https://github.com/microsoft/pyright/issues/370
-    def readinto(self: Any, b: Any) -> Optional[int]:
-        ...
-
-    def close(self: Any) -> None:
-        ...
-
-
 class _StreamingReadFile(io.RawIOBase):
     def __init__(self, path: str, size: int) -> None:
         super().__init__()
@@ -1773,7 +1755,7 @@ class _StreamingReadFile(io.RawIOBase):
 
     def _get_file(
         self, offset: int
-    ) -> Tuple[ReadableBinaryFile, Optional[_RangeError]]:
+    ) -> Tuple[urllib3.response.HTTPResponse, Optional[_RangeError]]:
         raise NotImplementedError
 
     def readall(self) -> bytes:
@@ -1814,6 +1796,8 @@ class _StreamingReadFile(io.RawIOBase):
                 n = opt_n
                 if n == 0:
                     # assume that the connection has died
+                    # we don't want to put a broken connection back in the pool
+                    # so don't call self._f.release_conn()
                     self._f.close()
                     self._f = None
                     err = "failed to read from connection"
@@ -1861,6 +1845,8 @@ class _StreamingReadFile(io.RawIOBase):
             return
 
         if hasattr(self, "_f") and self._f is not None:
+            # return the connection to the pool
+            self._f.release_conn()
             self._f.close()
             self._f = None
 
@@ -1882,7 +1868,7 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
 
     def _get_file(
         self, offset: int
-    ) -> Tuple[ReadableBinaryFile, Optional[_RangeError]]:
+    ) -> Tuple[urllib3.response.HTTPResponse, Optional[_RangeError]]:
         req = Request(
             url=google.build_url(
                 "/storage/v1/b/{bucket}/o/{name}",
@@ -1893,12 +1879,15 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
             params=dict(alt="media"),
             headers={"Range": _calc_range(start=offset)},
             success_codes=(206, 416),
+            # since we are reading the entire remainder of the file, make
+            # sure we don't preload it
+            preload_content=False,
         )
         resp = _execute_google_api_request(req)
         if resp.status == 416:
             # likely the file was truncated while we were reading it
             # return an empty file and indicate to the caller what happened
-            return io.BytesIO(), _RangeError()
+            return urllib3.response.HTTPResponse(body=io.BytesIO()), _RangeError()
         # we don't decode content, so this is actually a ReadableBinaryFile
         return resp, None
 
@@ -1912,7 +1901,7 @@ class _AzureStreamingReadFile(_StreamingReadFile):
 
     def _get_file(
         self, offset: int
-    ) -> Tuple[ReadableBinaryFile, Optional[_RangeError]]:
+    ) -> Tuple[urllib3.response.HTTPResponse, Optional[_RangeError]]:
         account, container, blob = azure.split_url(self._path)
         req = Request(
             url=azure.build_url(
@@ -1921,13 +1910,15 @@ class _AzureStreamingReadFile(_StreamingReadFile):
             method="GET",
             headers={"Range": _calc_range(start=offset)},
             success_codes=(206, 416),
+            # since we are reading the entire remainder of the file, make
+            # sure we don't preload it
+            preload_content=False,
         )
         resp = _execute_azure_api_request(req)
         if resp.status == 416:
             # likely the file was truncated while we were reading it
             # return an empty file and indicate to the caller what happened
-            return io.BytesIO(), _RangeError()
-        # we don't decode content, so this is actually a ReadableBinaryFile
+            return urllib3.response.HTTPResponse(body=io.BytesIO()), _RangeError()
         return resp, None
 
 
@@ -1999,10 +1990,10 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
             headers={"Content-Type": "application/json; charset=UTF-8"},
             success_codes=(200, 400, 404),
         )
-        with _execute_google_api_request(req) as resp:
-            if resp.status in (400, 404):
-                raise FileNotFoundError(f"No such file or bucket: '{path}'")
-            self._upload_url = resp.headers["Location"]
+        resp = _execute_google_api_request(req)
+        if resp.status in (400, 404):
+            raise FileNotFoundError(f"No such file or bucket: '{path}'")
+        self._upload_url = resp.headers["Location"]
         super().__init__(chunk_size=GOOGLE_CHUNK_SIZE)
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
@@ -2032,8 +2023,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
         )
 
         try:
-            with _execute_google_api_request(req):
-                pass
+            _execute_google_api_request(req)
         except RequestFailure as e:
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
             if e.response is not None and e.response.status in (404, 410):
@@ -2058,18 +2048,17 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             headers={"x-ms-blob-type": "AppendBlob"},
             success_codes=(201, 400, 404, 409, INVALID_HOSTNAME_STATUS),
         )
-        with _execute_azure_api_request(req) as resp:
-            if resp.status in (400, 404, INVALID_HOSTNAME_STATUS):
-                raise FileNotFoundError(
-                    f"No such file or container/account does not exist: '{path}'"
-                )
-            if resp.status == 409:
-                # a blob already exists with a different type so we failed to create the new one
-                remove(path)
-                retry_req: Request = python_copy.copy(req)
-                retry_req.success_codes = (201,)
-                with _execute_azure_api_request(retry_req):
-                    pass
+        resp = _execute_azure_api_request(req)
+        if resp.status in (400, 404, INVALID_HOSTNAME_STATUS):
+            raise FileNotFoundError(
+                f"No such file or container/account does not exist: '{path}'"
+            )
+        if resp.status == 409:
+            # a blob already exists with a different type so we failed to create the new one
+            remove(path)
+            retry_req: Request = python_copy.copy(req)
+            retry_req.success_codes = (201,)
+            _execute_azure_api_request(retry_req)
         self._md5 = hashlib.md5()
         super().__init__(chunk_size=AZURE_MAX_CHUNK_SIZE)
 
@@ -2093,8 +2082,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                 success_codes=(201, 412),
             )
 
-            with _execute_azure_api_request(req):
-                pass
+            _execute_azure_api_request(req)
 
             # azure does not calculate md5s for us, we have to do that manually
             # https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
@@ -2108,8 +2096,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                     ).decode("utf8")
                 },
             )
-            with _execute_azure_api_request(req):
-                pass
+            _execute_azure_api_request(req)
 
             start += AZURE_MAX_CHUNK_SIZE
 

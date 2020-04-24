@@ -321,16 +321,17 @@ def test_get_url(ctx):
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
-def test_read_write(ctx):
+@pytest.mark.parametrize("streaming", [True, False])
+def test_read_write(ctx, streaming):
     contents = b"meow!\npurr\n"
     with ctx() as path:
         path = bf.join(path, "a folder", "a.file")
         bf.makedirs(bf.dirname(path))
-        with bf.BlobFile(path, "wb") as w:
+        with bf.BlobFile(path, "wb", streaming=streaming) as w:
             w.write(contents)
-        with bf.BlobFile(path, "rb") as r:
+        with bf.BlobFile(path, "rb", streaming=streaming) as r:
             assert r.read() == contents
-        with bf.BlobFile(path, "rb") as r:
+        with bf.BlobFile(path, "rb", streaming=streaming) as r:
             lines = list(r)
             assert b"".join(lines) == contents
 

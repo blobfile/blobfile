@@ -1781,6 +1781,10 @@ class _StreamingReadFile(io.RawIOBase):
             return 0
         assert bytes_remaining > 0, "read past expected end of file"
 
+        if len(b) > bytes_remaining:
+            # if we the file was larger than we expected, don't read the extra data
+            b = b[:bytes_remaining]
+
         n = 0  # for pyright
         for attempt, backoff in enumerate(
             _exponential_sleep_generator(0.1, maximum=60.0)
@@ -1821,9 +1825,6 @@ class _StreamingReadFile(io.RawIOBase):
             time.sleep(backoff)
 
         self.bytes_read += n
-        if n > bytes_remaining:
-            # if we the file was larger than we expected, don't read the extra data
-            n = bytes_remaining
         self._offset += n
         return n
 

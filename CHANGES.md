@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.7
+
+* reduce readall() default chunk size to fix performance regression, thanks @jpambrun for reporting this!
+
 ## 0.16.6
 
 * Added `configure()` to replace `set_log_callback` and add a configurable max connection pool size.

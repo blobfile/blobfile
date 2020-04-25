@@ -1763,8 +1763,10 @@ class _StreamingReadFile(io.RawIOBase):
         # instead, read into a buffer and return the buffer
         pieces = []
         while True:
+            bytes_remaining = self._size - self._offset
+            assert bytes_remaining >= 0, "read more bytes than expected"
             # if a user doesn't like this value, it is easy to use .read(size) directly
-            opt_piece = self.read(CHUNK_SIZE)
+            opt_piece = self.read(min(CHUNK_SIZE, bytes_remaining))
             assert opt_piece is not None, "file is in non-blocking mode"
             piece = opt_piece
             if len(piece) == 0:
@@ -1774,8 +1776,10 @@ class _StreamingReadFile(io.RawIOBase):
 
     # https://bugs.python.org/issue27501
     def readinto(self, b: Any) -> Optional[int]:
-        if self._size == self._offset:
+        bytes_remaining = self._size - self._offset
+        if bytes_remaining == 0:
             return 0
+        assert bytes_remaining > 0, "read past expected end of file"
 
         n = 0  # for pyright
         for attempt, backoff in enumerate(
@@ -1817,6 +1821,9 @@ class _StreamingReadFile(io.RawIOBase):
             time.sleep(backoff)
 
         self.bytes_read += n
+        if n > bytes_remaining:
+            # if we the file was larger than we expected, don't read the extra data
+            n = bytes_remaining
         self._offset += n
         return n
 

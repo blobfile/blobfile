@@ -847,15 +847,14 @@ def test_change_file_size(ctx, use_random):
             # close underlying connection
             f.raw._f = None  # type: ignore
             read_contents += f.read()
-            # this is what we would expect if we limit the reading to the original length of the file
-            # assert (
-            #     read_contents
-            #     == short_contents[:chunk_size] + long_contents[chunk_size:chunk_size*2]
-            # )
-            assert (
-                read_contents
-                == short_contents[:chunk_size] + long_contents[chunk_size:]
+            expected = (
+                short_contents[:chunk_size] + long_contents[chunk_size : chunk_size * 2]
             )
+            # local files behave differently and read the new contents until the
+            # end of the new file size
+            if not path.startswith("gs://") and not path.startswith("https://"):
+                expected = short_contents[:chunk_size] + long_contents[chunk_size:]
+            assert read_contents == expected
 
 
 @pytest.mark.parametrize(

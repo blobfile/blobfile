@@ -832,6 +832,7 @@ def test_change_file_size(ctx, use_random):
             # close underlying connection
             f.raw._f = None  # type: ignore
             read_contents += f.read()
+            assert len(f.read()) == 0
             assert (
                 read_contents
                 == long_contents[:chunk_size] + short_contents[chunk_size:]
@@ -847,6 +848,7 @@ def test_change_file_size(ctx, use_random):
             # close underlying connection
             f.raw._f = None  # type: ignore
             read_contents += f.read()
+            assert len(f.read()) == 0
             expected = (
                 short_contents[:chunk_size] + long_contents[chunk_size : chunk_size * 2]
             )

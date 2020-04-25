@@ -1766,7 +1766,7 @@ class _StreamingReadFile(io.RawIOBase):
         # instead, read into a buffer and return the buffer
         pieces = []
         while True:
-            opt_piece = self.read(READALL_CHUNK_SIZE)
+            opt_piece = self.read(min(READALL_CHUNK_SIZE, self._size))
             assert opt_piece is not None, "file is in non-blocking mode"
             piece = opt_piece
             if len(piece) == 0:

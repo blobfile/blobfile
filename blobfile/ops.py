@@ -1817,8 +1817,9 @@ class _StreamingReadFile(io.RawIOBase):
                     f"error {err} when executing readinto({len(b)}) at offset {self._offset} on file {self._path}, sleeping for {backoff:.1f} seconds before retrying"
                 )
             time.sleep(backoff)
-        self._offset += n
+
         self.bytes_read += n
+        self._offset += n
         return n
 
     def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:

@@ -39,19 +39,20 @@ AZURE_INVALID_ACCOUNT = f"https://{AS_TEST_ACCOUNT}-does-not-exist.blob.core.win
 GCS_VALID_BUCKET = f"gs://{GCS_TEST_BUCKET}"
 GCS_INVALID_BUCKET = f"gs://{GCS_TEST_BUCKET}-does-not-exist"
 
-# only run this for our docker tests, this tells gcloud to use the credentials supplied by the
-# test running script
-@pytest.mark.skipif(platform.system() != "Linux")
+
 @pytest.fixture(scope="session", autouse=True)
 def setup_gcloud_auth():
-    sp.run(
-        [
-            "gcloud",
-            "auth",
-            "activate-service-account",
-            f"--key-file={os.environ['GOOGLE_APPLICATION_CREDENTIALS']}",
-        ]
-    )
+    # only run this for our docker tests, this tells gcloud to use the credentials supplied by the
+    # test running script
+    if platform.system() == "Linux":
+        sp.run(
+            [
+                "gcloud",
+                "auth",
+                "activate-service-account",
+                f"--key-file={os.environ['GOOGLE_APPLICATION_CREDENTIALS']}",
+            ]
+        )
     yield
 
 
@@ -812,25 +813,48 @@ def test_cache_dir(ctx):
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
-def test_truncation(ctx):
+@pytest.mark.parametrize("use_random", [False, True])
+def test_change_file_size(ctx, use_random):
     chunk_size = 2 ** 20
-    contents = b"\x00" * chunk_size * 3
-    alternative_contents = b"\xFF" * chunk_size * 2
+    long_contents = b"\x00" * chunk_size * 3
+    short_contents = b"\xFF" * chunk_size * 2
+    if use_random:
+        long_contents = os.urandom(len(long_contents))
+        short_contents = os.urandom(len(short_contents))
     with ctx() as path:
+        # make file shorter
         with bf.BlobFile(path, "wb") as f:
-            f.write(contents)
+            f.write(long_contents)
         with bf.BlobFile(path, "rb") as f:
             read_contents = f.read(chunk_size)
             with bf.BlobFile(path, "wb") as f2:
-                f2.write(alternative_contents)
+                f2.write(short_contents)
             # close underlying connection
             f.raw._f = None  # type: ignore
-            read_contents += f.read(chunk_size)
-            read_contents += f.read(chunk_size)
+            read_contents += f.read()
             assert (
                 read_contents
-                == contents[:chunk_size]
-                + alternative_contents[chunk_size : chunk_size * 2]
+                == long_contents[:chunk_size] + short_contents[chunk_size:]
+            )
+
+        # make file longer
+        with bf.BlobFile(path, "wb") as f:
+            f.write(short_contents)
+        with bf.BlobFile(path, "rb") as f:
+            read_contents = f.read(chunk_size)
+            with bf.BlobFile(path, "wb") as f2:
+                f2.write(long_contents)
+            # close underlying connection
+            f.raw._f = None  # type: ignore
+            read_contents += f.read()
+            # this is what we would expect if we limit the reading to the original length of the file
+            # assert (
+            #     read_contents
+            #     == short_contents[:chunk_size] + long_contents[chunk_size:chunk_size*2]
+            # )
+            assert (
+                read_contents
+                == short_contents[:chunk_size] + long_contents[chunk_size:]
             )
 
 
@@ -990,11 +1014,10 @@ def test_video(blobfile, ctx):
                 assert np.array_equal(frame.to_image(), video_data[idx])
 
 
+# this is pretty slow and docker will often run out of memory
+@pytest.mark.slow
 @pytest.mark.parametrize(
-    "ctx",
-    [_get_temp_local_path]
-    # disable remote backends because they are super slow
-    # "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_large_file(ctx):
     contents = b"0" * 2 ** 32

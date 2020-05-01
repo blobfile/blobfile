@@ -123,11 +123,44 @@ import blobfile as bf
 import multiprocessing as mp
 import tqdm
 
-filenames = [f"{i}.ext" for i in range(1000)]
+def check_exists(path):
+    return path, bf.exists(path)
 
-with mp.Pool() as pool:
-    for filename, exists in tqdm.tqdm(zip(filenames, pool.imap(bf.exists, filenames)), total=len(filenames)):
+def main():
+    filepaths = [f"gs://my-bucket/{i}.ext" for i in range(1000)]
+
+    with mp.Pool() as pool:
+        for filepath, exists in tqdm.tqdm(pool.imap_unordered(check_exists, filepaths), total=len(filepaths)):
+            pass
+
+if __name__ == "__main__":
+    main()
+```
+
+### Parallel execution with [gevent](http://www.gevent.org/index.html)
+
+This uses coroutines instead of processes/threads so may be faster in some cases.  If you're using this, you should probably also use 1 python process per core and split your work across multiple processes.
+
+```py
+from gevent import monkey
+monkey.patch_all()
+
+import tqdm
+import gevent.pool
+import blobfile as bf
+
+
+def check_exists(path):
+    return path, bf.exists(path)
+
+def main():
+    filepaths = [f"gs://my-bucket/{i}.ext" for i in range(1000)]
+    pool = gevent.pool.Pool(100)
+    for filepath, exists in tqdm.tqdm(pool.imap_unordered(check_exists, filepaths), total=len(filepaths)):
         pass
+
+if __name__ == "__main__":
+    main()
 ```
 
 ### Parallel download of a single file

@@ -1802,10 +1802,8 @@ class _StreamingReadFile(io.RawIOBase):
                 n = opt_n
                 if n == 0:
                     # assume that the connection has died
-                    # we don't want to put a broken connection back in the pool
-                    # so don't call self._f.release_conn()
-                    self._f.close()
-                    self._f = None
+                    # if the file was truncated, we'll try to read it again and end up
+                    # returning a RangeError to exit out of this loop
                     err = "failed to read from connection"
                 else:
                     # only break out if we successfully read at least one byte
@@ -1817,6 +1815,11 @@ class _StreamingReadFile(io.RawIOBase):
                 ssl.SSLError,
             ) as e:
                 err = e
+            # assume that the connection has died or is in an unusable state
+            # we don't want to put a broken connection back in the pool
+            # so don't call self._f.release_conn()
+            self._f.close()
+            self._f = None
             self.failures += 1
             if attempt >= RETRY_LOG_THRESHOLD:
                 _log_callback(

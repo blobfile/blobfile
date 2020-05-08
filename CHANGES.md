@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.9
+
+* add `BLOBFILE_BACKENDS` environment variable to set what backends will be available for use with `BlobFile`, it should be set to `local,google,azure` to get the default behavior of allowing all backends
+
+## 0.16.8
+
+* reopen streaming read files when an error is encountered in case urllib3 does not do this
+
 ## 0.16.7
 
 * reduce readall() default chunk size to fix performance regression, thanks @jpambrun for reporting this!

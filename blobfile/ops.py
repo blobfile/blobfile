@@ -49,6 +49,7 @@ from blobfile import google, azure
 from blobfile.common import Request, Error, RequestFailure
 
 
+BLOBFILE_BACKENDS_ENV_VAR = "BLOBFILE_BACKENDS"
 BACKOFF_INITIAL = 0.1
 BACKOFF_MAX = 60.0
 BACKOFF_JITTER = 0.1
@@ -2207,6 +2208,21 @@ def BlobFile(
     """
     if _guess_isdir(path):
         raise IsADirectoryError(f"Is a directory: '{path}'")
+
+    if BLOBFILE_BACKENDS_ENV_VAR in os.environ:
+        backends = os.environ[BLOBFILE_BACKENDS_ENV_VAR].split(",")
+        path_backend = None
+        if _is_local_path(path):
+            path_backend = "local"
+        elif _is_google_path(path):
+            path_backend = "google"
+        elif _is_azure_path(path):
+            path_backend = "azure"
+        else:
+            raise Error(f"Unrecognized path: '{path}'")
+        assert (
+            path_backend in backends
+        ), f"The environment variable `{BLOBFILE_BACKENDS_ENV_VAR}` is set to `{os.environ[BLOBFILE_BACKENDS_ENV_VAR]}`, but the path uses backend `{path_backend}`, if you wish to use this path with blobfile, please change the value of `{BLOBFILE_BACKENDS_ENV_VAR}` to include `{path_backend}`"
 
     if streaming is None:
         streaming = mode in ("r", "rb")

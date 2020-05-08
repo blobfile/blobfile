@@ -663,6 +663,44 @@ def test_exists(ctx):
         assert bf.exists(path)
 
 
+@contextlib.contextmanager
+def environ_context():
+    env = os.environ.copy()
+    yield
+    os.environ = env
+
+
+@pytest.mark.parametrize(
+    "backend_ctx",
+    [
+        ("local", _get_temp_local_path),
+        ("google", _get_temp_gcs_path),
+        ("azure", _get_temp_as_path),
+    ],
+)
+def test_backends_env_var(backend_ctx):
+    backend, ctx = backend_ctx
+    contents = b"meow!"
+
+    with environ_context():
+        with ctx() as path:
+            _write_contents(path, contents)
+
+            with bf.BlobFile(path, "rb") as f:
+                f.read()
+
+            os.environ["BLOBFILE_BACKENDS"] = ""
+
+            with pytest.raises(AssertionError):
+                with bf.BlobFile(path, "rb") as f:
+                    f.read()
+
+            os.environ["BLOBFILE_BACKENDS"] = backend
+
+            with bf.BlobFile(path, "rb") as f:
+                f.read()
+
+
 def test_more_exists():
     testcases = [
         (AZURE_INVALID_CONTAINER, False),

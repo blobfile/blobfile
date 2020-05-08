@@ -37,8 +37,14 @@ from typing import (
     NamedTuple,
     List,
     Union,
+    TYPE_CHECKING,
 )
-from typing_extensions import Literal
+
+if TYPE_CHECKING:
+    # only supported in python 3.8+
+    # because this isn't used for a base class or casting, we don't need to postpone
+    # evaluation of type annotations with https://www.python.org/dev/peps/pep-0563/
+    from typing import Literal
 
 
 import urllib3
@@ -2404,7 +2410,7 @@ class _ProxyFile(io.FileIO):
     def __init__(
         self,
         local_path: str,
-        mode: Literal["r", "rb", "w", "wb", "a", "ab"],
+        mode: 'Literal["r", "rb", "w", "wb", "a", "ab"]',
         tmp_dir: Optional[str],
         remote_path: Optional[str],
     ) -> None:

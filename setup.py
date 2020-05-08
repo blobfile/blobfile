@@ -34,7 +34,7 @@ class BuildPyCommand(setuptools.command.build_py.build_py):
 
 setup_dict = dict(
     name="blobfile",
-    version="0.16.8",
+    version="0.16.9",
     description="Read GCS and local paths with the same interface, clone of tensorflow.io.gfile",
     long_description=README,
     long_description_content_type="text/markdown",
@@ -47,7 +47,6 @@ setup_dict = dict(
         "urllib3~=1.25",
         "xmltodict~=0.12.0",
         "filelock~=3.0",
-        "typing-extensions>=3.7.4.1",
     ],
     extras_require={
         "dev": [

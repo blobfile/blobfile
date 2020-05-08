@@ -2,6 +2,7 @@
 
 ## 0.16.9
 
+* no longer allow `:` in remote paths used with `join` except for the first path provided
 * add `BLOBFILE_BACKENDS` environment variable to set what backends will be available for use with `BlobFile`, it should be set to `local,google,azure` to get the default behavior of allowing all backends
 
 ## 0.16.8

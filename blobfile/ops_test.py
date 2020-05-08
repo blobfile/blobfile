@@ -254,6 +254,12 @@ def test_join():
         ("a/b/", "c/", "a/b/c/"),
         ("a/b/", "/c/", "/c/"),
         ("", "", ""),
+        # this doesn't work with : in the second path
+        (
+            "gs://a/b/c",
+            "d0123456789-._~!$&'()*+,;=@",
+            "gs://a/b/c/d0123456789-._~!$&'()*+,;=@",
+        ),
         ("gs://a", "b", "gs://a/b"),
         ("gs://a/b", "c", "gs://a/b/c"),
         ("gs://a/b/", "c", "gs://a/b/c"),
@@ -306,6 +312,10 @@ def test_join():
     for input_a, input_b, desired_output in testcases:
         actual_output = bf.join(input_a, input_b)
         assert desired_output == actual_output, f"{input_a} {input_b}"
+
+    # this should raise an error because the behavior is confusing
+    with pytest.raises(bf.Error):
+        bf.join("gs://test/a/b", "c:d")
 
 
 @pytest.mark.parametrize(
@@ -691,7 +701,7 @@ def test_backends_env_var(backend_ctx):
 
             os.environ["BLOBFILE_BACKENDS"] = ""
 
-            with pytest.raises(AssertionError):
+            with pytest.raises(bf.Error):
                 with bf.BlobFile(path, "rb") as f:
                     f.read()
 

@@ -1601,8 +1601,11 @@ def _join2(a: str, b: str) -> str:
     elif _is_google_path(a) or _is_azure_path(a):
         if not a.endswith("/"):
             a += "/"
-        if "://" in b:
-            raise Error("Cannot join two fully qualified paths")
+        if ":" in b:
+            # this is apparently correct https://stackoverflow.com/questions/55202875/python-urllib-parse-urljoin-on-path-starting-with-numbers-and-colon
+            raise Error(
+                "Cannot join two fully qualified paths, urljoin treats paths containing `:` as fully qualified"
+            )
 
         if _is_google_path(a):
             bucket, obj = google.split_url(a)
@@ -2220,9 +2223,10 @@ def BlobFile(
             path_backend = "azure"
         else:
             raise Error(f"Unrecognized path: '{path}'")
-        assert (
-            path_backend in backends
-        ), f"The environment variable `{BLOBFILE_BACKENDS_ENV_VAR}` is set to `{os.environ[BLOBFILE_BACKENDS_ENV_VAR]}`, but the path uses backend `{path_backend}`, if you wish to use this path with blobfile, please change the value of `{BLOBFILE_BACKENDS_ENV_VAR}` to include `{path_backend}`"
+        if path_backend not in backends:
+            raise Error(
+                f"The environment variable `{BLOBFILE_BACKENDS_ENV_VAR}` is set to `{os.environ[BLOBFILE_BACKENDS_ENV_VAR]}`, but the path uses backend `{path_backend}`, if you wish to use this path with blobfile, please change the value of `{BLOBFILE_BACKENDS_ENV_VAR}` to include `{path_backend}`"
+            )
 
     if streaming is None:
         streaming = mode in ("r", "rb")

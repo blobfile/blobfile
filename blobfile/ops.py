@@ -1802,7 +1802,7 @@ class _StreamingReadFile(io.RawIOBase):
                 n = opt_n
                 if n == 0:
                     # assume that the connection has died
-                    # if the file was truncated, we'll try to read it again and end up
+                    # if the file was truncated, we'll try to open it again and end up
                     # returning a RangeError to exit out of this loop
                     err = "failed to read from connection"
                 else:

@@ -80,7 +80,7 @@ def _refresh_access_token_request(
     )
 
 
-def _load_credentials() -> Tuple[Mapping[str, Any], Optional[str]]:
+def load_credentials() -> Tuple[Mapping[str, Any], Optional[str]]:
     if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
         creds_path = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
         if not os.path.exists(creds_path):
@@ -110,7 +110,7 @@ def _load_credentials() -> Tuple[Mapping[str, Any], Optional[str]]:
 
 
 def create_access_token_request(scopes: List[str]) -> Request:
-    creds, err = _load_credentials()
+    creds, err = load_credentials()
     if err is not None:
         raise Error(err)
     if "private_key" in creds:
@@ -126,11 +126,6 @@ def create_access_token_request(scopes: List[str]) -> Request:
         )
     else:
         raise Error("Credentials not recognized")
-
-
-def have_credentials() -> bool:
-    _, err = _load_credentials()
-    return err is None
 
 
 def build_url(template: str, **data: str) -> str:

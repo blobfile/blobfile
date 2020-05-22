@@ -239,8 +239,8 @@ def _is_gce_instance() -> bool:
 def _google_get_access_token(key: str) -> Tuple[Any, float]:
     now = time.time()
 
-    if google.have_credentials():
-
+    _, err = google.load_credentials()
+    if err is None:
         def build_req() -> Request:
             return google.create_access_token_request(
                 scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
@@ -262,7 +262,7 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
         result = json.loads(resp.data)
         return result["access_token"], now + float(result["expires_in"])
     else:
-        raise Error("No google credentials found")
+        raise Error(err)
 
 
 def _azure_get_access_token(account: str) -> Tuple[Any, float]:

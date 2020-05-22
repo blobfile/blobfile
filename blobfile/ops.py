@@ -239,6 +239,7 @@ def _is_gce_instance() -> bool:
 def _google_get_access_token(key: str) -> Tuple[Any, float]:
     now = time.time()
 
+    # https://github.com/googleapis/google-auth-library-java/blob/master/README.md#application-default-credentials
     _, err = google.load_credentials()
     if err is None:
         def build_req() -> Request:
@@ -249,7 +250,7 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
         resp = _execute_request(build_req)
         result = json.loads(resp.data)
         return result["access_token"], now + float(result["expires_in"])
-    elif _is_gce_instance():
+    elif os.environ.get("NO_GCE_CHECK", "false").lower() != "true" and _is_gce_instance():
         # see if the metadata server has a token for us
         def build_req() -> Request:
             return Request(

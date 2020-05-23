@@ -243,12 +243,25 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
     _, err = google.load_credentials()
     if err is None:
         def build_req() -> Request:
-            return google.create_access_token_request(
+            req = google.create_access_token_request(
                 scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
             )
+            req.success_codes = (200, 400)
+            return req
 
         resp = _execute_request(build_req)
         result = json.loads(resp.data)
+        if resp.status == 400:
+            error = result['error']
+            description = result.get('error_description', '<missing description>')
+            msg = f"Error with google credentials: [{error}] {description}"
+            if error == "invalid_grant":
+                if description.startswith("Invalid JWT:"):
+                    msg += "\nPlease verify that your system clock is correct."
+                elif description == "Bad Request":
+                    msg += "\nYour credentials may be expired, please run the following commands: `gcloud auth application-default revoke` (this may fail but ignore the error) then `gcloud auth application-default login`"
+            raise Error(msg)
+        assert resp.status == 200
         return result["access_token"], now + float(result["expires_in"])
     elif os.environ.get("NO_GCE_CHECK", "false").lower() != "true" and _is_gce_instance():
         # see if the metadata server has a token for us

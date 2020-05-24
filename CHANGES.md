@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.10
+
+* Add support for `NO_GCE_CHECK=true` environment variable used by colab notebooks
+
 ## 0.16.9
 
 * no longer allow `:` in remote paths used with `join` except for the first path provided

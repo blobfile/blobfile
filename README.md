@@ -2,7 +2,7 @@
 
 This is a standalone clone of TensorFlow's [`gfile`](https://www.tensorflow.org/api_docs/python/tf/io/gfile/GFile), supporting local paths, `gs://` (Google Cloud Storage) paths, and Azure Storage paths.
 
-The main function is `BlobFile`, a replacement for `GFile`.  There are also a few additional functions, `basename`, `dirname`, and `join`, which mostly do the same thing as their `os.path` namesakes, only they also support `gs://` paths and Azure Storage paths.
+The main function is `BlobFile`, a replacement for `GFile`.  There are also a few additional functions, `basename`, `dirname`, and `join`, which mostly do the same thing as their `os.path` namesakes, only they also support GCS  paths and (`gs://`) Azure Storage paths (``https://<account>.blob.core.windows.net/<container>/`).
 
 ## Installation
 
@@ -60,6 +60,25 @@ There are a few bonus functions:
 * `configure` - set global configuration options for blobfile
     * `log_callback`: a log callback function `log(msg: string)` to use instead of printing to stdout
     * `connection_pool_max_size`: the max size for each per-host connection pool
+
+## Authentication
+
+### Google Cloud Storage
+
+The following methods will be tried in order:
+
+1) Check the environment variable `GOOGLE_APPLICATION_CREDENTIALS` for a path to service account credentials in JSON format.
+2) Check for "application default credentials".  To setup application default credentials, run `gcloud auth application-default login`.
+3) Check for a GCE metadata server (if running on GCE) and get credentials from that service.
+
+### Azure Storage
+
+The following methods will be tried in order:
+
+1) Check the environment variable `AZURE_STORAGE_ACCOUNT_KEY` for an azure storage account key (these are per-storage account shared keys described in https://docs.microsoft.com/en-us/azure/storage/common/storage-account-keys-manage)
+2) Check the environment variable `AZURE_APPLICATION_CREDENTIALS` which should point to JSON credentials for a service principal output by the command `az ad sp create-for-rbac --name <name>`
+3) Check the environment variables `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID` corresponding to a service principal described in the previous step but without the JSON file.
+4) Use credentials from the `az` command line tool if they can be found.
 
 ## Paths
 
@@ -263,21 +282,6 @@ def main():
 if __name__ == "__main__":
     main()
 ```
-
-## Authentication
-
-### Google Cloud Storage
-
-The environment variable `GOOGLE_APPLICATION_CREDENTIALS` will be checked, falling back to "default application credentials" if they can be found.
-
-### Azure Storage
-
-The following methods will be tried in order:
-
-1) Check the environment variable `AZURE_STORAGE_ACCOUNT_KEY` for an azure storage account key (these are per-storage account shared keys described in https://docs.microsoft.com/en-us/azure/storage/common/storage-account-keys-manage)
-2) Check the environment variable `AZURE_APPLICATION_CREDENTIALS` which should point to JSON credentials for a service principal output by the command `az ad sp create-for-rbac --name <name>`
-3) Check the environment variables `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID` corresponding to a service principal described in the previous step but without the JSON file.
-4) Use credentials from the `az` command line tool if they can be found.
 
 ## Changes
 

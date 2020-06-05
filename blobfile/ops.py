@@ -242,6 +242,7 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
     # https://github.com/googleapis/google-auth-library-java/blob/master/README.md#application-default-credentials
     _, err = google.load_credentials()
     if err is None:
+
         def build_req() -> Request:
             req = google.create_access_token_request(
                 scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
@@ -252,8 +253,8 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
         resp = _execute_request(build_req)
         result = json.loads(resp.data)
         if resp.status == 400:
-            error = result['error']
-            description = result.get('error_description', '<missing description>')
+            error = result["error"]
+            description = result.get("error_description", "<missing description>")
             msg = f"Error with google credentials: [{error}] {description}"
             if error == "invalid_grant":
                 if description.startswith("Invalid JWT:"):
@@ -263,7 +264,9 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
             raise Error(msg)
         assert resp.status == 200
         return result["access_token"], now + float(result["expires_in"])
-    elif os.environ.get("NO_GCE_CHECK", "false").lower() != "true" and _is_gce_instance():
+    elif (
+        os.environ.get("NO_GCE_CHECK", "false").lower() != "true" and _is_gce_instance()
+    ):
         # see if the metadata server has a token for us
         def build_req() -> Request:
             return Request(
@@ -285,7 +288,9 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
     if "storageAccountKey" in creds:
         if "account" in creds:
             if creds["account"] != account:
-                raise Error(f"found credentials for account '{creds['account']}' but needed credentials for account '{account}'")
+                raise Error(
+                    f"found credentials for account '{creds['account']}' but needed credentials for account '{account}'"
+                )
         return (
             (azure.SHARED_KEY, creds["storageAccountKey"]),
             now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
@@ -313,10 +318,7 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
 
         resp = _execute_request(build_req)
         if resp.status == 200:
-            return (
-            auth,
-                now + float(result["expires_in"]),
-            )
+            return (auth, now + float(result["expires_in"]))
 
         # it didn't work, fall back to getting the storage keys
         def build_req() -> Request:
@@ -326,7 +328,7 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
 
         resp = _execute_request(build_req)
         result = json.loads(resp.data)
-        auth =  (azure.OAUTH_TOKEN, result["access_token"])
+        auth = (azure.OAUTH_TOKEN, result["access_token"])
 
         # check each subscription for our account
         for subscription_id in creds["subscriptions"]:

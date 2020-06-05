@@ -50,7 +50,10 @@ def load_credentials() -> Mapping[str, str]:
         for part in os.environ["AZURE_STORAGE_CONNECTION_STRING"].split(";"):
             key, _, val = part.partition("=")
             connection_data[key.lower()] = val
-        return dict(account=connection_data["accountname"], storageAccountKey=connection_data["accountkey"])
+        return dict(
+            account=connection_data["accountname"],
+            storageAccountKey=connection_data["accountkey"],
+        )
 
     # look for a refresh token in the az command line credentials
     # https://mikhail.io/2019/07/how-azure-cli-manages-access-tokens/

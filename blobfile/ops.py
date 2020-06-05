@@ -288,15 +288,42 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
             now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
         )
     elif "refreshToken" in creds:
-        # we have a refresh token, do a dance to get a shared key
+        # we have a refresh token, convert it into an access token for this account
         def build_req() -> Request:
             return azure.create_access_token_request(
-                creds=creds, scope="https://management.azure.com/"
+                creds=creds, scope=f"https://{account}.blob.core.windows.net/"
             )
 
         resp = _execute_request(build_req)
         result = json.loads(resp.data)
         auth = (azure.OAUTH_TOKEN, result["access_token"])
+
+        # for some azure accounts this access token does not work, check if it works
+        def build_req() -> Request:
+            req = Request(
+                method="GET",
+                url=f"https://{account}.blob.core.windows.net/",
+                params={"restype": "service", "comp": "properties"},
+                success_codes=(200, 403),
+            )
+            return azure.make_api_request(req, auth=auth)
+
+        resp = _execute_request(build_req)
+        if resp.status == 200:
+            return (
+            auth,
+                now + float(result["expires_in"]),
+            )
+
+        # it didn't work, fall back to getting the storage keys
+        def build_req() -> Request:
+            return azure.create_access_token_request(
+                creds=creds, scope=f"https://management.azure.com/"
+            )
+
+        resp = _execute_request(build_req)
+        result = json.loads(resp.data)
+        auth =  (azure.OAUTH_TOKEN, result["access_token"])
 
         # check each subscription for our account
         for subscription_id in creds["subscriptions"]:

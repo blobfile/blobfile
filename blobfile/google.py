@@ -166,7 +166,7 @@ def generate_signed_url(
         h = dict(headers).copy()
 
     # https://cloud.google.com/storage/docs/access-control/signing-urls-manually
-    creds, err = _load_credentials()
+    creds, err = load_credentials()
     if err is not None:
         raise Error(err)
     if "private_key" not in creds:

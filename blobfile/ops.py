@@ -283,6 +283,9 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
     now = time.time()
     creds = azure.load_credentials()
     if "storageAccountKey" in creds:
+        if "account" in creds:
+            if creds["account"] != account:
+                raise Error(f"found credentials for account '{creds['account']}' but needed credentials for account '{account}'")
         return (
             (azure.SHARED_KEY, creds["storageAccountKey"]),
             now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,

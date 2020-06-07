@@ -1808,7 +1808,7 @@ class _StreamingReadFile(io.RawIOBase):
         self.requests = 0
         self.failures = 0
         self.bytes_read = 0
-        
+
     def _get_file(
         self, offset: int
     ) -> Tuple[urllib3.response.HTTPResponse, Optional[_RangeError]]:

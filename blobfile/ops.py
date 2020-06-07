@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import calendar
-import copy as python_copy
 import os
 import tempfile
 import hashlib
@@ -2126,8 +2125,16 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         if resp.status == 409:
             # a blob already exists with a different type so we failed to create the new one
             remove(path)
-            retry_req: Request = python_copy.copy(req)
-            retry_req.success_codes = (201,)
+            retry_req = Request(
+                method=req.method,
+                url=req.url,
+                params=req.params,
+                headers=req.headers,
+                data=req.data,
+                preload_content=req.preload_content,
+                success_codes=(201,),
+                retry_codes=req.retry_codes,
+            )
             _execute_azure_api_request(retry_req)
         self._md5 = hashlib.md5()
         super().__init__(chunk_size=AZURE_MAX_CHUNK_SIZE)
@@ -2482,6 +2489,9 @@ class _ProxyFile(io.FileIO):
             os.remove(self._local_path)
             os.rmdir(self._tmp_dir)
         self._closed = True
+
+    def __del__(self):
+        self.close()
 
 
 @overload

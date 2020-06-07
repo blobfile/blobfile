@@ -6,7 +6,6 @@ import base64
 import datetime
 import time
 import calendar
-import copy
 import re
 from typing import Mapping, Tuple
 
@@ -77,7 +76,7 @@ def load_credentials() -> Mapping[str, str]:
                     if token["expiresOn"] > best_token["expiresOn"]:
                         best_token = token
             if best_token is not None:
-                token = copy.copy(best_token)
+                token = best_token.copy()
                 token["subscriptions"] = subscriptions
                 return token
 
@@ -149,6 +148,11 @@ def make_api_request(req: Request, auth: Tuple[str, str]) -> Request:
     else:
         headers = dict(req.headers).copy()
 
+    if req.params is None:
+        params = {}
+    else:
+        params = dict(req.params).copy()
+
     # https://docs.microsoft.com/en-us/rest/api/storageservices/previous-azure-storage-service-versions
     headers["x-ms-version"] = "2019-02-02"
     headers["x-ms-date"] = datetime.datetime.utcnow().strftime(
@@ -158,9 +162,16 @@ def make_api_request(req: Request, auth: Tuple[str, str]) -> Request:
     if data is not None and not isinstance(data, (bytes, bytearray)):
         data = xmltodict.unparse(data).encode("utf8")
 
-    result = copy.copy(req)
-    result.headers = headers
-    result.data = data
+    result = Request(
+        method=req.method,
+        url=req.url,
+        params=params,
+        headers=headers,
+        data=data,
+        preload_content=req.preload_content,
+        success_codes=tuple(req.success_codes),
+        retry_codes=tuple(req.retry_codes),
+    )
 
     kind, token = auth
     if kind == SHARED_KEY:

@@ -7,7 +7,6 @@ import platform
 import datetime
 import hashlib
 import binascii
-import copy
 from typing import Mapping, Any, Optional, Tuple, List
 
 from Cryptodome.Signature import pkcs1_15
@@ -137,14 +136,26 @@ def make_api_request(req: Request, access_token: str) -> Request:
         headers = {}
     else:
         headers = dict(req.headers).copy()
+
+    if req.params is None:
+        params = {}
+    else:
+        params = dict(req.params).copy()
+
     headers["Authorization"] = f"Bearer {access_token}"
     data = req.data
     if data is not None and not isinstance(data, (bytes, bytearray)):
         data = json.dumps(data).encode("utf8")
-    result = copy.copy(req)
-    result.headers = headers
-    result.data = data
-    return result
+    return Request(
+        method=req.method,
+        url=req.url,
+        params=params,
+        headers=headers,
+        data=data,
+        preload_content=req.preload_content,
+        success_codes=tuple(req.success_codes),
+        retry_codes=tuple(req.retry_codes),
+    )
 
 
 def generate_signed_url(

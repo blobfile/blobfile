@@ -8,6 +8,7 @@
 * Skip subscriptions we don't have permissions to access when getting storage keys.
 * Use environment variable `AZURE_STORAGE_KEY` instead of `AZURE_STORAGE_ACCOUNT_KEY` by default
 * Add support for environment variable `AZURE_STORAGE_CONNECTION_STRING`
+* Don't return connections used for reading files to the connection pool to avoid a rare issue with a -1 file descriptor
 
 ## 0.16.9
 

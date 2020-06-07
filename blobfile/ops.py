@@ -1808,7 +1808,7 @@ class _StreamingReadFile(io.RawIOBase):
         self.requests = 0
         self.failures = 0
         self.bytes_read = 0
-
+        
     def _get_file(
         self, offset: int
     ) -> Tuple[urllib3.response.HTTPResponse, Optional[_RangeError]]:
@@ -1914,8 +1914,11 @@ class _StreamingReadFile(io.RawIOBase):
             return
 
         if hasattr(self, "_f") and self._f is not None:
-            # return the connection to the pool
-            self._f.release_conn()
+            # normally we would return the connection to the pool at this point, but in rare
+            # circumstances this can cause an invalid socket to be in the connection pool and
+            # crash urllib3
+            # https://github.com/urllib3/urllib3/issues/1878
+            # self._f.release_conn()
             self._f.close()
             self._f = None
 
@@ -2489,9 +2492,6 @@ class _ProxyFile(io.FileIO):
             os.remove(self._local_path)
             os.rmdir(self._tmp_dir)
         self._closed = True
-
-    def __del__(self):
-        self.close()
 
 
 @overload

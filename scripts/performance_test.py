@@ -1,6 +1,7 @@
 import contextlib
 import time
 import argparse
+import io
 import multiprocessing as mp
 
 import blobfile as bf
@@ -31,8 +32,10 @@ def main():
     if args.release_conn:
         ops.RELEASE_CONN = True
 
+    buffer_size = io.DEFAULT_BUFFER_SIZE
     if args.no_persistent_read_file:
         ops.PERSISTENT_READ_FILE = False
+        buffer_size = 2**20
 
     path = bf.join(args.path, "1gb.bin")
     data = (b"meow" * 249 + b"mew\n") * args.size
@@ -48,7 +51,7 @@ def main():
     print(f"MB/s {len(data) /1e6/(end - start)}")
 
     with timer("read_large_file_lines"):
-        with bf.BlobFile(path, "r") as f:
+        with bf.BlobFile(path, "r", buffer_size=buffer_size) as f:
             for _ in f:
                 pass
 

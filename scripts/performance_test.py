@@ -1,7 +1,6 @@
 import contextlib
 import time
 import argparse
-import io
 import multiprocessing as mp
 
 import blobfile as bf

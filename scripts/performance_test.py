@@ -35,13 +35,17 @@ def main():
         ops.PERSISTENT_READ_FILE = False
 
     path = bf.join(args.path, "1gb.bin")
+    data = (b"meow" * 249 + b"mew\n") * args.size
     with timer("write_large_file"):
         with bf.BlobFile(path, "wb") as f:
-            f.write((b"meow" * 249 + b"mew\n") * args.size)
+            f.write(data)
 
+    start = time.time()
     with timer("read_large_file"):
         with bf.BlobFile(path, "rb") as f:
             f.read()
+    end = time.time()
+    print(f"MB/s {len(data) /1e6/(end - start)}")
 
     with timer("read_large_file_lines"):
         with bf.BlobFile(path, "r") as f:
@@ -54,9 +58,11 @@ def main():
                 f.seek(i)
                 f.read(1)
 
+    count = mp.cpu_count() * 2
+    start = time.time()
     with timer("multi_read"):
         procs = []
-        for i in range(mp.cpu_count() * 2):
+        for i in range(count):
             p = mp.Process(target=read_worker, args=(path,))
             procs.append(p)
 
@@ -65,6 +71,8 @@ def main():
 
         for p in procs:
             p.join()
+    end = time.time()
+    print(f"MB/s {count * len(data) /1e6/(end - start)}")
 
     filepaths = list(bf.glob(f"gs://gcp-public-data-landsat/LC08/01/001/003/**/*.TIF"))
     with timer("read_small_files"):

@@ -76,7 +76,7 @@ AZURE_MAX_CHUNK_SIZE = 4 * 2 ** 20
 AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
 # these seem to be expired manually, but we don't currently detect that
 AZURE_SHARED_KEY_EXPIRATION_SECONDS = 24 * 60 * 60
-PERSISTENT_READ_FILE = False
+PERSISTENT_READ_FILE = True
 RELEASE_CONN = False
 
 INVALID_HOSTNAME_STATUS = 600  # fake status for invalid hostname
@@ -1902,9 +1902,12 @@ class _StreamingReadFile(io.RawIOBase):
             if err is not None:
                 assert isinstance(err, _RangeError)
                 return 0
-            assert len(buf) <= len(b)
+            n = len(buf)
+            assert n <= len(b)
             b[:] = buf
-            return len(buf)
+            self.bytes_read += n
+            self._offset += n
+            return n
 
     def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
         if whence == io.SEEK_SET:

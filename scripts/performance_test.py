@@ -80,7 +80,9 @@ def main():
         first_file_list = list(bf.glob(f"gs://gcp-public-data-landsat/LC08/01/001/**"))
 
     with timer("parallel_glob"):
-        second_file_list = list(bf.glob(f"gs://gcp-public-data-landsat/LC08/01/001/**", parallel=True))
+        second_file_list = list(
+            bf.glob(f"gs://gcp-public-data-landsat/LC08/01/001/**", parallel=True)
+        )
 
     assert set(first_file_list) == set(second_file_list)
 

@@ -819,24 +819,22 @@ def test_read_stats(buffer_size, ctx):
         with bf.BlobFile(path, "rb", buffer_size=buffer_size) as r:
             r.read(1)
 
-        if ops.PERSISTENT_READ_FILE:
-            if buffer_size == 1:
-                assert r.raw.bytes_read == 1  # type: ignore
-            else:
-                assert r.raw.bytes_read == len(contents)  # type: ignore
+        if buffer_size == 1:
+            assert r.raw.bytes_read == 1  # type: ignore
+        else:
+            assert r.raw.bytes_read == len(contents)  # type: ignore
 
         with bf.BlobFile(path, "rb", buffer_size=buffer_size) as r:
             r.read(1)
             r.seek(4)
             r.read(1)
 
-        if ops.PERSISTENT_READ_FILE:
-            if buffer_size == 1:
-                assert r.raw.requests == 2  # type: ignore
-                assert r.raw.bytes_read == 2  # type: ignore
-            else:
-                assert r.raw.requests == 1  # type: ignore
-                assert r.raw.bytes_read == len(contents)  # type: ignore
+        if buffer_size == 1:
+            assert r.raw.requests == 2  # type: ignore
+            assert r.raw.bytes_read == 2  # type: ignore
+        else:
+            assert r.raw.requests == 1  # type: ignore
+            assert r.raw.bytes_read == len(contents)  # type: ignore
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])

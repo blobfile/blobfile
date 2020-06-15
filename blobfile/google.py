@@ -128,7 +128,7 @@ def create_access_token_request(scopes: List[str]) -> Request:
 
 
 def build_url(template: str, **data: str) -> str:
-    return common.build_url("https://www.googleapis.com", template, **data)
+    return common.build_url("https://storage.googleapis.com", template, **data)
 
 
 def make_api_request(req: Request, access_token: str) -> Request:

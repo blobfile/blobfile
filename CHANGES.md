@@ -2,6 +2,7 @@
 
 ## 0.16.11
 
+* Handle exceptions during `close()` for `_ProxyFile`
 * Use `storage.googleapis.com` instead of `www.googleapis.com` for google api endpoint
 
 ## 0.16.10

@@ -2490,11 +2490,14 @@ class _ProxyFile(io.FileIO):
             return
 
         super().close()
-        if self._remote_path is not None and self._mode in ("w", "wb", "a", "ab"):
-            copy(self._local_path, self._remote_path, overwrite=True)
-        if self._tmp_dir is not None:
-            os.remove(self._local_path)
-            os.rmdir(self._tmp_dir)
+        try:
+            if self._remote_path is not None and self._mode in ("w", "wb", "a", "ab"):
+                copy(self._local_path, self._remote_path, overwrite=True)
+        finally:
+            # if the copy fails, still cleanup our local temp file so it is not leaked
+            if self._tmp_dir is not None:
+                os.remove(self._local_path)
+                os.rmdir(self._tmp_dir)
         self._closed = True
 
 

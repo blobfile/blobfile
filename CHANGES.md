@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.11
+
+* Use `storage.googleapis.com` instead of `www.googleapis.com` for google api endpoint
+
 ## 0.16.10
 
 * Add support for `NO_GCE_CHECK=true` environment variable used by colab notebooks

@@ -225,7 +225,7 @@ class TokenManager:
 
             if key not in self._tokens:
                 self._tokens[key], self._expiration = self._get_token_fn(key)
-        return self._tokens[key]
+            return self._tokens[key]
 
 
 def _is_gce_instance() -> bool:

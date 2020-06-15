@@ -1904,6 +1904,8 @@ class _StreamingReadFile(io.RawIOBase):
             )
         if new_offset != self._offset:
             self._offset = new_offset
+            if self._f is not None:
+                self._f.close()
             self._f = None
         return self._offset
 

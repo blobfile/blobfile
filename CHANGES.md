@@ -3,7 +3,7 @@
 ## 0.16.10
 
 * Add support for `NO_GCE_CHECK=true` environment variable used by colab notebooks
-* Remove use of `copy.copy()` due to odd behavior during interpreter shutdown
+* Remove use of `copy.copy()` due to odd behavior during interpreter shutdown which could cause write-mode `BlobFile`s to not finish their final upload
 * Support azure "login" method instead of just "key" method, corresponding to "AZURE_STORAGE_AUTH_MODE".  Automatically fallback to key method if login method doesn't work.
 * Skip subscriptions we don't have permissions to access when getting storage keys.
 * Use environment variable `AZURE_STORAGE_KEY` instead of `AZURE_STORAGE_ACCOUNT_KEY` by default

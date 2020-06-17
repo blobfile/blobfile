@@ -536,28 +536,29 @@ def _check_hostname(hostname: str) -> int:
     try:
         socket.getaddrinfo(hostname, None, family=socket.AF_INET)
     except socket.gaierror as e:
-        if platform.system() == "Linux":
-            if e.errno == socket.EAI_NONAME:
+        if e.errno == socket.EAI_NONAME:
+            if platform.system() == "Linux":
+                # on linux we appear to get EAI_NONAME if the host does not exist
+                # and EAI_AGAIN if there is a temporary failure in resolution
                 return HOSTNAME_DOES_NOT_EXIST
             else:
-                # we got an error, but it's not clearly a failure
-                # EAI_AGAIN should end up here
-                return HOSTNAME_STATUS_UNKNOWN
+                # it's not clear on other platforms how to differentiate a temporary
+                # name resolution failure from a permanent one, EAI_NONAME seems to be
+                # returned for either case
+                # if we cannot look up the hostname, but we
+                # can look up google, then it's likely the hostname does not exist
+                try:
+                    socket.getaddrinfo("www.google.com", None, family=socket.AF_INET)
+                except socket.gaierror:
+                    # if we can't resolve google, then the network is likely down and
+                    # we don't know if the hostname exists or not
+                    return HOSTNAME_STATUS_UNKNOWN
+                # in this case, we could resolve google, but not the original hostname
+                # likely the hostname does not exist (though this is definitely not a foolproof check)
+                return HOSTNAME_DOES_NOT_EXIST
         else:
-            # it's not clear on other platforms how to differentiate a temporary
-            # name resolution failure from a permanent one, EAI_NONAME seems to be
-            # returned for either case
-            # if we cannot look up the hostname, but we
-            # can look up google, then it's likely the hostname does not exist
-            try:
-                socket.getaddrinfo("www.google.com", None, family=socket.AF_INET)
-            except socket.gaierror:
-                # if we can't resolve google, then the network is likely down and
-                # we don't know if the hostname exists or not
-                return HOSTNAME_STATUS_UNKNOWN
-            # in this case, we could resolve google, but not the original hostname
-            # likely the hostname does not exist (though this is definitely not a foolproof check)
-            return HOSTNAME_DOES_NOT_EXIST
+            # we got some sort of other socket error, so it's unclear if the host exists or not
+            return HOSTNAME_STATUS_UNKNOWN
     # no errors encountered, the hostname exists
     return HOSTNAME_EXISTS
 

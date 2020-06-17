@@ -537,7 +537,7 @@ def _check_hostname(hostname: str) -> int:
         socket.getaddrinfo(hostname, None, family=socket.AF_INET)
     except socket.gaierror as e:
         if platform.system() == "Linux":
-            if e.errno == -2:  # EAI_NONAME
+            if e.errno == socket.EAI_NONAME:
                 return HOSTNAME_DOES_NOT_EXIST
             else:
                 # we got an error, but it's not clearly a failure
@@ -545,7 +545,8 @@ def _check_hostname(hostname: str) -> int:
                 return HOSTNAME_STATUS_UNKNOWN
         else:
             # it's not clear on other platforms how to differentiate a temporary
-            # name resolution failure from a permanent one
+            # name resolution failure from a permanent one, EAI_NONAME seems to be
+            # returned for either case
             # if we cannot look up the hostname, but we
             # can look up google, then it's likely the hostname does not exist
             try:

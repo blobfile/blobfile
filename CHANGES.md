@@ -2,6 +2,7 @@
 
 ## 0.16.11
 
+* More robust checking for azure account-does-not-exist errors
 * Handle exceptions during `close()` for `_ProxyFile`
 * Use `storage.googleapis.com` instead of `www.googleapis.com` for google api endpoint
 

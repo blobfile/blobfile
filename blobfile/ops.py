@@ -20,6 +20,7 @@ import random
 import ssl
 import socket
 import threading
+import platform
 import multiprocessing as mp
 from typing import (
     overload,
@@ -85,6 +86,10 @@ INVALID_HOSTNAME_STATUS = 600  # fake status for invalid hostname
 INVALID_CHARS = (
     set().union(range(0x0, 0x9)).union(range(0xB, 0xE)).union(range(0xE, 0x20))
 )
+
+HOSTNAME_EXISTS = 0
+HOSTNAME_DOES_NOT_EXIST = 1
+HOSTNAME_STATUS_UNKNOWN = 2
 
 
 class _GoogleResumableUploadFailure(RequestFailure):
@@ -499,12 +504,11 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
         if isinstance(err, urllib3.exceptions.NewConnectionError):
             # azure accounts have unique urls and it's hard to tell apart
             # an invalid hostname from a network error
-            # if we cannot look up the hostname, but we
-            # can look up google, then it's likely the hostname does not exist
             url = urllib.parse.urlparse(req.url)
             assert url.hostname is not None
-            if not _hostname_exists(url.hostname) and _hostname_exists(
-                "www.google.com"
+            if (
+                url.hostname.endswith(".blob.core.windows.net")
+                and _check_hostname(url.hostname) == HOSTNAME_DOES_NOT_EXIST
             ):
                 # in order to handle the azure failures in some sort-of-reasonable way
                 # create a fake response that has a special status code we can
@@ -528,14 +532,33 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
     assert False, "unreachable"
 
 
-def _hostname_exists(hostname: str) -> bool:
+def _check_hostname(hostname: str) -> int:
     try:
-        # could also try socket.create_connection(("8.8.8.8", 53), timeout=1) if this doesn't work well
-        socket.gethostbyname(hostname)
-    except socket.gaierror:
-        return False
-    else:
-        return True
+        socket.getaddrinfo(hostname, None, family=socket.AF_INET)
+    except socket.gaierror as e:
+        if platform.system() == "Linux":
+            if e.errno == -2:  # EAI_NONAME
+                return HOSTNAME_DOES_NOT_EXIST
+            else:
+                # we got an error, but it's not clearly a failure
+                # EAI_AGAIN should end up here
+                return HOSTNAME_STATUS_UNKNOWN
+        else:
+            # it's not clear on other platforms how to differentiate a temporary
+            # name resolution failure from a permanent one
+            # if we cannot look up the hostname, but we
+            # can look up google, then it's likely the hostname does not exist
+            try:
+                socket.getaddrinfo("www.google.com", None, family=socket.AF_INET)
+            except socket.gaierror:
+                # if we can't resolve google, then the network is likely down and
+                # we don't know if the hostname exists or not
+                return HOSTNAME_STATUS_UNKNOWN
+            # in this case, we could resolve google, but not the original hostname
+            # likely the hostname does not exist (though this is definitely not a foolproof check)
+            return HOSTNAME_DOES_NOT_EXIST
+    # no errors encountered, the hostname exists
+    return HOSTNAME_EXISTS
 
 
 def _is_local_path(path: str) -> bool:

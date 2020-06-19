@@ -1962,7 +1962,9 @@ class _StreamingReadFile(io.RawIOBase):
             # crash urllib3
             # https://github.com/urllib3/urllib3/issues/1878
             if RELEASE_CONN:
-                self._f.release_conn()
+                # only release the connection if the file is closed (hopefully from reading all the content)
+                if self._f.closed:
+                    self._f.release_conn()
             self._f.close()
             self._f = None
 

@@ -62,6 +62,7 @@ BACKOFF_JITTER = 0.1
 RETRY_LOG_THRESHOLD = 1
 EARLY_EXPIRATION_SECONDS = 5 * 60
 DEFAULT_CONNECTION_POOL_MAX_SIZE = 32
+DEFAULT_MAX_CONNECTION_POOL_COUNT = 10
 CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 30
 CHUNK_SIZE = 2 ** 20
@@ -118,6 +119,7 @@ _http = None
 _http_pid = None
 _http_lock = threading.Lock()
 _connection_pool_max_size = DEFAULT_CONNECTION_POOL_MAX_SIZE
+_max_connection_pool_count = DEFAULT_MAX_CONNECTION_POOL_COUNT
 
 
 def _default_log_fn(msg: str) -> None:
@@ -161,7 +163,9 @@ def _get_http_pool() -> urllib3.PoolManager:
             context.load_default_certs()
             _http_pid = os.getpid()
             _http = urllib3.PoolManager(
-                ssl_context=context, maxsize=_connection_pool_max_size
+                ssl_context=context,
+                maxsize=_connection_pool_max_size,
+                num_pools=_max_connection_pool_count,
             )
             # for debugging with mitmproxy
             # _http = urllib3.ProxyManager('http://localhost:8080/', ssl_context=context)
@@ -195,18 +199,21 @@ def set_log_callback(fn: Callable[[str], None]) -> None:
 def configure(
     log_callback: Callable[[str], None] = _default_log_fn,
     connection_pool_max_size: int = DEFAULT_CONNECTION_POOL_MAX_SIZE,
+    max_connection_pool_count: int = DEFAULT_MAX_CONNECTION_POOL_COUNT,
 ) -> None:
     """
     log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout
     connection_pool_max_size: the max size for each per-host connection pool
+    max_connection_pool_count: the maximum number of per-host connection pools to keep
     """
     global _log_callback
     _log_callback = log_callback
-    global _http, _http_pid, _connection_pool_max_size
+    global _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count
     with _http_lock:
         _http = None
         _http_pid = None
         _connection_pool_max_size = connection_pool_max_size
+        _max_connection_pool_count = max_connection_pool_count
 
 
 class TokenManager:

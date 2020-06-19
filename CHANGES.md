@@ -2,6 +2,7 @@
 
 ## 0.16.12
 
+* Add ability to set max count of connection pools, this may be useful for Azure where each storage account has its own connection pool.
 * Handle `:` with `join`
 
 ## 0.16.11

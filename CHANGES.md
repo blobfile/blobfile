@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.12
+
+* Handle `:` with `join`
+
 ## 0.16.11
 
 * More robust checking for azure account-does-not-exist errors

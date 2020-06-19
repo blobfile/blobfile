@@ -308,14 +308,11 @@ def test_join():
             "../../c/",
             "https://a.blob.core.windows.net/container/c/",
         ),
+        ("gs://test/a/b", "c:d", "gs://test/a/b/c:d"),
     ]
     for input_a, input_b, desired_output in testcases:
         actual_output = bf.join(input_a, input_b)
         assert desired_output == actual_output, f"{input_a} {input_b}"
-
-    # this should raise an error because the behavior is confusing
-    with pytest.raises(bf.Error):
-        bf.join("gs://test/a/b", "c:d")
 
 
 @pytest.mark.parametrize(

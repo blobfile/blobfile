@@ -91,6 +91,8 @@ HOSTNAME_EXISTS = 0
 HOSTNAME_DOES_NOT_EXIST = 1
 HOSTNAME_STATUS_UNKNOWN = 2
 
+ESCAPED_COLON = "___COLON___"
+
 
 class _GoogleResumableUploadFailure(RequestFailure):
     """
@@ -1676,27 +1678,33 @@ def join(a: str, *args: str) -> str:
     return out
 
 
+def _safe_urljoin(a: str, b: str) -> str:
+    # a ":" symbol in a relative url path will be interpreted as a fully qualified path
+    # escape the ":" to avoid this
+    # https://stackoverflow.com/questions/55202875/python-urllib-parse-urljoin-on-path-starting-with-numbers-and-colon
+    if ESCAPED_COLON in b:
+        raise Error(f"url cannot contain string '{ESCAPED_COLON}'")
+    escaped_b = b.replace(":", ESCAPED_COLON)
+    joined = urllib.parse.urljoin(a, escaped_b)
+    return joined.replace(ESCAPED_COLON, ":")
+
+
 def _join2(a: str, b: str) -> str:
     if _is_local_path(a):
         return os.path.join(a, b)
     elif _is_google_path(a) or _is_azure_path(a):
         if not a.endswith("/"):
             a += "/"
-        if ":" in b:
-            # this is apparently correct https://stackoverflow.com/questions/55202875/python-urllib-parse-urljoin-on-path-starting-with-numbers-and-colon
-            raise Error(
-                "Cannot join two fully qualified paths, urljoin treats paths containing `:` as fully qualified"
-            )
 
         if _is_google_path(a):
             bucket, obj = google.split_url(a)
-            obj = urllib.parse.urljoin(obj, b)
+            obj = _safe_urljoin(obj, b)
             if obj.startswith("/"):
                 obj = obj[1:]
             return google.combine_url(bucket, obj)
         elif _is_azure_path(a):
             account, container, obj = azure.split_url(a)
-            obj = urllib.parse.urljoin(obj, b)
+            obj = _safe_urljoin(obj, b)
             if obj.startswith("/"):
                 obj = obj[1:]
             return azure.combine_url(account, container, obj)

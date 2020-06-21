@@ -2,6 +2,9 @@
 
 ## 0.16.12
 
+* Add `scanglob` which is `glob` but returnes `DirEntry` objects instead of strings
+* Add `scandir` which is `listdir` but returns `DirEntry` objects instead of strings
+* `listdir` entries for local paths are no longer returned in sorted order
 * Add ability to set max count of connection pools, this may be useful for Azure where each storage account has its own connection pool.
 * Handle `:` with `join`
 

@@ -1,8 +1,8 @@
 # blobfile
 
-This is a standalone clone of TensorFlow's [`gfile`](https://www.tensorflow.org/api_docs/python/tf/io/gfile/GFile), supporting local paths, `gs://` (Google Cloud Storage) paths, and Azure Storage paths.
+This is a standalone clone of TensorFlow's [`gfile`](https://www.tensorflow.org/api_docs/python/tf/io/gfile/GFile), supporting local paths, Google Cloud Storage paths (`gs://`), and Azure Blobs paths (`https://<account>.blob.core.windows.net/<container>/`).
 
-The main function is `BlobFile`, a replacement for `GFile`.  There are also a few additional functions, `basename`, `dirname`, and `join`, which mostly do the same thing as their `os.path` namesakes, only they also support GCS  paths (`gs://`) and Azure Storage paths (`https://<account>.blob.core.windows.net/<container>/`).
+The main function is `BlobFile`, a replacement for `GFile`.  There are also a few additional functions, `basename`, `dirname`, and `join`, which mostly do the same thing as their `os.path` namesakes, only they also support GCS paths and Azure Storage paths.
 
 ## Installation
 
@@ -40,9 +40,9 @@ Some are inspired by existing `os.path` and `shutil` functions:
 
 * `copy` - copy a file from one path to another, this will do a remote copy between two remote paths on the same blob storage service
 * `exists` - returns `True` if the file or directory exists
-* `glob` - return files matching a glob-style pattern as a generator.  Globs can have [surprising performance characteristics](https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#efficiency-consideration:-using-wildcards-over-many-objects) when used with blob storage.  Character ranges are not supported in patterns.
+* `glob`/`scanglob` - return files matching a glob-style pattern as a generator.  Globs can have [surprising performance characteristics](https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#efficiency-consideration:-using-wildcards-over-many-objects) when used with blob storage.  Character ranges are not supported in patterns.
 * `isdir` - returns `True` if the path is a directory
-* `listdir` - list contents of a directory as a generator
+* `listdir`/`scandir` - list contents of a directory as a generator
 * `makedirs` - ensure that a directory and all parent directories exist
 * `remove` - remove a file
 * `rmdir` - remove an empty directory
@@ -60,6 +60,7 @@ There are a few bonus functions:
 * `configure` - set global configuration options for blobfile
     * `log_callback`: a log callback function `log(msg: string)` to use instead of printing to stdout
     * `connection_pool_max_size`: the max size for each per-host connection pool
+    * `max_connection_pool_count`: the maximum count of per-host connection pools
 
 ## Authentication
 
@@ -71,7 +72,7 @@ The following methods will be tried in order:
 2) Check for "application default credentials".  To setup application default credentials, run `gcloud auth application-default login`.
 3) Check for a GCE metadata server (if running on GCE) and get credentials from that service.
 
-### Azure Storage
+### Azure Blobs
 
 The following methods will be tried in order:
 
@@ -82,7 +83,7 @@ The following methods will be tried in order:
 
 ## Paths
 
-For Google Cloud Storage and Azure Storage directories don't really exist.  These storage systems store the files in a single flat list.  The "/" separators are just part of the filenames and there is no need to call the equivalent of `os.mkdir` on one of these systems.
+For Google Cloud Storage and Azure Blobs directories don't really exist.  These storage systems store the files in a single flat list.  The "/" separators are just part of the filenames and there is no need to call the equivalent of `os.mkdir` on one of these systems.
 
 <!-- As a result, directories can be either "implicit" or "explicit".
 
@@ -99,9 +100,9 @@ These are just normal paths for the current machine, e.g. `/root/hello.txt`
 
 GCS paths have the format `gs://<bucket>/<blob>`, you cannot perform any operations on `gs://` itself.
 
-### Azure Storage
+### Azure Blobs
 
-Azure Storage URLs have the format `https://<account>.blob.core.windows.net/<container>/<blob>`.  The highest you can go up the hierarchy is `https://<account>.blob.core.windows.net/<container>/`, `blobfile` cannot perform any operations on `https://<account>.blob.core.windows.net/`.
+Azure Blobs URLs have the format `https://<account>.blob.core.windows.net/<container>/<blob>`.  The highest you can go up the hierarchy is `https://<account>.blob.core.windows.net/<container>/`, `blobfile` cannot perform any operations on `https://<account>.blob.core.windows.net/`.
 
 ## Errors
 

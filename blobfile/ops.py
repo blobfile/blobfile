@@ -10,7 +10,9 @@ import io
 import urllib.parse
 import time
 import json
+import functools
 import binascii
+import stat as stat_module
 import glob as local_glob
 import re
 import shutil
@@ -31,6 +33,7 @@ from typing import (
     Iterator,
     Mapping,
     Any,
+    Dict,
     TextIO,
     BinaryIO,
     cast,
@@ -107,12 +110,21 @@ class _GoogleResumableUploadFailure(RequestFailure):
 class Stat(NamedTuple):
     size: int
     mtime: float
+    ctime: float
 
 
 class ReadStats(NamedTuple):
     bytes_read: int
     requests: int
     failures: int
+
+
+class DirEntry(NamedTuple):
+    path: str
+    name: str
+    is_dir: bool
+    is_file: bool
+    stat: Optional[Stat]
 
 
 _http = None
@@ -790,16 +802,23 @@ def _create_azure_page_iterator(
         p["marker"] = result["NextMarker"]
 
 
-def _google_get_names(result: Mapping[str, Any]) -> Iterator[str]:
+def _google_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntry]:
     if "prefixes" in result:
         for p in result["prefixes"]:
-            yield p
+            path = google.combine_url(bucket, p)
+            yield _entry_from_dirpath(path)
     if "items" in result:
         for item in result["items"]:
-            yield item["name"]
+            path = google.combine_url(bucket, item["name"])
+            if item["name"].endswith("/"):
+                yield _entry_from_dirpath(path)
+            else:
+                yield _entry_from_path_stat(path, _google_make_stat(item))
 
 
-def _azure_get_names(result: Mapping[str, Any]) -> Iterator[str]:
+def _azure_get_entries(
+    account: str, container: str, result: Mapping[str, Any]
+) -> Iterator[DirEntry]:
     blobs = result["Blobs"]
     if blobs is None:
         return
@@ -807,15 +826,28 @@ def _azure_get_names(result: Mapping[str, Any]) -> Iterator[str]:
         if isinstance(blobs["BlobPrefix"], dict):
             blobs["BlobPrefix"] = [blobs["BlobPrefix"]]
         for bp in blobs["BlobPrefix"]:
-            yield bp["Name"]
+            path = azure.combine_url(account, container, bp["Name"])
+            yield _entry_from_dirpath(path)
     if "Blob" in blobs:
         if isinstance(blobs["Blob"], dict):
             blobs["Blob"] = [blobs["Blob"]]
         for b in blobs["Blob"]:
-            yield b["Name"]
+            path = azure.combine_url(account, container, b["Name"])
+            if b["Name"].endswith("/"):
+                yield _entry_from_dirpath(path)
+            else:
+                props = b["Properties"]
+                yield _entry_from_path_stat(
+                    path,
+                    Stat(
+                        size=int(props["Content-Length"]),
+                        mtime=_azure_parse_timestamp(props["Last-Modified"]),
+                        ctime=_azure_parse_timestamp(props["Creation-Time"]),
+                    ),
+                )
 
 
-def _google_isfile(path: str) -> Tuple[bool, Mapping[str, Any]]:
+def _google_isfile(path: str) -> Tuple[bool, Dict[str, Any]]:
     bucket, blob = google.split_url(path)
     if blob == "":
         return False, {}
@@ -830,7 +862,7 @@ def _google_isfile(path: str) -> Tuple[bool, Mapping[str, Any]]:
     return resp.status == 200, json.loads(resp.data)
 
 
-def _azure_isfile(path: str) -> Tuple[bool, Mapping[str, Any]]:
+def _azure_isfile(path: str) -> Tuple[bool, Dict[str, Any]]:
     account, container, blob = azure.split_url(path)
     if blob == "":
         return False, {}
@@ -865,6 +897,22 @@ def exists(path: str) -> bool:
         raise Error(f"Unrecognized path: '{path}'")
 
 
+def basename(path: str) -> str:
+    """
+    Get the filename component of the path
+
+    For GCS, this is the part after the bucket
+    """
+    if _is_google_path(path):
+        _, obj = google.split_url(path)
+        return obj.split("/")[-1]
+    elif _is_azure_path(path):
+        _, _, obj = azure.split_url(path)
+        return obj.split("/")[-1]
+    else:
+        return os.path.basename(path)
+
+
 def _string_overlap(s1: str, s2: str) -> int:
     length = min(len(s1), len(s2))
     for i in range(length):
@@ -889,27 +937,42 @@ def _split_path(path: str) -> List[str]:
     return parts
 
 
-def _expand_implicit_dirs(root: str, it: Iterator[str]) -> Iterator[str]:
+def _entry_from_dirpath(path: str) -> DirEntry:
+    path = _strip_slash(path)
+    return DirEntry(
+        name=basename(path), path=path, is_dir=True, is_file=False, stat=None
+    )
+
+
+def _entry_from_path_stat(path: str, stat: Stat) -> DirEntry:
+    assert not path.endswith("/")
+    return DirEntry(
+        name=basename(path), path=path, is_dir=False, is_file=True, stat=stat
+    )
+
+
+def _expand_implicit_dirs(root: str, it: Iterator[DirEntry]) -> Iterator[DirEntry]:
     # blob storage does not always have definitions for each intermediate dir
     # if we have a listing like
     #  gs://test/a/b
     #  gs://test/a/b/c/d
-    # then we emit an entry "gs://test/a/b/c/" for the implicit dir "c"
+    # then we emit an entry "gs://test/a/b/c" for the implicit dir "c"
     # requires that iterator return objects in sorted order
-    previous_item = root
-    for item in it:
-        # find the overlap between the previous_item and the current
-        offset = _string_overlap(previous_item, item)
-        relpath = item[offset:]
-        cur = item[:offset]
+    previous_path = root
+    for entry in it:
+        # find the overlap between the previous_path and the current
+        entry_slash_path = _get_slash_path(entry)
+        offset = _string_overlap(previous_path, entry_slash_path)
+        relpath = entry_slash_path[offset:]
+        cur = entry_slash_path[:offset]
         if len(relpath) == 0:
-            yield cur
+            yield _entry_from_dirpath(cur)
         else:
             for part in _split_path(relpath):
                 cur += part
-                yield cur
-        assert item >= previous_item
-        previous_item = item
+                yield _entry_from_dirpath(cur)
+        assert entry_slash_path >= previous_path
+        previous_path = entry_slash_path
 
 
 def _compile_pattern(s: str):
@@ -925,17 +988,18 @@ def _compile_pattern(s: str):
     return re.compile(regexp + r"/?$")
 
 
-def _glob_full(pattern: str) -> Iterator[str]:
+def _glob_full(pattern: str) -> Iterator[DirEntry]:
     prefix, _, _ = pattern.partition("*")
 
     re_pattern = _compile_pattern(pattern)
 
-    for path in _expand_implicit_dirs(root=prefix, it=_list_blobs(path=prefix)):
-        if bool(re_pattern.match(path)):
-            if path == prefix and path.endswith("/"):
+    for entry in _expand_implicit_dirs(root=prefix, it=_list_blobs(path=prefix)):
+        entry_slash_path = _get_slash_path(entry)
+        if bool(re_pattern.match(entry_slash_path)):
+            if entry_slash_path == prefix and entry.is_dir:
                 # we matched the parent directory
                 continue
-            yield _strip_slash(path)
+            yield entry
 
 
 class _GlobTask(NamedTuple):
@@ -944,7 +1008,7 @@ class _GlobTask(NamedTuple):
 
 
 class _GlobEntry(NamedTuple):
-    path: str
+    entry: DirEntry
 
 
 class _GlobTaskComplete(NamedTuple):
@@ -957,28 +1021,30 @@ def _process_glob_task(
     cur = t.cur + t.rem[0]
     rem = t.rem[1:]
     if "**" in cur:
-        for path in _glob_full(root + cur + "".join(rem)):
-            yield _GlobEntry(path)
+        for entry in _glob_full(root + cur + "".join(rem)):
+            yield _GlobEntry(entry)
     elif "*" in cur:
         re_pattern = _compile_pattern(root + cur)
         prefix, _, _ = cur.partition("*")
         path = root + prefix
-        for blobpath in _list_blobs(path=path, delimiter="/"):
+        for entry in _list_blobs(path=path, delimiter="/"):
+            entry_slash_path = _get_slash_path(entry)
             # in the case of dirname/* we should not return the path dirname/
-            if blobpath == path and blobpath.endswith("/"):
+            if entry_slash_path == path and entry.is_dir:
                 # we matched the parent directory
                 continue
-            if bool(re_pattern.match(blobpath)):
+            if bool(re_pattern.match(entry_slash_path)):
                 if len(rem) == 0:
-                    yield _GlobEntry(_strip_slash(blobpath))
+                    yield _GlobEntry(entry)
                 else:
-                    assert path.startswith(root)
-                    yield _GlobTask(blobpath[len(root) :], rem)
+                    assert entry_slash_path.startswith(root)
+                    yield _GlobTask(entry_slash_path[len(root) :], rem)
     else:
         if len(rem) == 0:
             path = root + cur
-            if exists(path):
-                yield _GlobEntry(_strip_slash(path))
+            entry = _get_entry(path)
+            if entry is not None:
+                yield _GlobEntry(entry)
         else:
             yield _GlobTask(cur, rem)
 
@@ -995,6 +1061,14 @@ def _glob_worker(
         results.put(_GlobTaskComplete())
 
 
+def _local_glob(pattern: str) -> Iterator[str]:
+    for filepath in local_glob.iglob(pattern, recursive=True):
+        filepath = os.path.normpath(filepath)
+        if filepath.endswith(os.sep):
+            filepath = filepath[:-1]
+        yield filepath
+
+
 def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
     """
     Find files and directories matching a pattern. Supports * and **
@@ -1007,19 +1081,47 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
     You can set `parallel=True` to use multiple processes to perform the glob.  It's likely
     that the results will no longer be in order.
     """
+    if _is_local_path(pattern):
+        # scanglob currently does an os.stat for each matched file
+        # until scanglob can be implemented directly on scandir
+        # this code is here to not
+        if "?" in pattern or "[" in pattern or "]" in pattern:
+            raise Error("Advanced glob queries are not supported")
+        yield from _local_glob(pattern)
+    else:
+        for entry in scanglob(pattern=pattern, parallel=parallel):
+            yield entry.path
+
+
+def scanglob(pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
+    """
+    Same as `glob`, but returns `DirEntry` objects instead of strings
+    """
     if "?" in pattern or "[" in pattern or "]" in pattern:
         raise Error("Advanced glob queries are not supported")
 
     if _is_local_path(pattern):
-        for filepath in local_glob.iglob(pattern, recursive=True):
-            filepath = os.path.normpath(filepath)
-            if filepath.endswith(os.sep):
-                filepath = filepath[:-1]
-            yield filepath
+        for filepath in _local_glob(pattern):
+            # doing a stat call for each file isn't the most efficient
+            # iglob uses os.scandir internally, but doesn't expose the information from that, so we'd
+            # need to re-implement local glob
+            # we could make the behavior with remote glob more consistent though if we did that
+            s = os.stat(filepath)
+            is_dir = stat_module.S_ISDIR(s.st_mode)
+            yield DirEntry(
+                path=filepath,
+                name=basename(filepath),
+                is_dir=is_dir,
+                is_file=not is_dir,
+                stat=None
+                if is_dir
+                else Stat(size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime),
+            )
     elif _is_google_path(pattern) or _is_azure_path(pattern):
         if "*" not in pattern:
-            if exists(pattern):
-                yield _strip_slash(pattern)
+            entry = _get_entry(pattern)
+            if entry is not None:
+                yield entry
             return
 
         if _is_google_path(pattern):
@@ -1046,7 +1148,7 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
                 while tasks_done < tasks_enqueued:
                     r = results.get()
                     if isinstance(r, _GlobEntry):
-                        yield r.path
+                        yield r.entry
                     elif isinstance(r, _GlobTask):
                         tasks.put(r)
                         tasks_enqueued += 1
@@ -1061,7 +1163,7 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
                 t = dq.popleft()
                 for r in _process_glob_task(root=root, t=t):
                     if isinstance(r, _GlobEntry):
-                        yield r.path
+                        yield r.entry
                     else:
                         dq.append(r)
     else:
@@ -1162,7 +1264,7 @@ def _guess_isdir(path: str) -> bool:
     return False
 
 
-def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[str]:
+def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
     params = {}
     if delimiter is not None:
         params["delimiter"] = delimiter
@@ -1174,8 +1276,7 @@ def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[str]:
             method="GET",
             params=dict(prefix=prefix, **params),
         )
-        get_names = _google_get_names
-        root = google.combine_url(bucket, "")
+        get_entries = functools.partial(_google_get_entries, bucket)
     elif _is_azure_path(path):
         account, container, prefix = azure.split_url(path)
         it = _create_azure_page_iterator(
@@ -1183,26 +1284,29 @@ def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[str]:
             method="GET",
             params=dict(comp="list", restype="container", prefix=prefix, **params),
         )
-        get_names = _azure_get_names
-        root = azure.combine_url(account, container, "")
+        get_entries = functools.partial(_azure_get_entries, account, container)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
     for result in it:
-        for name in get_names(result):
-            yield root + name
+        for entry in get_entries(result):
+            yield entry
 
 
-def _list_blobs_in_dir(dirpath: str, exclude_dirpath: bool) -> Iterator[str]:
-    for path in _list_blobs(path=dirpath, delimiter="/"):
-        if exclude_dirpath and path == dirpath:
+def _get_slash_path(entry: DirEntry) -> str:
+    return entry.path + "/" if entry.is_dir else entry.path
+
+
+def _list_blobs_in_dir(prefix: str, exclude_prefix: bool) -> Iterator[DirEntry]:
+    for entry in _list_blobs(path=prefix, delimiter="/"):
+        if exclude_prefix and _get_slash_path(entry) == prefix:
             continue
-        yield _strip_slash(path[len(dirpath) :])
+        yield entry
 
 
 def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
     """
-    Returns an iterator of the contents of the directory at `path`
+    Returns an iterator of the contents of the dire ctory at `path`
 
     If your filenames are uniformly distributed (like hashes) then you can use `shard_prefix_length`
     to query them more quickly.  `shard_prefix_length` will do multiple queries in parallel,
@@ -1211,6 +1315,14 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
     Using `shard_prefix_length` will only consider prefixes that are not unusual characters
     (mostly these are ascii values < 0x20) some of these could technically show up in a path.
     """
+    for entry in scandir(path, shard_prefix_length=shard_prefix_length):
+        yield entry.name
+
+
+def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
+    """
+    Same as `listdir`, but returns `DirEntry` objects instead of strings
+    """
     if (_is_google_path(path) or _is_azure_path(path)) and not path.endswith("/"):
         path += "/"
     if not exists(path):
@@ -1218,11 +1330,27 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
     if not isdir(path):
         raise NotADirectoryError(f"The directory name is invalid: '{path}'")
     if _is_local_path(path):
-        for d in sorted(os.listdir(path)):
-            yield d
+        for de in os.scandir(path):
+            if de.is_dir():
+                yield DirEntry(
+                    name=de.name,
+                    path=os.path.abspath(de.path),
+                    is_dir=True,
+                    is_file=False,
+                    stat=None,
+                )
+            else:
+                s = de.stat()
+                yield DirEntry(
+                    name=de.name,
+                    path=os.path.abspath(de.path),
+                    is_dir=False,
+                    is_file=True,
+                    stat=Stat(size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime),
+                )
     elif _is_google_path(path) or _is_azure_path(path):
         if shard_prefix_length == 0:
-            yield from _list_blobs_in_dir(path, exclude_dirpath=True)
+            yield from _list_blobs_in_dir(path, exclude_prefix=True)
         else:
             prefixes = mp.Queue()
             items = mp.Queue()
@@ -1251,27 +1379,52 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
                 initializer=_sharded_listdir_worker, initargs=(prefixes, items)
             ):
                 while tasks_done < tasks_enqueued:
-                    item = items.get()
-                    if item is None:
+                    entry = items.get()
+                    if entry is None:
                         tasks_done += 1
                         continue
-                    yield item
+                    yield entry
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
 
+def _get_entry(path: str) -> Optional[DirEntry]:
+    if _is_google_path(path):
+        isfile, metadata = _google_isfile(path)
+        if isfile:
+            if path.endswith("/"):
+                return _entry_from_dirpath(path)
+            else:
+                return _entry_from_path_stat(path, _google_make_stat(metadata))
+    elif _is_azure_path(path):
+        isfile, metadata = _azure_isfile(path)
+        if isfile:
+            if path.endswith("/"):
+                return _entry_from_dirpath(path)
+            else:
+                return _entry_from_path_stat(path, _azure_make_stat(metadata))
+    else:
+        raise Error(f"Unrecognized path: '{path}'")
+
+    if isdir(path):
+        return _entry_from_dirpath(path)
+    return None
+
+
 def _sharded_listdir_worker(
-    prefixes: mp.Queue[Tuple[str, str, bool]], items: mp.Queue[Optional[str]]
+    prefixes: mp.Queue[Tuple[str, str, bool]], items: mp.Queue[Optional[DirEntry]]
 ) -> None:
     while True:
         base, prefix, exact = prefixes.get(True)
         if exact:
-            if exists(base + prefix):
-                items.put(prefix)
+            path = base + prefix
+            entry = _get_entry(path)
+            if entry is not None:
+                items.put(entry)
         else:
-            it = _list_blobs_in_dir(base + prefix, exclude_dirpath=False)
-            for item in it:
-                items.put(prefix + item)
+            it = _list_blobs_in_dir(base + prefix, exclude_prefix=False)
+            for entry in it:
+                items.put(entry)
         items.put(None)  # indicate that we have finished this path
 
 
@@ -1430,29 +1583,51 @@ def rmdir(path: str) -> None:
         raise Error(f"Unrecognized path: '{path}'")
 
 
+def _google_parse_timestamp(text: str) -> float:
+    ts = time.strptime(text.replace("Z", "GMT"), "%Y-%m-%dT%H:%M:%S.%f%Z")
+    t = calendar.timegm(ts)
+    return t
+
+
+def _google_make_stat(item: Mapping[str, str]) -> Stat:
+    return Stat(
+        size=int(item["size"]),
+        mtime=_google_parse_timestamp(item["updated"]),
+        ctime=_google_parse_timestamp(item["timeCreated"]),
+    )
+
+
+def _azure_parse_timestamp(text: str) -> float:
+    ts = time.strptime(text, "%a, %d %b %Y %H:%M:%S %Z")
+    t = calendar.timegm(ts)
+    return t
+
+
+def _azure_make_stat(item: Mapping[str, str]) -> Stat:
+    return Stat(
+        size=int(item["Content-Length"]),
+        mtime=_azure_parse_timestamp(item["Last-Modified"]),
+        ctime=_azure_parse_timestamp(item["x-ms-creation-time"]),
+    )
+
+
 def stat(path: str) -> Stat:
     """
     Stat a file or object representing a directory, returns a Stat object
     """
     if _is_local_path(path):
         s = os.stat(path)
-        return Stat(size=s.st_size, mtime=s.st_mtime)
+        return Stat(size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime)
     elif _is_google_path(path):
         isfile, metadata = _google_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file: '{path}'")
-        ts = time.strptime(
-            metadata["updated"].replace("Z", "GMT"), "%Y-%m-%dT%H:%M:%S.%f%Z"
-        )
-        t = calendar.timegm(ts)
-        return Stat(size=int(metadata["size"]), mtime=t)
+        return _google_make_stat(metadata)
     elif _is_azure_path(path):
         isfile, metadata = _azure_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file: '{path}'")
-        ts = time.strptime(metadata["Last-Modified"], "%a, %d %b %Y %H:%M:%S %Z")
-        t = calendar.timegm(ts)
-        return Stat(size=int(metadata["Content-Length"]), mtime=t)
+        return _azure_make_stat(metadata)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -1476,10 +1651,15 @@ def rmtree(path: str) -> None:
             params=dict(prefix=blob),
         )
         for result in it:
-            for item in _google_get_names(result):
+            for entry in _google_get_entries(bucket, result):
+                entry_slash_path = _get_slash_path(entry)
+                entry_bucket, entry_blob = google.split_url(entry_slash_path)
+                assert entry_bucket == bucket and entry_blob.startswith(blob)
                 req = Request(
                     url=google.build_url(
-                        "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=item
+                        "/storage/v1/b/{bucket}/o/{object}",
+                        bucket=bucket,
+                        object=entry_blob,
                     ),
                     method="DELETE",
                     # 404 is allowed in case a failed request successfully deleted the file
@@ -1497,10 +1677,22 @@ def rmtree(path: str) -> None:
             params=dict(comp="list", restype="container", prefix=blob),
         )
         for result in it:
-            for item in _azure_get_names(result):
+            for entry in _azure_get_entries(account, container, result):
+                entry_slash_path = _get_slash_path(entry)
+                entry_account, entry_container, entry_blob = azure.split_url(
+                    entry_slash_path
+                )
+                assert (
+                    entry_account == account
+                    and entry_container == container
+                    and entry_blob.startswith(blob)
+                )
                 req = Request(
                     url=azure.build_url(
-                        account, "/{container}/{blob}", container=container, blob=item
+                        account,
+                        "/{container}/{blob}",
+                        container=container,
+                        blob=entry_blob,
                     ),
                     method="DELETE",
                     # 404 is allowed in case a failed request successfully deleted the file
@@ -1531,13 +1723,14 @@ def walk(
                 root = root[:-1]
             yield (root, sorted(dirnames), sorted(filenames))
     elif _is_google_path(top) or _is_azure_path(top):
+        if not top.endswith("/"):
+            top += "/"
         if topdown:
             dq: collections.deque[str] = collections.deque()
             dq.append(top)
             while len(dq) > 0:
                 cur = dq.popleft()
-                if not cur.endswith("/"):
-                    cur += "/"
+                assert cur.endswith("/")
                 if _is_google_path(top):
                     bucket, blob = google.split_url(cur)
                     it = _create_google_page_iterator(
@@ -1545,7 +1738,7 @@ def walk(
                         method="GET",
                         params=dict(delimiter="/", prefix=blob),
                     )
-                    get_names = _google_get_names
+                    get_entries = functools.partial(_google_get_entries, bucket)
                 elif _is_azure_path(top):
                     account, container, blob = azure.split_url(cur)
                     it = _create_azure_page_iterator(
@@ -1557,25 +1750,25 @@ def walk(
                             comp="list", restype="container", delimiter="/", prefix=blob
                         ),
                     )
-                    get_names = _azure_get_names
+                    get_entries = functools.partial(
+                        _azure_get_entries, account, container
+                    )
                 else:
                     raise Error(f"Unrecognized path: '{top}'")
                 dirnames = []
                 filenames = []
                 for result in it:
-                    for name in get_names(result):
-                        if name == blob:
+                    for entry in get_entries(result):
+                        entry_path = _get_slash_path(entry)
+                        if entry_path == cur:
                             continue
-                        name = name[len(blob) :]
-                        if name.endswith("/"):
-                            dirnames.append(name[:-1])
+                        if entry.is_dir:
+                            dirnames.append(entry.name)
                         else:
-                            filenames.append(name)
+                            filenames.append(entry.name)
                 yield (_strip_slash(cur), dirnames, filenames)
-                dq.extend(join(cur, dirname) for dirname in dirnames)
+                dq.extend(join(cur, dirname) + "/" for dirname in dirnames)
         else:
-            if not top.endswith("/"):
-                top += "/"
             if _is_google_path(top):
                 bucket, blob = google.split_url(top)
                 it = _create_google_page_iterator(
@@ -1583,7 +1776,7 @@ def walk(
                     method="GET",
                     params=dict(prefix=blob),
                 )
-                get_names = _google_get_names
+                get_entries = functools.partial(_google_get_entries, bucket)
             elif _is_azure_path(top):
                 account, container, blob = azure.split_url(top)
                 it = _create_azure_page_iterator(
@@ -1591,7 +1784,7 @@ def walk(
                     method="GET",
                     params=dict(comp="list", restype="container", prefix=blob),
                 )
-                get_names = _azure_get_names
+                get_entries = functools.partial(_azure_get_entries, account, container)
             else:
                 raise Error(f"Unrecognized path: '{top}'")
 
@@ -1599,11 +1792,12 @@ def walk(
             dirnames_stack = [[]]
             filenames_stack = [[]]
             for result in it:
-                for name in get_names(result):
-                    if name == blob:
+                for entry in get_entries(result):
+                    entry_slash_path = _get_slash_path(entry)
+                    if entry_slash_path == top:
                         continue
-                    name = name[len(blob) :]
-                    parts = name.split("/")
+                    relpath = entry_slash_path[len(top) :]
+                    parts = relpath.split("/")
                     dirpath = parts[:-1]
                     if dirpath != cur:
                         # pop directories from the current path until we match the prefix of this new path
@@ -1622,8 +1816,8 @@ def walk(
                             # add this to child dir to the list of dirs for the parent
                             dirnames_stack[-1].append(dirname)
                             dirnames_stack.append([])
-                    if not name.endswith("/"):
-                        filenames_stack[-1].append(parts[-1])
+                    if entry.is_file:
+                        filenames_stack[-1].append(entry.name)
             while len(cur) > 0:
                 yield (top + "/".join(cur), dirnames_stack.pop(), filenames_stack.pop())
                 cur.pop()
@@ -1631,22 +1825,6 @@ def walk(
             assert len(dirnames_stack) == 0 and len(filenames_stack) == 0
     else:
         raise Error(f"Unrecognized path: '{top}'")
-
-
-def basename(path: str) -> str:
-    """
-    Get the filename component of the path
-
-    For GCS, this is the part after the bucket
-    """
-    if _is_google_path(path):
-        _, obj = google.split_url(path)
-        return obj.split("/")[-1]
-    elif _is_azure_path(path):
-        _, _, obj = azure.split_url(path)
-        return obj.split("/")[-1]
-    else:
-        return os.path.basename(path)
 
 
 def dirname(path: str) -> str:

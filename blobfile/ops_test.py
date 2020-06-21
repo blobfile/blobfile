@@ -460,6 +460,32 @@ def test_listdir(ctx):
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
+def test_scandir(ctx):
+    contents = b"meow!"
+    with ctx() as path:
+        dirpath = bf.dirname(path)
+        a_path = bf.join(dirpath, "a")
+        with bf.BlobFile(a_path, "wb") as w:
+            w.write(contents)
+        b_path = bf.join(dirpath, "b")
+        with bf.BlobFile(b_path, "wb") as w:
+            w.write(contents)
+        bf.makedirs(bf.join(dirpath, "c"))
+        entries = sorted(list(bf.scandir(dirpath)))
+        assert [e.name for e in entries] == ["a", "b", "c"]
+        assert [e.path for e in entries] == [
+            bf.join(dirpath, name) for name in ["a", "b", "c"]
+        ]
+        assert [e.is_dir for e in entries] == [False, False, True]
+        assert [e.is_file for e in entries] == [True, True, False]
+        assert entries[0].stat.size == len(contents)
+        assert entries[1].stat.size == len(contents)
+        assert entries[2].stat is None
+
+
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_listdir_sharded(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -572,6 +598,33 @@ def test_glob(ctx, parallel):
         assert_listing_equal(bf.join(dirpath, "subdir/*dir"), ["subdir/subsubdir"])
         assert_listing_equal(bf.join(dirpath, "subdir/*dir/"), ["subdir/subsubdir"])
         assert_listing_equal(bf.join(dirpath, "su*ir/*dir/"), ["subdir/subsubdir"])
+
+
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
+def test_scanglob(ctx):
+    contents = b"meow!"
+    with ctx() as path:
+        dirpath = bf.dirname(path)
+        a_path = bf.join(dirpath, "ab")
+        with bf.BlobFile(a_path, "wb") as w:
+            w.write(contents)
+        b_path = bf.join(dirpath, "bb")
+        with bf.BlobFile(b_path, "wb") as w:
+            w.write(contents)
+        path = bf.join(dirpath, "test.txt")
+        with bf.BlobFile(path, "wb") as w:
+            w.write(contents)
+        path = bf.join(dirpath, "subdir", "test.txt")
+        bf.makedirs(bf.dirname(path))
+        with bf.BlobFile(path, "wb") as f:
+            f.write(contents)
+
+        entries = sorted(list(bf.scanglob(bf.join(dirpath, "*b*"))))
+        assert entries[0].name == "ab" and entries[0].is_file
+        assert entries[1].name == "bb" and entries[1].is_file
+        assert entries[2].name == "subdir" and entries[2].is_dir
 
 
 @pytest.mark.parametrize(

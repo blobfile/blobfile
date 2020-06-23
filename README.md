@@ -58,9 +58,11 @@ There are a few bonus functions:
 * `get_url` - returns a url for a path (usable by an HTTP client without any authentication) along with the expiration for that url (or None)
 * `md5` - get the md5 hash for a path, for GCS this is often fast, but for other backends this may be slow.  On Azure, if the md5 of a file is calculated and is missing from the file, the file will be updated with the calculated md5.
 * `configure` - set global configuration options for blobfile
-    * `log_callback`: a log callback function `log(msg: string)` to use instead of printing to stdout
-    * `connection_pool_max_size`: the max size for each per-host connection pool
-    * `max_connection_pool_count`: the maximum count of per-host connection pools
+    * `log_callback=_default_log_fn`: a log callback function `log(msg: string)` to use instead of printing to stdout
+    * `connection_pool_max_size=32`: the max size for each per-host connection pool
+    * `max_connection_pool_count=10`: the maximum count of per-host connection pools
+    * `azure_write_chunk_size=4 * 2 ** 20`: the size of blocks to write to Azure Storage blobs, can be set to a maximum of 100MB
+    * `retry_log_threshold=0`: set a retry count threshold above which to log failures to the log callback function
 
 ## Authentication
 

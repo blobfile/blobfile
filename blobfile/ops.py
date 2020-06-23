@@ -62,11 +62,11 @@ BLOBFILE_BACKENDS_ENV_VAR = "BLOBFILE_BACKENDS"
 BACKOFF_INITIAL = 0.1
 BACKOFF_MAX = 60.0
 BACKOFF_JITTER = 0.1
-RETRY_LOG_THRESHOLD = 1
 EARLY_EXPIRATION_SECONDS = 5 * 60
 DEFAULT_CONNECTION_POOL_MAX_SIZE = 32
 DEFAULT_MAX_CONNECTION_POOL_COUNT = 10
 DEFAULT_AZURE_WRITE_CHUNK_SIZE = 4 * 2 ** 20
+DEFAULT_RETRY_LOG_THRESHOLD = 0
 CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 30
 CHUNK_SIZE = 2 ** 20
@@ -134,6 +134,7 @@ _max_connection_pool_count = DEFAULT_MAX_CONNECTION_POOL_COUNT
 # append blobs, 4MB x 50,000 blocks = 195GB(?) according to the docs
 # max 100MB https://docs.microsoft.com/en-us/rest/api/storageservices/put-block#remarks
 _azure_write_chunk_size = DEFAULT_AZURE_WRITE_CHUNK_SIZE
+_retry_log_threshold = DEFAULT_RETRY_LOG_THRESHOLD
 
 
 def _default_log_fn(msg: str) -> None:
@@ -211,25 +212,30 @@ def set_log_callback(fn: Callable[[str], None]) -> None:
 
 
 def configure(
+    *,
     log_callback: Callable[[str], None] = _default_log_fn,
     connection_pool_max_size: int = DEFAULT_CONNECTION_POOL_MAX_SIZE,
     max_connection_pool_count: int = DEFAULT_MAX_CONNECTION_POOL_COUNT,
     azure_write_chunk_size: int = DEFAULT_AZURE_WRITE_CHUNK_SIZE,
+    retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
 ) -> None:
     """
     log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout
     connection_pool_max_size: the max size for each per-host connection pool
-    max_connection_pool_count: the maximum number of per-host connection pools to keep
+    max_connection_pool_count: the maximum count of per-host connection pools
+    azure_write_chunk_size: the size of blocks to write to Azure Storage blobs, can be set to a maximum of 100MB
+    retry_log_threshold: set a retry count threshold above which to log failures to the log callback function
     """
     global _log_callback
     _log_callback = log_callback
-    global _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size
+    global _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size, _retry_log_threshold
     with _http_lock:
         _http = None
         _http_pid = None
         _connection_pool_max_size = connection_pool_max_size
         _max_connection_pool_count = max_connection_pool_count
         _azure_write_chunk_size = azure_write_chunk_size
+        _retry_log_threshold = retry_log_threshold
 
 
 class TokenManager:
@@ -549,7 +555,7 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
                         "host does not exist", request=req, response=fake_resp
                     )
 
-        if attempt >= RETRY_LOG_THRESHOLD:
+        if attempt >= _retry_log_threshold:
             _log_callback(
                 f"error {err} when executing http request {req}, sleeping for {backoff:.1f} seconds before retrying"
             )
@@ -734,7 +740,7 @@ def copy(
             # if this failure occurs, the upload must be restarted from the beginning
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
             # https://github.com/googleapis/gcs-resumable-upload/issues/15#issuecomment-249324122
-            if attempt >= RETRY_LOG_THRESHOLD:
+            if attempt >= _retry_log_threshold:
                 _log_callback(
                     f"error {e} when executing a resumable upload to {dst}, sleeping for {backoff:.1f} seconds before retrying"
                 )
@@ -2103,7 +2109,7 @@ class _StreamingReadFile(io.RawIOBase):
             self._f.close()
             self._f = None
             self.failures += 1
-            if attempt >= RETRY_LOG_THRESHOLD:
+            if attempt >= _retry_log_threshold:
                 _log_callback(
                     f"error {err} when executing readinto({len(b)}) at offset {self._offset} on file {self._path}, sleeping for {backoff:.1f} seconds before retrying"
                 )

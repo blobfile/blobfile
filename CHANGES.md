@@ -2,7 +2,9 @@
 
 ## 0.17.0
 
-* Use block blobs instead of append blobs in Azure Storage
+* Require keyword arguments to `configure()`
+* Log all request failures by default rather than just errors after the first one, can now be set with the `retry_log_threshold` argument to `configure()`
+* Use block blobs instead of append blobs in Azure Storage, the block size can be set via the `azure_write_chunk_size` option to `configure()`
 * Add `scanglob` which is `glob` but returnes `DirEntry` objects instead of strings
 * Add `scandir` which is `listdir` but returns `DirEntry` objects instead of strings
 * `listdir` entries for local paths are no longer returned in sorted order

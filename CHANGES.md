@@ -1,7 +1,8 @@
 # Changelog
 
-## 0.16.12
+## 0.17.0
 
+* Use block blobs instead of append blobs in Azure Storage
 * Add `scanglob` which is `glob` but returnes `DirEntry` objects instead of strings
 * Add `scandir` which is `listdir` but returns `DirEntry` objects instead of strings
 * `listdir` entries for local paths are no longer returned in sorted order

@@ -66,16 +66,13 @@ RETRY_LOG_THRESHOLD = 1
 EARLY_EXPIRATION_SECONDS = 5 * 60
 DEFAULT_CONNECTION_POOL_MAX_SIZE = 32
 DEFAULT_MAX_CONNECTION_POOL_COUNT = 10
+DEFAULT_AZURE_WRITE_CHUNK_SIZE = 4 * 2 ** 20
 CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 30
 CHUNK_SIZE = 2 ** 20
 GOOGLE_CHUNK_SIZE = 2 ** 20
 # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
 assert GOOGLE_CHUNK_SIZE % (256 * 1024) == 0
-# https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-append-blobs
-# the chunk size determines the maximum size of an individual file for
-# append blobs, 4MB x 50,000 blocks = 195GB(?) according to the docs
-AZURE_MAX_CHUNK_SIZE = 4 * 2 ** 20
 # it looks like azure signed urls cannot exceed the lifetime of the token used
 # to create them, so don't keep the key around too long
 AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
@@ -132,6 +129,11 @@ _http_pid = None
 _http_lock = threading.Lock()
 _connection_pool_max_size = DEFAULT_CONNECTION_POOL_MAX_SIZE
 _max_connection_pool_count = DEFAULT_MAX_CONNECTION_POOL_COUNT
+# https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-block-blobs
+# the chunk size determines the maximum size of an individual file for
+# append blobs, 4MB x 50,000 blocks = 195GB(?) according to the docs
+# max 100MB https://docs.microsoft.com/en-us/rest/api/storageservices/put-block#remarks
+_azure_write_chunk_size = DEFAULT_AZURE_WRITE_CHUNK_SIZE
 
 
 def _default_log_fn(msg: str) -> None:
@@ -212,6 +214,7 @@ def configure(
     log_callback: Callable[[str], None] = _default_log_fn,
     connection_pool_max_size: int = DEFAULT_CONNECTION_POOL_MAX_SIZE,
     max_connection_pool_count: int = DEFAULT_MAX_CONNECTION_POOL_COUNT,
+    azure_write_chunk_size: int = DEFAULT_AZURE_WRITE_CHUNK_SIZE,
 ) -> None:
     """
     log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout
@@ -220,12 +223,13 @@ def configure(
     """
     global _log_callback
     _log_callback = log_callback
-    global _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count
+    global _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size
     with _http_lock:
         _http = None
         _http_pid = None
         _connection_pool_max_size = connection_pool_max_size
         _max_connection_pool_count = max_connection_pool_count
+        _azure_write_chunk_size = azure_write_chunk_size
 
 
 class TokenManager:
@@ -2336,73 +2340,81 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         self._url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
         )
-        # premium block blob storage supports block blobs and append blobs
-        # https://azure.microsoft.com/en-us/blog/azure-premium-block-blob-storage-is-now-generally-available/
+        self._block_index = 0
+        # check to see if there is an existing blob at this location with the wrong type
         req = Request(
             url=self._url,
-            method="PUT",
-            headers={"x-ms-blob-type": "AppendBlob"},
-            success_codes=(201, 400, 404, 409, INVALID_HOSTNAME_STATUS),
+            method="HEAD",
+            success_codes=(200, 400, 404, INVALID_HOSTNAME_STATUS),
         )
         resp = _execute_azure_api_request(req)
-        if resp.status in (400, 404, INVALID_HOSTNAME_STATUS):
+        if resp.status == 200 and resp.headers["x-ms-blob-type"] != "BlockBlob":
+            # the existing blob type is not compatible with the block blob we are about to write
+            # we have to delete the file before writing our block blob or else we will get a 409
+            # error when putting the first block
+            remove(path)
+        elif resp.status in (400, INVALID_HOSTNAME_STATUS) or (
+            resp.status == 404
+            and resp.headers["x-ms-error-code"] == "ContainerNotFound"
+        ):
             raise FileNotFoundError(
                 f"No such file or container/account does not exist: '{path}'"
             )
-        if resp.status == 409:
-            # a blob already exists with a different type so we failed to create the new one
-            remove(path)
-            retry_req = Request(
-                method=req.method,
-                url=req.url,
-                params=req.params,
-                headers=req.headers,
-                data=req.data,
-                preload_content=req.preload_content,
-                success_codes=(201,),
-                retry_codes=req.retry_codes,
-            )
-            _execute_azure_api_request(retry_req)
         self._md5 = hashlib.md5()
-        super().__init__(chunk_size=AZURE_MAX_CHUNK_SIZE)
+        super().__init__(chunk_size=_azure_write_chunk_size)
+
+    def _block_index_to_block_id(self, index: int) -> str:
+        return base64.b64encode(index.to_bytes(8, byteorder="big")).decode("utf8")
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
-        if len(chunk) == 0:
-            return
-
-        # max 4MB https://docs.microsoft.com/en-us/rest/api/storageservices/append-block#remarks
         start = 0
         while start < len(chunk):
-            end = start + AZURE_MAX_CHUNK_SIZE
+            # premium block blob storage supports block blobs and append blobs
+            # https://azure.microsoft.com/en-us/blog/azure-premium-block-blob-storage-is-now-generally-available/
+            # we use block blobs because they are compatible with WASB:
+            # https://docs.microsoft.com/en-us/azure/databricks/kb/data-sources/wasb-check-blob-types
+            end = start + _azure_write_chunk_size
             data = chunk[start:end]
             self._md5.update(data)
             req = Request(
                 url=self._url,
                 method="PUT",
-                params=dict(comp="appendblock"),
+                params=dict(
+                    comp="block",
+                    blockid=self._block_index_to_block_id(self._block_index),
+                ),
                 data=data,
-                headers={"x-ms-blob-condition-appendpos": str(self._offset + start)},
-                # https://docs.microsoft.com/en-us/rest/api/storageservices/append-block#remarks
-                success_codes=(201, 412),
+                success_codes=(201,),
             )
-
             _execute_azure_api_request(req)
+            self._block_index += 1
 
-            # azure does not calculate md5s for us, we have to do that manually
-            # https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
+            start += _azure_write_chunk_size
+
+        if finalize:
+            body = {
+                "BlockList": {
+                    "Latest": [
+                        self._block_index_to_block_id(i)
+                        for i in range(self._block_index)
+                    ]
+                }
+            }
             req = Request(
                 url=self._url,
                 method="PUT",
-                params=dict(comp="properties"),
+                # azure does not calculate md5s for us, we have to do that manually
+                # https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
                 headers={
                     "x-ms-blob-content-md5": base64.b64encode(
                         self._md5.digest()
                     ).decode("utf8")
                 },
+                params=dict(comp="blocklist"),
+                data=body,
+                success_codes=(201,),
             )
             _execute_azure_api_request(req)
-
-            start += AZURE_MAX_CHUNK_SIZE
 
 
 @overload

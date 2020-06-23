@@ -27,7 +27,7 @@ class Request:
         self.retry_codes = retry_codes
 
     def __repr__(self):
-        return f"<Request method={self.method} url={self.url}>"
+        return f"<Request method={self.method} url={self.url} params={self.params}>"
 
 
 def build_url(base_url: str, template: str, **data: str) -> str:

@@ -374,12 +374,12 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
                     method="GET",
                     url=f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.Storage/storageAccounts",
                     params={"api-version": "2019-04-01"},
-                    success_codes=(200, 401),
+                    success_codes=(200, 401, 403),
                 )
                 return azure.make_api_request(req, auth=auth)
 
             resp = _execute_request(build_req)
-            if resp.status == 401:
+            if resp.status in (401, 403):
                 # we aren't allowed to query this for this subscription, skip it
                 continue
 

@@ -1,7 +1,7 @@
 # https://mypy.readthedocs.io/en/stable/common_issues.html#using-classes-that-are-generic-in-stubs-but-not-at-runtime
 from __future__ import annotations
 
-import calendar
+import datetime
 import os
 import tempfile
 import hashlib
@@ -1594,9 +1594,7 @@ def rmdir(path: str) -> None:
 
 
 def _google_parse_timestamp(text: str) -> float:
-    ts = time.strptime(text.replace("Z", "GMT"), "%Y-%m-%dT%H:%M:%S.%f%Z")
-    t = calendar.timegm(ts)
-    return t
+    return datetime.datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp()
 
 
 def _google_make_stat(item: Mapping[str, str]) -> Stat:
@@ -1608,9 +1606,7 @@ def _google_make_stat(item: Mapping[str, str]) -> Stat:
 
 
 def _azure_parse_timestamp(text: str) -> float:
-    ts = time.strptime(text, "%a, %d %b %Y %H:%M:%S %Z")
-    t = calendar.timegm(ts)
-    return t
+    return datetime.datetime.strptime(text.replace("GMT", "Z"), "%a, %d %b %Y %H:%M:%S %z").timestamp()
 
 
 def _azure_make_stat(item: Mapping[str, str]) -> Stat:

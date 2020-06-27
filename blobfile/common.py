@@ -65,3 +65,11 @@ class RestartableStreamingWriteFailure(RequestFailure):
     """
 
     pass
+
+
+class ConcurrentWriteFailure(RequestFailure):
+    """
+    A write failed due to another concurrent writer
+    """
+
+    pass

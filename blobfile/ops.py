@@ -55,7 +55,13 @@ import xmltodict
 import filelock
 
 from blobfile import google, azure
-from blobfile.common import Request, Error, RequestFailure, RestartableStreamingWriteFailure
+from blobfile.common import (
+    Request,
+    Error,
+    RequestFailure,
+    RestartableStreamingWriteFailure,
+    ConcurrentWriteFailure,
+)
 
 
 BLOBFILE_BACKENDS_ENV_VAR = "BLOBFILE_BACKENDS"
@@ -78,6 +84,7 @@ assert GOOGLE_CHUNK_SIZE % (256 * 1024) == 0
 AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
 # these seem to be expired manually, but we don't currently detect that
 AZURE_SHARED_KEY_EXPIRATION_SECONDS = 24 * 60 * 60
+AZURE_BLOCK_COUNT_LIMIT = 50_000
 RELEASE_CONN = False
 
 INVALID_HOSTNAME_STATUS = 600  # fake status for invalid hostname
@@ -2236,6 +2243,7 @@ class _AzureStreamingReadFile(_StreamingReadFile):
     def _get_file(
         self, offset: int
     ) -> Tuple[urllib3.response.HTTPResponse, Optional[_RangeError]]:
+        print("get_file")
         account, container, blob = azure.split_url(self._path)
         req = Request(
             url=azure.build_url(
@@ -2374,7 +2382,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         self._url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
         )
-        self._upload_id = random.randint(0, 2**47-1)
+        self._upload_id = random.randint(0, 2 ** 47 - 1)
         self._block_index = 0
         # check to see if there is an existing blob at this location
         req = Request(
@@ -2401,10 +2409,12 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         super().__init__(chunk_size=_azure_write_chunk_size)
 
     def _block_index_to_block_id(self, index: int) -> str:
-        assert index < 2**17
+        assert index < 2 ** 17
         id_plus_index = (self._upload_id << 17) + index
-        assert id_plus_index < 2**64
-        return base64.b64encode(id_plus_index.to_bytes(8, byteorder="big")).decode("utf8")
+        assert id_plus_index < 2 ** 64
+        return base64.b64encode(id_plus_index.to_bytes(8, byteorder="big")).decode(
+            "utf8"
+        )
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         start = 0
@@ -2428,6 +2438,8 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             )
             _execute_azure_api_request(req)
             self._block_index += 1
+            if self._block_index >= AZURE_BLOCK_COUNT_LIMIT:
+                raise Error(f"Exceeded block count limit of {AZURE_BLOCK_COUNT_LIMIT} for Azure Storage.  Increase `azure_write_chunk_size` so that {AZURE_BLOCK_COUNT_LIMIT} * `azure_write_chunk_size` exceeds the size of the file you are writing.")
 
             start += _azure_write_chunk_size
 
@@ -2458,14 +2470,21 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             if resp.status == 400:
                 result = xmltodict.parse(resp.data)
                 if result["Error"]["Code"] == "InvalidBlockList":
+                    # the most likely way this could happen is if the file was deleted while
+                    # we were uploading, so assume that is what happened
                     # this could be interpreted as a sort of RestartableStreamingWriteFailure but
                     # that could result in two processes fighting while uploading the file
-                    raise RequestFailure("Invalid block list, most likely a concurrent writer invalidated the upload", request=req, response=resp)
+                    raise ConcurrentWriteFailure(
+                        "Invalid block list, most likely a concurrent writer wrote to the same path: `{self._url}`",
+                        request=req,
+                        response=resp,
+                    )
                 else:
                     raise RequestFailure(
-                    message=f"unexpected status {resp.status}",
-                    request=req,
-                    response=resp,)
+                        message=f"unexpected status {resp.status}",
+                        request=req,
+                        response=resp,
+                    )
 
 
 @overload

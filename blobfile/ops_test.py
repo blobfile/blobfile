@@ -723,6 +723,38 @@ def test_exists(ctx):
         assert bf.exists(path)
 
 
+def test_concurrent_write_gcs():
+    with _get_temp_gcs_path() as path:
+        outer_contents = b"miso" * (2 ** 20 + 1)
+        inner_contents = b"momo" * (2 ** 20 + 1)
+        with bf.BlobFile(path, "wb", streaming=True) as f:
+            f.write(outer_contents)
+            with bf.BlobFile(path, "wb", streaming=True) as f:
+                f.write(inner_contents)
+
+        # the outer write will finish last and overwrite the inner one
+        # the last writer to finish wins with this setup
+        with bf.BlobFile(path, "rb") as f:
+            assert f.read() == outer_contents
+
+
+def test_concurrent_write_as():
+    with _get_temp_as_path() as path:
+        outer_contents = b"miso" * (2 ** 20 + 1)
+        inner_contents = b"momo" * (2 ** 20 + 1)
+        # the inner write will invalidate the outer one, the last writer
+        # to start wins with this setup
+        with pytest.raises(bf.ConcurrentWriteFailure):
+            with bf.BlobFile(path, "wb", streaming=True) as f:
+                f.write(outer_contents)
+                with bf.BlobFile(path, "wb", streaming=True) as f:
+                    f.write(inner_contents)
+
+        # the outer write will finish last and overwrite the inner one
+        with bf.BlobFile(path, "rb") as f:
+            assert f.read() == inner_contents
+
+
 @contextlib.contextmanager
 def environ_context():
     env = os.environ.copy()

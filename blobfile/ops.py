@@ -55,7 +55,7 @@ import xmltodict
 import filelock
 
 from blobfile import google, azure
-from blobfile.common import Request, Error, RequestFailure
+from blobfile.common import Request, Error, RequestFailure, StreamingWriteFailure
 
 
 BLOBFILE_BACKENDS_ENV_VAR = "BLOBFILE_BACKENDS"
@@ -93,15 +93,6 @@ HOSTNAME_DOES_NOT_EXIST = 1
 HOSTNAME_STATUS_UNKNOWN = 2
 
 ESCAPED_COLON = "___COLON___"
-
-
-class _GoogleResumableUploadFailure(RequestFailure):
-    """
-    An internal error used to handle the case when a GCS resumable upload
-    failed in a recoverable way
-    """
-
-    pass
 
 
 class Stat(NamedTuple):
@@ -761,8 +752,9 @@ def copy(
                     return m.hexdigest()
                 else:
                     return
-        except _GoogleResumableUploadFailure as e:
-            # currently this is the only type of failure we retry
+        except StreamingWriteFailure as e:
+            # currently this is the only type of failure we retry, since we can re-read the source
+            # stream from the beginning
             # if this failure occurs, the upload must be restarted from the beginning
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
             # https://github.com/googleapis/gcs-resumable-upload/issues/15#issuecomment-249324122
@@ -2355,7 +2347,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
         except RequestFailure as e:
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
             if e.response is not None and e.response.status in (404, 410):
-                raise _GoogleResumableUploadFailure(
+                raise StreamingWriteFailure(
                     message=e.message, request=e.request, response=e.response
                 )
             else:

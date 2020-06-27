@@ -22,7 +22,7 @@ from blobfile.ops import (
     BlobFile,
     LocalBlobFile,
 )
-from blobfile.common import Request, Error, RequestFailure
+from blobfile.common import Request, Error, RequestFailure, StreamingWriteFailure
 
 __all__ = [
     "copy",
@@ -50,4 +50,5 @@ __all__ = [
     "Request",
     "Error",
     "RequestFailure",
+    "StreamingWriteFailure",
 ]

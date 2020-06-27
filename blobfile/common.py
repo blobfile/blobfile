@@ -57,3 +57,11 @@ class RequestFailure(Error):
         super().__init__(
             f"message={self.message}, request={self.request}, response={self.response}"
         )
+
+
+class StreamingWriteFailure(RequestFailure):
+    """
+    A streaming write failed in a permanent way that requires restarting from the beginning of the stream
+    """
+
+    pass

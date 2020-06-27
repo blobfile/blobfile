@@ -95,7 +95,9 @@ def build_url(account: str, template: str, **data: str) -> str:
     )
 
 
-def create_access_token_request(creds: Mapping[str, str], scope: str, success_codes: Sequence[int] = (200,)) -> Request:
+def create_access_token_request(
+    creds: Mapping[str, str], scope: str, success_codes: Sequence[int] = (200,)
+) -> Request:
     if "refreshToken" in creds:
         # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-protocols-oauth-code#refreshing-the-access-tokens
         data = {

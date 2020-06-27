@@ -315,12 +315,15 @@ def _azure_can_access_account(account: str, auth: Tuple[str, str]) -> bool:
             method="GET",
             url=f"https://{account}.blob.core.windows.net/",
             params={"restype": "service", "comp": "properties"},
-            success_codes=(200, 403),
+            success_codes=(200, 403, INVALID_HOSTNAME_STATUS),
         )
         return azure.make_api_request(req, auth=auth)
 
     resp = _execute_request(build_req)
-    return resp.status == 200
+    # technically INVALID_HOSTNAME_STATUS means we can't access the account because it
+    # doesn't exist, but to be consistent with how we treat this error elsewhere we
+    # ignore it here
+    return resp.status in (200, INVALID_HOSTNAME_STATUS)
 
 
 def _azure_get_access_token(account: str) -> Tuple[Any, float]:
@@ -334,26 +337,34 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
                 )
         auth = (azure.SHARED_KEY, creds["storageAccountKey"])
         if _azure_can_access_account(account, auth):
-            return (
-                auth,
-                now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
-            )
+            return (auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
         else:
-            raise Error(f"Found storage account key, but it was unable to access storage account: '{account}'")
+            raise Error(
+                f"Found storage account key, but it was unable to access storage account: '{account}'"
+            )
     elif "refreshToken" in creds:
         # we have a refresh token, convert it into an access token for this account
         def build_req() -> Request:
             return azure.create_access_token_request(
-                creds=creds, scope=f"https://{account}.blob.core.windows.net/", success_codes=(200,400),
+                creds=creds,
+                scope=f"https://{account}.blob.core.windows.net/",
+                success_codes=(200, 400),
             )
 
         resp = _execute_request(build_req)
         result = json.loads(resp.data)
         if resp.status == 400:
-            if result["error"] == "invalid_grant" and "AADSTS700082" in result["error_description"]:
-                raise Error("Your refresh token has expired, please run `az login` to refresh it")
+            if (
+                result["error"] == "invalid_grant"
+                and "AADSTS700082" in result["error_description"]
+            ):
+                raise Error(
+                    "Your refresh token has expired, please run `az login` to refresh it"
+                )
             else:
-                raise Error(f"Encountered an error when requesting an access token: `{result['error']}: {result['error_description']}`")
+                raise Error(
+                    f"Encountered an error when requesting an access token: `{result['error']}: {result['error_description']}`"
+                )
         auth = (azure.OAUTH_TOKEN, result["access_token"])
 
         # for some azure accounts this access token does not work, check if it works
@@ -410,18 +421,19 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
                 if key["permissions"] == "FULL":
                     auth = (azure.SHARED_KEY, key["value"])
                     if _azure_can_access_account(account, auth):
-                        return (
-                            auth,
-                            now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
-                        )
+                        return (auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
                     else:
-                        raise Error(f"Found storage account key, but it was unable to access storage account: '{account}'")
+                        raise Error(
+                            f"Found storage account key, but it was unable to access storage account: '{account}'"
+                        )
             else:
                 raise Error(
                     f"Storage account was found, but storage account keys were missing: '{account}'"
                 )
 
-        raise Error(f"Could not find any credentials that grant access to storage account: '{account}'")
+        raise Error(
+            f"Could not find any credentials that grant access to storage account: '{account}'"
+        )
     else:
         # we have a service principal, get an oauth token
         def build_req() -> Request:
@@ -433,12 +445,11 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
         result = json.loads(resp.data)
         auth = (azure.OAUTH_TOKEN, result["access_token"])
         if _azure_can_access_account(account, auth):
-            return (
-                auth,
-                now + float(result["expires_in"]),
-            )
+            return (auth, now + float(result["expires_in"]))
         else:
-            raise Error(f"Your service principal credentials do not give you access to storage account: '{account}'")
+            raise Error(
+                f"Your service principal credentials do not give you access to storage account: '{account}'"
+            )
 
 
 def _azure_get_sas_token(account: str) -> Tuple[Any, float]:
@@ -730,7 +741,7 @@ def copy(
             # if the file is the same one that we just copied, return the stored MD5
             isfile, metadata = _azure_isfile(dst)
             if isfile and metadata["etag"] == etag and "Content-MD5" in metadata:
-                    return base64.b64decode(metadata["Content-MD5"]).hex()
+                return base64.b64decode(metadata["Content-MD5"]).hex()
         return
 
     for attempt, backoff in enumerate(
@@ -1624,7 +1635,9 @@ def _google_make_stat(item: Mapping[str, str]) -> Stat:
 
 
 def _azure_parse_timestamp(text: str) -> float:
-    return datetime.datetime.strptime(text.replace("GMT", "Z"), "%a, %d %b %Y %H:%M:%S %z").timestamp()
+    return datetime.datetime.strptime(
+        text.replace("GMT", "Z"), "%a, %d %b %Y %H:%M:%S %z"
+    ).timestamp()
 
 
 def _azure_make_stat(item: Mapping[str, str]) -> Stat:

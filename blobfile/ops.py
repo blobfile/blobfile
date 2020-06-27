@@ -620,7 +620,8 @@ def copy(
     If `overwrite` is `False` (the default), an exception will be raised if the destination
     path exists.
 
-    If `return_md5` is set to `True`, an md5 will be calculated during the copy and returned.
+    If `return_md5` is set to `True`, an md5 will be calculated during the copy and returned if available,
+    or else None will be returned.
     """
     # it would be best to check isdir() for remote paths, but that would
     # involve 2 extra network requests, so just do this test instead
@@ -692,6 +693,7 @@ def copy(
             raise FileNotFoundError(f"Source file not found: '{src}'")
         copy_id = resp.headers["x-ms-copy-id"]
         copy_status = resp.headers["x-ms-copy-status"]
+        etag = resp.headers["etag"]
 
         # wait for potentially async copy operation to finish
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob
@@ -713,7 +715,10 @@ def copy(
         if copy_status != "success":
             raise Error(f"Invalid copy status: '{copy_status}'")
         if return_md5:
-            return md5(dst)
+            # if the file is the same one that we just copied, return the stored MD5
+            isfile, metadata = _azure_isfile(dst)
+            if isfile and metadata["etag"] == etag and "Content-MD5" in metadata:
+                    return base64.b64decode(metadata["Content-MD5"]).hex()
         return
 
     for attempt, backoff in enumerate(
@@ -1633,6 +1638,7 @@ def stat(path: str) -> Stat:
         isfile, metadata = _azure_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file: '{path}'")
+        print(metadata)
         return _azure_make_stat(metadata)
     else:
         raise Error(f"Unrecognized path: '{path}'")

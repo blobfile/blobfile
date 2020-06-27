@@ -110,7 +110,7 @@ Azure Blobs URLs have the format `https://<account>.blob.core.windows.net/<conta
 
 * `Error` - base class for library-specific exceptions
 * `RequestFailure(Error)` - a request has failed permanently, has `message:str`, `request:Request`, and `response:urllib3.HTTPResponse` attributes.
-* `StreamingWriteFailure(RequestFailure)` - a streaming write has failed permanently, which requires restarting from the beginning of the stream.
+* `RestartableStreamingWriteFailure(RequestFailure)` - a streaming write has failed permanently, which requires restarting from the beginning of the stream.
 * The following generic exceptions are raised from some functions to make the behavior similar to the original versions: `FileNotFoundError`, `FileExistsError`, `IsADirectoryError`, `NotADirectoryError`, `OSError`, `ValueError`, `io.UnsupportedOperation`
 
 ## Logging

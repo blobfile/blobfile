@@ -59,7 +59,7 @@ class RequestFailure(Error):
         )
 
 
-class StreamingWriteFailure(RequestFailure):
+class RestartableStreamingWriteFailure(RequestFailure):
     """
     A streaming write failed in a permanent way that requires restarting from the beginning of the stream
     """

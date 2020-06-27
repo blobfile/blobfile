@@ -55,7 +55,7 @@ import xmltodict
 import filelock
 
 from blobfile import google, azure
-from blobfile.common import Request, Error, RequestFailure, StreamingWriteFailure
+from blobfile.common import Request, Error, RequestFailure, RestartableStreamingWriteFailure
 
 
 BLOBFILE_BACKENDS_ENV_VAR = "BLOBFILE_BACKENDS"
@@ -720,7 +720,7 @@ def copy(
 
         # wait for potentially async copy operation to finish
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob
-        # pending, success, aborted failed
+        # pending, success, aborted, failed
         while copy_status == "pending":
             req = Request(
                 url=azure.build_url(
@@ -734,6 +734,7 @@ def copy(
             resp = _execute_azure_api_request(req)
             if resp.headers["x-ms-copy-id"] != copy_id:
                 raise Error("Copy id mismatch")
+            etag = resp.headers["etag"]
             copy_status = resp.headers["x-ms-copy-status"]
         if copy_status != "success":
             raise Error(f"Invalid copy status: '{copy_status}'")
@@ -763,7 +764,7 @@ def copy(
                     return m.hexdigest()
                 else:
                     return
-        except StreamingWriteFailure as e:
+        except RestartableStreamingWriteFailure as e:
             # currently this is the only type of failure we retry, since we can re-read the source
             # stream from the beginning
             # if this failure occurs, the upload must be restarted from the beginning
@@ -2360,7 +2361,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
         except RequestFailure as e:
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
             if e.response is not None and e.response.status in (404, 410):
-                raise StreamingWriteFailure(
+                raise RestartableStreamingWriteFailure(
                     message=e.message, request=e.request, response=e.response
                 )
             else:
@@ -2373,18 +2374,21 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         self._url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
         )
+        self._upload_id = random.randint(0, 2**47-1)
         self._block_index = 0
-        # check to see if there is an existing blob at this location with the wrong type
+        # check to see if there is an existing blob at this location
         req = Request(
             url=self._url,
             method="HEAD",
             success_codes=(200, 400, 404, INVALID_HOSTNAME_STATUS),
         )
         resp = _execute_azure_api_request(req)
-        if resp.status == 200 and resp.headers["x-ms-blob-type"] != "BlockBlob":
-            # the existing blob type is not compatible with the block blob we are about to write
+        if resp.status == 200:
+            # if the existing blob type is not compatible with the block blob we are about to write
             # we have to delete the file before writing our block blob or else we will get a 409
             # error when putting the first block
+            # if there's already an existing block blob there, delete it in case it has uncommitted
+            # blocks that could prevent us from uploading the new blob
             remove(path)
         elif resp.status in (400, INVALID_HOSTNAME_STATUS) or (
             resp.status == 404
@@ -2397,7 +2401,10 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         super().__init__(chunk_size=_azure_write_chunk_size)
 
     def _block_index_to_block_id(self, index: int) -> str:
-        return base64.b64encode(index.to_bytes(8, byteorder="big")).decode("utf8")
+        assert index < 2**17
+        id_plus_index = (self._upload_id << 17) + index
+        assert id_plus_index < 2**64
+        return base64.b64encode(id_plus_index.to_bytes(8, byteorder="big")).decode("utf8")
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         start = 0
@@ -2445,9 +2452,20 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                 },
                 params=dict(comp="blocklist"),
                 data=body,
-                success_codes=(201,),
+                success_codes=(201, 400),
             )
-            _execute_azure_api_request(req)
+            resp = _execute_azure_api_request(req)
+            if resp.status == 400:
+                result = xmltodict.parse(resp.data)
+                if result["Error"]["Code"] == "InvalidBlockList":
+                    # this could be interpreted as a sort of RestartableStreamingWriteFailure but
+                    # that could result in two processes fighting while uploading the file
+                    raise RequestFailure("Invalid block list, most likely a concurrent writer invalidated the upload", request=req, response=resp)
+                else:
+                    raise RequestFailure(
+                    message=f"unexpected status {resp.status}",
+                    request=req,
+                    response=resp,)
 
 
 @overload

@@ -7,7 +7,7 @@ import datetime
 import time
 import calendar
 import re
-from typing import Mapping, Tuple
+from typing import Mapping, Tuple, Sequence
 
 import xmltodict
 
@@ -95,7 +95,7 @@ def build_url(account: str, template: str, **data: str) -> str:
     )
 
 
-def create_access_token_request(creds: Mapping[str, str], scope: str) -> Request:
+def create_access_token_request(creds: Mapping[str, str], scope: str, success_codes: Sequence[int] = (200,)) -> Request:
     if "refreshToken" in creds:
         # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-protocols-oauth-code#refreshing-the-access-tokens
         data = {
@@ -125,6 +125,7 @@ def create_access_token_request(creds: Mapping[str, str], scope: str) -> Request
         method="POST",
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data=urllib.parse.urlencode(data).encode("utf8"),
+        success_codes=success_codes,
     )
 
 

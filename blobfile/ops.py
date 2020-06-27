@@ -353,11 +353,16 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
         # we have a refresh token, convert it into an access token for this account
         def build_req() -> Request:
             return azure.create_access_token_request(
-                creds=creds, scope=f"https://{account}.blob.core.windows.net/"
+                creds=creds, scope=f"https://{account}.blob.core.windows.net/", success_codes=(200,400),
             )
 
         resp = _execute_request(build_req)
         result = json.loads(resp.data)
+        if resp.status == 400:
+            if result["error"] == "invalid_grant" and "AADSTS700082" in result["error_description"]:
+                raise Error("Your refresh token has expired, please run `az login` to refresh it")
+            else:
+                raise Error(f"Encountered an error when requesting an access token: `{result['error']}: {result['error_description']}`")
         auth = (azure.OAUTH_TOKEN, result["access_token"])
 
         # for some azure accounts this access token does not work, check if it works
@@ -1654,7 +1659,6 @@ def stat(path: str) -> Stat:
         isfile, metadata = _azure_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file: '{path}'")
-        print(metadata)
         return _azure_make_stat(metadata)
     else:
         raise Error(f"Unrecognized path: '{path}'")

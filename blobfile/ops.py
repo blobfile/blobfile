@@ -318,6 +318,20 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
         raise Error(err)
 
 
+def _azure_can_access_account(account: str, auth: Tuple[str, str]) -> bool:
+    def build_req() -> Request:
+        req = Request(
+            method="GET",
+            url=f"https://{account}.blob.core.windows.net/",
+            params={"restype": "service", "comp": "properties"},
+            success_codes=(200, 403),
+        )
+        return azure.make_api_request(req, auth=auth)
+
+    resp = _execute_request(build_req)
+    return resp.status == 200
+
+
 def _azure_get_access_token(account: str) -> Tuple[Any, float]:
     now = time.time()
     creds = azure.load_credentials()
@@ -325,12 +339,16 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
         if "account" in creds:
             if creds["account"] != account:
                 raise Error(
-                    f"found credentials for account '{creds['account']}' but needed credentials for account '{account}'"
+                    f"Found credentials for account '{creds['account']}' but needed credentials for account '{account}'"
                 )
-        return (
-            (azure.SHARED_KEY, creds["storageAccountKey"]),
-            now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
-        )
+        auth = (azure.SHARED_KEY, creds["storageAccountKey"])
+        if _azure_can_access_account(account, auth):
+            return (
+                auth,
+                now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
+            )
+        else:
+            raise Error(f"Found storage account key, but it was unable to access storage account: '{account}'")
     elif "refreshToken" in creds:
         # we have a refresh token, convert it into an access token for this account
         def build_req() -> Request:
@@ -343,17 +361,7 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
         auth = (azure.OAUTH_TOKEN, result["access_token"])
 
         # for some azure accounts this access token does not work, check if it works
-        def build_req() -> Request:
-            req = Request(
-                method="GET",
-                url=f"https://{account}.blob.core.windows.net/",
-                params={"restype": "service", "comp": "properties"},
-                success_codes=(200, 403),
-            )
-            return azure.make_api_request(req, auth=auth)
-
-        resp = _execute_request(build_req)
-        if resp.status == 200:
+        if _azure_can_access_account(account, auth):
             return (auth, now + float(result["expires_in"]))
 
         # it didn't work, fall back to getting the storage keys
@@ -404,18 +412,22 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
             result = json.loads(resp.data)
             for key in result["keys"]:
                 if key["permissions"] == "FULL":
-                    return (
-                        (azure.SHARED_KEY, key["value"]),
-                        now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
-                    )
+                    auth = (azure.SHARED_KEY, key["value"])
+                    if _azure_can_access_account(account, auth):
+                        return (
+                            auth,
+                            now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
+                        )
+                    else:
+                        raise Error(f"Found storage account key, but it was unable to access storage account: '{account}'")
             else:
                 raise Error(
-                    f"Storage account did not have any keys defined: '{account}'"
+                    f"Storage account was found, but storage account keys were missing: '{account}'"
                 )
 
-        raise Error(f"Storage account ID not found for storage account: '{account}'")
+        raise Error(f"Could not find any credentials that grant access to storage account: '{account}'")
     else:
-        # we have a service account, get an oauth token
+        # we have a service principal, get an oauth token
         def build_req() -> Request:
             return azure.create_access_token_request(
                 creds=creds, scope="https://storage.azure.com/"
@@ -423,10 +435,14 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
 
         resp = _execute_request(build_req)
         result = json.loads(resp.data)
-        return (
-            (azure.OAUTH_TOKEN, result["access_token"]),
-            now + float(result["expires_in"]),
-        )
+        auth = (azure.OAUTH_TOKEN, result["access_token"])
+        if _azure_can_access_account(account, auth):
+            return (
+                auth,
+                now + float(result["expires_in"]),
+            )
+        else:
+            raise Error(f"Your service principal credentials do not give you access to storage account: '{account}'")
 
 
 def _azure_get_sas_token(account: str) -> Tuple[Any, float]:

@@ -1165,24 +1165,37 @@ def test_composite_objects():
             contents = b"0" * 2 * 2 ** 20
             with open(local_path, "wb") as f:
                 f.write(contents)
-            sp.run(
-                [
-                    "gsutil",
-                    "-o",
-                    "GSUtil:parallel_composite_upload_threshold=1M",
-                    "cp",
-                    local_path,
-                    remote_path,
-                ],
-                check=True,
-            )
 
-        assert hashlib.md5(contents).hexdigest() == bf.md5(remote_path)
-        assert hashlib.md5(contents).hexdigest() == bf.md5(remote_path)
+            def create_composite_file():
+                sp.run(
+                    [
+                        "gsutil",
+                        "-o",
+                        "GSUtil:parallel_composite_upload_threshold=1M",
+                        "cp",
+                        local_path,
+                        remote_path,
+                    ],
+                    check=True,
+                )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with bf.BlobFile(remote_path, "rb", cache_dir=tmpdir, streaming=False) as f:
-                assert f.read() == contents
+            local_md5 = hashlib.md5(contents).hexdigest()
+            create_composite_file()
+            assert bf.stat(remote_path).md5 is None
+            assert local_md5 == bf.md5(remote_path)
+            assert bf.stat(remote_path).md5 == local_md5
+            assert local_md5 == bf.md5(remote_path)
+
+            bf.remove(remote_path)
+            create_composite_file()
+            assert bf.stat(remote_path).md5 is None
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                with bf.BlobFile(
+                    remote_path, "rb", cache_dir=tmpdir, streaming=False
+                ) as f:
+                    assert f.read() == contents
+            assert bf.stat(remote_path).md5 == local_md5
 
 
 @pytest.mark.parametrize(
@@ -1218,6 +1231,8 @@ def test_azure_maybe_update_md5(ctx):
         assert not ops._azure_maybe_update_md5(path, metadata["ETag"], meow_hash)
         _isfile, metadata = ops._azure_isfile(path)
         assert base64.b64decode(metadata["Content-MD5"]).hex() == purr_hash
+        bf.remove(path)
+        assert not ops._azure_maybe_update_md5(path, metadata["ETag"], meow_hash)
 
 
 def _get_http_pool_id(q):

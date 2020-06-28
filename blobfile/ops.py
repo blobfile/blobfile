@@ -105,6 +105,7 @@ class Stat(NamedTuple):
     size: int
     mtime: float
     ctime: float
+    md5: Optional[str]
 
 
 class ReadStats(NamedTuple):
@@ -747,8 +748,8 @@ def copy(
         if return_md5:
             # if the file is the same one that we just copied, return the stored MD5
             isfile, metadata = _azure_isfile(dst)
-            if isfile and metadata["etag"] == etag and "Content-MD5" in metadata:
-                return base64.b64decode(metadata["Content-MD5"]).hex()
+            if isfile and metadata["etag"] == etag:
+                return _azure_get_md5(metadata)
         return
 
     for attempt, backoff in enumerate(
@@ -889,6 +890,7 @@ def _azure_get_entries(
                         size=int(props["Content-Length"]),
                         mtime=_azure_parse_timestamp(props["Last-Modified"]),
                         ctime=_azure_parse_timestamp(props["Creation-Time"]),
+                        md5=_azure_get_md5(props),
                     ),
                 )
 
@@ -1161,7 +1163,7 @@ def scanglob(pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
                 is_file=not is_dir,
                 stat=None
                 if is_dir
-                else Stat(size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime),
+                else Stat(size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None),
             )
     elif _is_google_path(pattern) or _is_azure_path(pattern):
         if "*" not in pattern:
@@ -1392,7 +1394,9 @@ def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
                     path=os.path.abspath(de.path),
                     is_dir=False,
                     is_file=True,
-                    stat=Stat(size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime),
+                    stat=Stat(
+                        size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None
+                    ),
                 )
     elif _is_google_path(path) or _is_azure_path(path):
         if shard_prefix_length == 0:
@@ -1633,11 +1637,12 @@ def _google_parse_timestamp(text: str) -> float:
     return datetime.datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp()
 
 
-def _google_make_stat(item: Mapping[str, str]) -> Stat:
+def _google_make_stat(item: Mapping[str, Any]) -> Stat:
     return Stat(
         size=int(item["size"]),
         mtime=_google_parse_timestamp(item["updated"]),
         ctime=_google_parse_timestamp(item["timeCreated"]),
+        md5=_google_get_md5(item),
     )
 
 
@@ -1652,6 +1657,9 @@ def _azure_make_stat(item: Mapping[str, str]) -> Stat:
         size=int(item["Content-Length"]),
         mtime=_azure_parse_timestamp(item["Last-Modified"]),
         ctime=_azure_parse_timestamp(item["x-ms-creation-time"]),
+        md5=base64.b64decode(item["Content-MD5"]).hex()
+        if "Content-MD5" in item
+        else None,
     )
 
 
@@ -1661,7 +1669,7 @@ def stat(path: str) -> Stat:
     """
     if _is_local_path(path):
         s = os.stat(path)
-        return Stat(size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime)
+        return Stat(size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None)
     elif _is_google_path(path):
         isfile, metadata = _google_isfile(path)
         if not isfile:
@@ -1989,10 +1997,49 @@ def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> bool:
             # https://docs.microsoft.com/en-us/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations
             "If-Match": etag,
         },
-        success_codes=(200, 412),
+        success_codes=(200, 404, 412),
     )
     resp = _execute_azure_api_request(req)
     return resp.status == 200
+
+
+def _google_maybe_update_md5(path: str, generation: str, hexdigest: str) -> bool:
+    bucket, blob = google.split_url(path)
+    req = Request(
+        url=google.build_url(
+            "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
+        ),
+        method="PATCH",
+        params=dict(ifGenerationMatch=generation),
+        # it looks like we can't set the underlying md5Hash, only the metadata fields
+        headers={"Content-Type": "application/json"},
+        data=dict(metadata={"md5": hexdigest}),
+        success_codes=(200, 404, 412),
+    )
+
+    resp = _execute_google_api_request(req)
+    return resp.status == 200
+
+
+def _google_get_md5(metadata: Mapping[str, Any]) -> Optional[str]:
+    if "md5Hash" in metadata:
+        return base64.b64decode(metadata["md5Hash"]).hex()
+
+    if "metadata" in metadata and "md5" in metadata["metadata"]:
+        # fallback to our custom hash if this is a composite object that is lacking the md5Hash field
+        return metadata["metadata"]["md5"]
+
+    return None
+
+
+def _azure_get_md5(metadata: Dict[str, Any]) -> Optional[str]:
+    if "Content-MD5" in metadata:
+        b64_encoded = metadata["Content-MD5"]
+        if b64_encoded is None:
+            return None
+        return base64.b64decode(b64_encoded).hex()
+    else:
+        return None
 
 
 def md5(path: str) -> str:
@@ -2009,45 +2056,28 @@ def md5(path: str) -> str:
         if not isfile:
             raise FileNotFoundError(f"No such file: '{path}'")
 
-        if "md5Hash" in metadata:
-            return base64.b64decode(metadata["md5Hash"]).hex()
-
-        if "metadata" in metadata and "md5" in metadata["metadata"]:
-            # fallback to our custom hash if this is a composite object that is lacking the md5Hash field
-            return metadata["metadata"]["md5"]
+        h = _google_get_md5(metadata)
+        if h is not None:
+            return h
 
         # this is probably a composite object, calculate the md5 and store it on the file if the file has not changed
         with BlobFile(path, "rb") as f:
             result = _block_md5(f).hex()
 
-        bucket, blob = google.split_url(path)
-        req = Request(
-            url=google.build_url(
-                "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
-            ),
-            method="PATCH",
-            params=dict(ifGenerationMatch=metadata["generation"]),
-            # it looks like we can't set the underlying md5Hash, only the metadata fields
-            headers={"Content-Type": "application/json"},
-            data=dict(metadata={"md5": result}),
-            success_codes=(200, 404, 412),
-        )
-
-        _execute_google_api_request(req)
+        _google_maybe_update_md5(path, metadata["generation"], result)
         return result
     elif _is_azure_path(path):
         isfile, metadata = _azure_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file: '{path}'")
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
-        if "Content-MD5" in metadata:
-            result = base64.b64decode(metadata["Content-MD5"]).hex()
-        else:
+        h = _azure_get_md5(metadata)
+        if h is None:
             # md5 is missing, calculate it and store it on file if the file has not changed
             with BlobFile(path, "rb") as f:
-                result = _block_md5(f).hex()
-            _azure_maybe_update_md5(path, metadata["ETag"], result)
-        return result
+                h = _block_md5(f).hex()
+            _azure_maybe_update_md5(path, metadata["ETag"], h)
+        return h
     else:
         with BlobFile(path, "rb") as f:
             return _block_md5(f).hex()
@@ -2682,36 +2712,22 @@ def BlobFile(
                     lock_path = join(cache_dir, f"{path_md5}.lock")
                     tmp_path = join(cache_dir, f"{path_md5}.tmp")
                     with filelock.FileLock(lock_path):
-                        remote_etag = ""
+                        remote_version = ""
                         # get some sort of consistent remote hash so we can check for a local file
                         if _is_google_path(path):
                             isfile, metadata = _google_isfile(path)
                             if not isfile:
                                 raise FileNotFoundError(f"No such file: '{path}'")
-                            if "md5Hash" in metadata:
-                                remote_hash = base64.b64decode(
-                                    metadata["md5Hash"]
-                                ).hex()
-                            else:
-                                # composite objects are missing the md5 field, use the crc32 combined with the path
-                                # and hash that instead
-                                crc32 = base64.b64decode(metadata["crc32c"]).hex()
-                                remote_hash = hashlib.md5(
-                                    (crc32 + "|" + path).encode("utf8")
-                                ).hexdigest()
+                            remote_version = metadata["generation"]
+                            remote_hash = _google_get_md5(metadata)
                         elif _is_azure_path(path):
                             # in the azure case the remote md5 may not exist
                             # this duplicates some of md5() because we want more control
                             isfile, metadata = _azure_isfile(path)
                             if not isfile:
                                 raise FileNotFoundError(f"No such file: '{path}'")
-                            remote_etag = metadata["ETag"]
-                            if "Content-MD5" in metadata:
-                                remote_hash = base64.b64decode(
-                                    metadata["Content-MD5"]
-                                ).hex()
-                            else:
-                                remote_hash = None
+                            remote_version = metadata["ETag"]
+                            remote_hash = _azure_get_md5(metadata)
                         else:
                             raise Error(f"Unrecognized path: '{path}'")
 
@@ -2744,10 +2760,15 @@ def BlobFile(
                             else:
                                 os.replace(tmp_path, local_path)
 
-                            if _is_azure_path(path) and remote_hash is None:
-                                _azure_maybe_update_md5(
-                                    path, remote_etag, local_hexdigest
-                                )
+                            if remote_hash is None:
+                                if _is_azure_path(path):
+                                    _azure_maybe_update_md5(
+                                        path, remote_version, local_hexdigest
+                                    )
+                                elif _is_google_path(path):
+                                    _google_maybe_update_md5(
+                                        path, remote_version, local_hexdigest
+                                    )
                         else:
                             assert remote_hash is not None
                             local_path = join(cache_dir, remote_hash, local_filename)

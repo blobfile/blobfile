@@ -85,7 +85,6 @@ AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
 # these seem to be expired manually, but we don't currently detect that
 AZURE_SHARED_KEY_EXPIRATION_SECONDS = 24 * 60 * 60
 AZURE_BLOCK_COUNT_LIMIT = 50_000
-RELEASE_CONN = False
 
 INVALID_HOSTNAME_STATUS = 600  # fake status for invalid hostname
 
@@ -2184,10 +2183,6 @@ class _StreamingReadFile(io.RawIOBase):
             # circumstances this can cause an invalid socket to be in the connection pool and
             # crash urllib3
             # https://github.com/urllib3/urllib3/issues/1878
-            if RELEASE_CONN:
-                # only release the connection if the file is closed (hopefully from reading all the content)
-                if self._f.closed:
-                    self._f.release_conn()
             self._f.close()
             self._f = None
 

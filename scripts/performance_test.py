@@ -23,15 +23,11 @@ def read_worker(path: str) -> None:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--path", required=True)
-    parser.add_argument("--size", default=1_000_000, type=int)
-    parser.add_argument("--release-conn", action="store_true")
+    parser.add_argument("--size", default=1_000_000_000, type=int)
     args = parser.parse_args()
 
-    if args.release_conn:
-        ops.RELEASE_CONN = True
-
-    path = bf.join(args.path, "1gb.bin")
-    data = (b"meow" * 249 + b"mew\n") * args.size
+    path = bf.join(args.path, "large.bin")
+    data = (b"meow" * 249 + b"mew\n") * (args.size // 1000)
     with timer("write_large_file"):
         with bf.BlobFile(path, "wb") as f:
             f.write(data)

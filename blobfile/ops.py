@@ -106,6 +106,7 @@ class Stat(NamedTuple):
     mtime: float
     ctime: float
     md5: Optional[str]
+    version: Optional[str]
 
 
 class ReadStats(NamedTuple):
@@ -891,6 +892,7 @@ def _azure_get_entries(
                         mtime=_azure_parse_timestamp(props["Last-Modified"]),
                         ctime=_azure_parse_timestamp(props["Creation-Time"]),
                         md5=_azure_get_md5(props),
+                        version=props["Etag"],
                     ),
                 )
 
@@ -1163,7 +1165,13 @@ def scanglob(pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
                 is_file=not is_dir,
                 stat=None
                 if is_dir
-                else Stat(size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None),
+                else Stat(
+                    size=s.st_size,
+                    mtime=s.st_mtime,
+                    ctime=s.st_ctime,
+                    md5=None,
+                    version=None,
+                ),
             )
     elif _is_google_path(pattern) or _is_azure_path(pattern):
         if "*" not in pattern:
@@ -1395,7 +1403,11 @@ def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
                     is_dir=False,
                     is_file=True,
                     stat=Stat(
-                        size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None
+                        size=s.st_size,
+                        mtime=s.st_mtime,
+                        ctime=s.st_ctime,
+                        md5=None,
+                        version=None,
                     ),
                 )
     elif _is_google_path(path) or _is_azure_path(path):
@@ -1643,6 +1655,7 @@ def _google_make_stat(item: Mapping[str, Any]) -> Stat:
         mtime=_google_parse_timestamp(item["updated"]),
         ctime=_google_parse_timestamp(item["timeCreated"]),
         md5=_google_get_md5(item),
+        version=item["generation"],
     )
 
 
@@ -1660,6 +1673,7 @@ def _azure_make_stat(item: Mapping[str, str]) -> Stat:
         md5=base64.b64decode(item["Content-MD5"]).hex()
         if "Content-MD5" in item
         else None,
+        version=item["Etag"],
     )
 
 
@@ -1669,7 +1683,9 @@ def stat(path: str) -> Stat:
     """
     if _is_local_path(path):
         s = os.stat(path)
-        return Stat(size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None)
+        return Stat(
+            size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None, version=None
+        )
     elif _is_google_path(path):
         isfile, metadata = _google_isfile(path)
         if not isfile:
@@ -2076,7 +2092,7 @@ def md5(path: str) -> str:
             # md5 is missing, calculate it and store it on file if the file has not changed
             with BlobFile(path, "rb") as f:
                 h = _block_md5(f).hex()
-            _azure_maybe_update_md5(path, metadata["ETag"], h)
+            _azure_maybe_update_md5(path, metadata["Etag"], h)
         return h
     else:
         with BlobFile(path, "rb") as f:
@@ -2726,7 +2742,7 @@ def BlobFile(
                             isfile, metadata = _azure_isfile(path)
                             if not isfile:
                                 raise FileNotFoundError(f"No such file: '{path}'")
-                            remote_version = metadata["ETag"]
+                            remote_version = metadata["Etag"]
                             remote_hash = _azure_get_md5(metadata)
                         else:
                             raise Error(f"Unrecognized path: '{path}'")

@@ -885,16 +885,7 @@ def _azure_get_entries(
                 yield _entry_from_dirpath(path)
             else:
                 props = b["Properties"]
-                yield _entry_from_path_stat(
-                    path,
-                    Stat(
-                        size=int(props["Content-Length"]),
-                        mtime=_azure_parse_timestamp(props["Last-Modified"]),
-                        ctime=_azure_parse_timestamp(props["Creation-Time"]),
-                        md5=_azure_get_md5(props),
-                        version=props["Etag"],
-                    ),
-                )
+                yield _entry_from_path_stat(path, _azure_make_stat(props))
 
 
 def _google_isfile(path: str) -> Tuple[bool, Dict[str, Any]]:
@@ -1650,9 +1641,13 @@ def _google_parse_timestamp(text: str) -> float:
 
 
 def _google_make_stat(item: Mapping[str, Any]) -> Stat:
+    if "metadata" in item and "blobfile-mtime" in item["metadata"]:
+        mtime = float(item["metadata"]["blobfile-mtime"])
+    else:
+        mtime = _google_parse_timestamp(item["updated"])
     return Stat(
         size=int(item["size"]),
-        mtime=_google_parse_timestamp(item["updated"]),
+        mtime=mtime,
         ctime=_google_parse_timestamp(item["timeCreated"]),
         md5=_google_get_md5(item),
         version=item["generation"],
@@ -1666,13 +1661,19 @@ def _azure_parse_timestamp(text: str) -> float:
 
 
 def _azure_make_stat(item: Mapping[str, str]) -> Stat:
+    if "Creation-Time" in item:
+        raw_ctime = item["Creation-Time"]
+    else:
+        raw_ctime = item["x-ms-creation-time"]
+    if "x-ms-meta-blobfilemtime" in item:
+        mtime = float(item["x-ms-meta-blobfilemtime"])
+    else:
+        mtime = _azure_parse_timestamp(item["Last-Modified"])
     return Stat(
         size=int(item["Content-Length"]),
-        mtime=_azure_parse_timestamp(item["Last-Modified"]),
-        ctime=_azure_parse_timestamp(item["x-ms-creation-time"]),
-        md5=base64.b64decode(item["Content-MD5"]).hex()
-        if "Content-MD5" in item
-        else None,
+        mtime=mtime,
+        ctime=_azure_parse_timestamp(raw_ctime),
+        md5=_azure_get_md5(item),
         version=item["Etag"],
     )
 
@@ -1696,6 +1697,77 @@ def stat(path: str) -> Stat:
         if not isfile:
             raise FileNotFoundError(f"No such file: '{path}'")
         return _azure_make_stat(metadata)
+    else:
+        raise Error(f"Unrecognized path: '{path}'")
+
+
+def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
+    """
+    Set the mtime for a path, returns True on success
+
+    A version can be specified (as returned by `stat()`) to only update the mtime if the
+    version matches
+    """
+    if _is_local_path(path):
+        assert version is None
+        os.utime(path, times=(mtime, mtime))
+        return True
+    elif _is_google_path(path):
+        bucket, blob = google.split_url(path)
+        params = None
+        if version is not None:
+            params = dict(ifGenerationMatch=version)
+        req = Request(
+            url=google.build_url(
+                "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
+            ),
+            method="PATCH",
+            params=params,
+            headers={"Content-Type": "application/json"},
+            data=dict(metadata={"blobfile-mtime": str(mtime)}),
+            success_codes=(200, 404, 412),
+        )
+        resp = _execute_google_api_request(req)
+        if resp.status == 404:
+            raise FileNotFoundError(f"No such file: '{path}'")
+        return resp.status == 200
+    elif _is_azure_path(path):
+        account, container, blob = azure.split_url(path)
+        headers = {}
+        if version is not None:
+            headers["If-Match"] = version
+        req = Request(
+            url=azure.build_url(
+                account, "/{container}/{blob}", container=container, blob=blob
+            ),
+            method="HEAD",
+            params=dict(comp="metadata"),
+            headers=headers,
+            success_codes=(200, 404, 412),
+        )
+        resp = _execute_azure_api_request(req)
+        if resp.status == 404:
+            raise FileNotFoundError(f"No such file: '{path}'")
+        if resp.status == 412:
+            return False
+
+        headers = {k: v for k, v in resp.headers.items() if k.startswith("x-ms-meta-")}
+        headers["x-ms-meta-blobfilemtime"] = str(mtime)
+        if version is not None:
+            headers["If-Match"] = version
+        req = Request(
+            url=azure.build_url(
+                account, "/{container}/{blob}", container=container, blob=blob
+            ),
+            method="PUT",
+            params=dict(comp="metadata"),
+            headers=headers,
+            success_codes=(200, 404, 412),
+        )
+        resp = _execute_azure_api_request(req)
+        if resp.status == 404:
+            raise FileNotFoundError(f"No such file: '{path}'")
+        return resp.status == 200
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -2001,7 +2073,37 @@ def _block_md5(f: BinaryIO) -> bytes:
 
 def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> bool:
     account, container, blob = azure.split_url(path)
-    digest = binascii.unhexlify(hexdigest)
+    req = Request(
+        url=azure.build_url(
+            account, "/{container}/{blob}", container=container, blob=blob
+        ),
+        method="HEAD",
+        headers={"If-Match": etag},
+        success_codes=(200, 404, 412),
+    )
+    resp = _execute_azure_api_request(req)
+    if resp.status in (404, 412):
+        return False
+
+    # these will be cleared if not provided, there does not appear to be a PATCH method like for GCS
+    # https://docs.microsoft.com/en-us/rest/api/storageservices/set-blob-properties#remarks
+    property_names = {
+        "Cache-Control": "x-ms-blob-cache-control",
+        "Content-Type": "x-ms-blob-content-type",
+        # "Content-MD5": "x-ms-blob-content-md5",
+        "Content-Encoding": "x-ms-blob-content-encoding",
+        "Content-Language": "x-ms-blob-content-language",
+        "Content-Disposition": "x-ms-blob-content-disposition",
+    }
+    properties = {
+        "x-ms-blob-content-md5": base64.b64encode(binascii.unhexlify(hexdigest)).decode(
+            "utf8"
+        )
+    }
+    for src, dst in property_names.items():
+        if src in resp.headers:
+            properties[dst] = resp.headers[src]
+
     req = Request(
         url=azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
@@ -2009,7 +2111,7 @@ def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> bool:
         method="PUT",
         params=dict(comp="properties"),
         headers={
-            "x-ms-blob-content-md5": base64.b64encode(digest).decode("utf8"),
+            **properties,
             # https://docs.microsoft.com/en-us/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations
             "If-Match": etag,
         },
@@ -2048,7 +2150,7 @@ def _google_get_md5(metadata: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
-def _azure_get_md5(metadata: Dict[str, Any]) -> Optional[str]:
+def _azure_get_md5(metadata: Mapping[str, Any]) -> Optional[str]:
     if "Content-MD5" in metadata:
         b64_encoded = metadata["Content-MD5"]
         if b64_encoded is None:

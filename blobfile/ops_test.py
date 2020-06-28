@@ -374,6 +374,20 @@ def test_stat(ctx):
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
+def test_set_mtime(ctx):
+    contents = b"meow!"
+    with ctx() as path:
+        _write_contents(path, contents)
+        s = bf.stat(path)
+        assert 0 <= abs(time.time() - s.mtime) <= 5
+        new_mtime = 1
+        assert bf.set_mtime(path, new_mtime)
+        assert bf.stat(path).mtime == new_mtime
+
+
+@pytest.mark.parametrize(
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+)
 def test_remove(ctx):
     contents = b"meow!"
     with ctx() as path:

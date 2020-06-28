@@ -2,6 +2,7 @@
 
 ## 0.17.0
 
+* Added `md5` to stat object, which will be the md5 hexdigest if present on a remote file
 * Improved error descriptions
 * Require keyword arguments to `configure()`
 * Log all request failures by default rather than just errors after the first one, can now be set with the `retry_log_threshold` argument to `configure()`

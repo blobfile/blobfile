@@ -2243,7 +2243,6 @@ class _AzureStreamingReadFile(_StreamingReadFile):
     def _get_file(
         self, offset: int
     ) -> Tuple[urllib3.response.HTTPResponse, Optional[_RangeError]]:
-        print("get_file")
         account, container, blob = azure.split_url(self._path)
         req = Request(
             url=azure.build_url(
@@ -2382,6 +2381,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         self._url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
         )
+        # this will ensure that multiple concurrent writers to a blob do not overwrite each other
         self._upload_id = random.randint(0, 2 ** 47 - 1)
         self._block_index = 0
         # check to see if there is an existing blob at this location
@@ -2395,8 +2395,13 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             # if the existing blob type is not compatible with the block blob we are about to write
             # we have to delete the file before writing our block blob or else we will get a 409
             # error when putting the first block
-            # if there's already an existing block blob there, delete it in case it has uncommitted
-            # blocks that could prevent us from uploading the new blob
+            # if the existing blob is compatible, then in the event of multiple concurrent writers
+            # we run the risk of ending up with uncommitted blocks, which could hit the uncommitted
+            # block limit.  rather than deal with that, just remove the file before writing which
+            # will clear all uncommitted blocks
+            # we could have a more elaborate upload system that does a write, then a copy, then a delete
+            # but it's not obvious how to ensure that the temporary file is deleted without creating
+            # a lifecycle rule on each container
             remove(path)
         elif resp.status in (400, INVALID_HOSTNAME_STATUS) or (
             resp.status == 404
@@ -2439,7 +2444,9 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             _execute_azure_api_request(req)
             self._block_index += 1
             if self._block_index >= AZURE_BLOCK_COUNT_LIMIT:
-                raise Error(f"Exceeded block count limit of {AZURE_BLOCK_COUNT_LIMIT} for Azure Storage.  Increase `azure_write_chunk_size` so that {AZURE_BLOCK_COUNT_LIMIT} * `azure_write_chunk_size` exceeds the size of the file you are writing.")
+                raise Error(
+                    f"Exceeded block count limit of {AZURE_BLOCK_COUNT_LIMIT} for Azure Storage.  Increase `azure_write_chunk_size` so that {AZURE_BLOCK_COUNT_LIMIT} * `azure_write_chunk_size` exceeds the size of the file you are writing."
+                )
 
             start += _azure_write_chunk_size
 
@@ -2475,7 +2482,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                     # this could be interpreted as a sort of RestartableStreamingWriteFailure but
                     # that could result in two processes fighting while uploading the file
                     raise ConcurrentWriteFailure(
-                        "Invalid block list, most likely a concurrent writer wrote to the same path: `{self._url}`",
+                        f"Invalid block list, most likely a concurrent writer wrote to the same path: `{self._url}`",
                         request=req,
                         response=resp,
                     )

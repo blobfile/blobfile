@@ -1,7 +1,9 @@
+import json
 import urllib
-import urllib3
-
 from typing import Mapping, Optional, Any, Sequence
+
+import urllib3
+import xmltodict
 
 
 class Request:
@@ -45,6 +47,22 @@ class Error(Exception):
         super().__init__(message)
 
 
+def _extract_error_description(data: bytes) -> Optional[str]:
+    if data.startswith(b"\xef\xbb\xbf<?xml"):
+        try:
+            result = xmltodict.parse(data)
+            return result["Error"]["Code"]
+        except Exception:
+            pass
+    elif data.startswith(b"{"):
+        try:
+            result = json.loads(data)
+            return str(result["error"])
+        except Exception:
+            pass
+    return None
+
+
 class RequestFailure(Error):
     """
     A request failed, possibly after some number of retries
@@ -54,8 +72,12 @@ class RequestFailure(Error):
         self.message = message
         self.request = request
         self.response = response
+        if self.response.data is not None:
+            err_desc = _extract_error_description(self.response.data)
+        else:
+            err_desc = None
         super().__init__(
-            f"message={self.message}, request={self.request}, response={self.response}"
+            f"message={self.message}, request={self.request}, response={self.response}, status={self.response.status}, error_description={err_desc}"
         )
 
 

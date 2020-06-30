@@ -2,6 +2,7 @@
 
 ## 0.17.0
 
+* Make service principals fall back to storage account keys
 * Added `set_mtime` function to set the modified time for an object
 * Added `md5` to stat object, which will be the md5 hexdigest if present on a remote file.  Also add `version` which, for remote objects, represents some unique id that is changed when the file is changed.
 * Improved error descriptions

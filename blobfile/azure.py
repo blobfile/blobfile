@@ -43,7 +43,7 @@ def load_credentials() -> Mapping[str, str]:
             password=os.environ["AZURE_CLIENT_SECRET"],
             tenant=os.environ["AZURE_TENANT_ID"],
         )
-        
+
     if "AZURE_STORAGE_CONNECTION_STRING" in os.environ:
         connection_data = {}
         # technically this should be parsed according to the rules in https://www.connectionstrings.com/formating-rules-for-connection-strings/

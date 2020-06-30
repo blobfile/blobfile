@@ -318,14 +318,20 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
 
 
 def _azure_can_access_account(account: str, auth: Tuple[str, str]) -> bool:
-    def build_req() -> Request:
-        req = Request(
-            method="GET",
-            url=f"https://{account}.blob.core.windows.net/",
-            params={"restype": "service", "comp": "properties"},
-            success_codes=(200, 403, INVALID_HOSTNAME_STATUS),
-        )
-        return azure.make_api_request(req, auth=auth)
+    if auth[0] == azure.SHARED_KEY:
+        def build_req() -> Request:
+            req = Request(
+                method="GET",
+                url=f"https://{account}.blob.core.windows.net/",
+                params={"restype": "service", "comp": "properties"},
+                success_codes=(200, 403, INVALID_HOSTNAME_STATUS),
+            )
+            return azure.make_api_request(req, auth=auth)
+    else:
+        assert auth[0] == azure.OAUTH_TOKEN
+        def build_req() -> Request:
+            req = azure.create_user_delegation_sas_request(account=account)
+            return azure.make_api_request(req, auth=auth)
 
     resp = _execute_request(build_req)
     # technically INVALID_HOSTNAME_STATUS means we can't access the account because it
@@ -334,7 +340,9 @@ def _azure_can_access_account(account: str, auth: Tuple[str, str]) -> bool:
     return resp.status in (200, INVALID_HOSTNAME_STATUS)
 
 
-def _azure_get_storage_account_key(account: str, creds: Mapping[str, str]) -> Optional[Tuple[Any, float]]:
+def _azure_get_storage_account_key(
+    account: str, creds: Mapping[str, str]
+) -> Optional[Tuple[Any, float]]:
     # get an access token for the management service
     def build_req() -> Request:
         return azure.create_access_token_request(
@@ -344,7 +352,7 @@ def _azure_get_storage_account_key(account: str, creds: Mapping[str, str]) -> Op
     resp = _execute_request(build_req)
     result = json.loads(resp.data)
     auth = (azure.OAUTH_TOKEN, result["access_token"])
-    
+
     # get a list of subscriptions so we can query each one for storage accounts
     def build_req() -> Request:
         req = Request(
@@ -457,7 +465,9 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
             return (auth, now + float(result["expires_in"]))
 
         # it didn't work, fall back to getting the storage keys
-        storage_account_key_auth = _azure_get_storage_account_key(account=account, creds=creds)
+        storage_account_key_auth = _azure_get_storage_account_key(
+            account=account, creds=creds
+        )
         if storage_account_key_auth is not None:
             return (storage_account_key_auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
 
@@ -468,7 +478,9 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
         # we have a service principal, get an oauth token
         def build_req() -> Request:
             return azure.create_access_token_request(
-                creds=creds, scope="https://storage.azure.com/"
+                creds=creds,
+                # scope="https://storage.azure.com/",
+                scope=f"https://{account}.blob.core.windows.net/",
             )
 
         resp = _execute_request(build_req)
@@ -477,7 +489,9 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
         if _azure_can_access_account(account, auth):
             return (auth, now + float(result["expires_in"]))
 
-        storage_account_key_auth = _azure_get_storage_account_key(account=account, creds=creds)
+        storage_account_key_auth = _azure_get_storage_account_key(
+            account=account, creds=creds
+        )
         if storage_account_key_auth is not None:
             return (storage_account_key_auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
         raise Error(

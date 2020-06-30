@@ -19,13 +19,14 @@ OAUTH_TOKEN = "oauth_token"
 
 
 def load_credentials() -> Mapping[str, str]:
-    # this seems to be the environment variable mentioned by the az cli
-    if "AZURE_STORAGE_KEY" in os.environ:
-        return dict(storageAccountKey=os.environ["AZURE_STORAGE_KEY"])
-
-    # this environment variable is mentioned elsewhere on the internet
-    if "AZURE_STORAGE_ACCOUNT_KEY" in os.environ:
-        return dict(storageAccountKey=os.environ["AZURE_STORAGE_ACCOUNT_KEY"])
+    # AZURE_STORAGE_KEY seems to be the environment variable mentioned by the az cli
+    # AZURE_STORAGE_ACCOUNT_KEY is mentioned elsewhere on the internet
+    for varname in ["AZURE_STORAGE_KEY", "AZURE_STORAGE_ACCOUNT_KEY"]:
+        if varname in os.environ:
+            result = dict(storageAccountKey=os.environ[varname])
+            if "AZURE_STORAGE_ACCOUNT" in os.environ:
+                result["account"] = os.environ["AZURE_STORAGE_ACCOUNT"]
+            return result
 
     if "AZURE_APPLICATION_CREDENTIALS" in os.environ:
         creds_path = os.environ["AZURE_APPLICATION_CREDENTIALS"]
@@ -42,7 +43,7 @@ def load_credentials() -> Mapping[str, str]:
             password=os.environ["AZURE_CLIENT_SECRET"],
             tenant=os.environ["AZURE_TENANT_ID"],
         )
-
+        
     if "AZURE_STORAGE_CONNECTION_STRING" in os.environ:
         connection_data = {}
         # technically this should be parsed according to the rules in https://www.connectionstrings.com/formating-rules-for-connection-strings/

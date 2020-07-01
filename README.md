@@ -62,7 +62,7 @@ There are a few bonus functions:
     * `log_callback=_default_log_fn`: a log callback function `log(msg: string)` to use instead of printing to stdout
     * `connection_pool_max_size=32`: the max size for each per-host connection pool
     * `max_connection_pool_count=10`: the maximum count of per-host connection pools
-    * `azure_write_chunk_size=4 * 2 ** 20`: the size of blocks to write to Azure Storage blobs, can be set to a maximum of 100MB
+    * `azure_write_chunk_size=4 * 2 ** 20`: the size of blocks to write to Azure Storage blobs, can be set to a maximum of 100MB.  This determines both the unit of request retries as well as the maximum file size, which is `50,000 * azure_write_chunk_size`.
     * `retry_log_threshold=0`: set a retry count threshold above which to log failures to the log callback function
 
 ## Authentication

@@ -116,6 +116,12 @@ Azure Blobs URLs have the format `https://<account>.blob.core.windows.net/<conta
 * `ConcurrentWriteFailure(RequestFailure)` - a write failed because another process was writing to the same file at the same time.
 * The following generic exceptions are raised from some functions to make the behavior similar to the original versions: `FileNotFoundError`, `FileExistsError`, `IsADirectoryError`, `NotADirectoryError`, `OSError`, `ValueError`, `io.UnsupportedOperation`
 
+### Concurrent Writers
+
+Google Cloud Storage supports multiple writers for the same blob and the last one to finish should win.  However, in the event of a large number of simultaneous writers, the service will return 503 errors and most writers will stall.  In this case, write to different blobs instead.
+
+Azure Blobs doesn't support multiple writers for the same blob.  The last writer to start writing will win with the way `BlobFile` is currently configured, and other writers will get a `ConcurrentWriteFailure`.  In addition, all writers could fail if the file size is large.  In this case, you can write to a temporary blob (with a random filename), copy it to the final location, and then delete the original.  The copy will be within a container so should be fast.
+
 ## Logging
 
  `blobfile` will keep retrying transient errors until they succeed or a permanent error is encountered (which will raise an exception).  In order to make diagnosing stalls easier, `blobfile` will log when retrying requests.

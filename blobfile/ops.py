@@ -67,7 +67,7 @@ from blobfile.common import (
 BLOBFILE_BACKENDS_ENV_VAR = "BLOBFILE_BACKENDS"
 BACKOFF_INITIAL = 0.1
 BACKOFF_MAX = 60.0
-BACKOFF_JITTER = 0.1
+BACKOFF_JITTER_FRACTION = 0.5
 EARLY_EXPIRATION_SECONDS = 5 * 60
 DEFAULT_CONNECTION_POOL_MAX_SIZE = 32
 DEFAULT_MAX_CONNECTION_POOL_COUNT = 10
@@ -539,12 +539,14 @@ global_azure_sas_token_manager = TokenManager(_azure_get_sas_token)
 def _exponential_sleep_generator(
     initial: float, maximum: float, multiplier: float = 2
 ) -> Iterator[float]:
-    value = initial
+    base = initial
     while True:
-        yield value + random.random() * BACKOFF_JITTER
-        value *= multiplier
-        if value > maximum:
-            value = maximum
+        # https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
+        sleep = base * (1 - BACKOFF_JITTER_FRACTION) + base * random.random() * BACKOFF_JITTER_FRACTION
+        yield sleep
+        base *= multiplier
+        if base > maximum:
+            base = maximum
 
 
 def _execute_azure_api_request(req: Request) -> urllib3.HTTPResponse:

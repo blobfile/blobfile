@@ -318,26 +318,43 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
 
 
 def _azure_can_access_account(account: str, auth: Tuple[str, str]) -> bool:
-    if auth[0] == azure.SHARED_KEY:
-        def build_req() -> Request:
-            req = Request(
-                method="GET",
-                url=f"https://{account}.blob.core.windows.net/",
-                params={"restype": "service", "comp": "properties"},
-                success_codes=(200, 403, INVALID_HOSTNAME_STATUS),
-            )
-            return azure.make_api_request(req, auth=auth)
-    else:
-        assert auth[0] == azure.OAUTH_TOKEN
-        def build_req() -> Request:
-            req = azure.create_user_delegation_sas_request(account=account)
-            return azure.make_api_request(req, auth=auth)
+    def build_req() -> Request:
+        req = Request(
+            method="GET",
+            url=azure.build_url(account, ""),
+            params={"comp": "list", "maxresults": "1"},
+            success_codes=(200, 403, INVALID_HOSTNAME_STATUS),
+        )
+        return azure.make_api_request(req, auth=auth)
 
     resp = _execute_request(build_req)
+    if resp.status == 403:
+        return False
     # technically INVALID_HOSTNAME_STATUS means we can't access the account because it
     # doesn't exist, but to be consistent with how we treat this error elsewhere we
     # ignore it here
-    return resp.status in (200, INVALID_HOSTNAME_STATUS)
+    if resp.status == INVALID_HOSTNAME_STATUS:
+        return True
+
+    out = xmltodict.parse(resp.data)
+    if out["EnumerationResults"]["Containers"] is None:
+        # there are no containers in this storage account
+        # we can't test if we can access this storage account or not, so presume we can
+        return True
+    container = out["EnumerationResults"]["Containers"]["Container"]["Name"]
+
+    	# https://myaccount.blob.core.windows.net/mycontainer?restype=container&comp=list
+    def build_req() -> Request:
+        req = Request(
+            method="GET",
+            url=azure.build_url(account, "/{container}", container=container),
+            params={"restype": "container", "comp": "list", "maxresults": "1"},
+            success_codes=(200, 403),
+        )
+        return azure.make_api_request(req, auth=auth)
+
+    resp = _execute_request(build_req)
+    return resp.status == 200
 
 
 def _azure_get_storage_account_key(
@@ -479,8 +496,7 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
         def build_req() -> Request:
             return azure.create_access_token_request(
                 creds=creds,
-                # scope="https://storage.azure.com/",
-                scope=f"https://{account}.blob.core.windows.net/",
+                scope="https://storage.azure.com/",
             )
 
         resp = _execute_request(build_req)

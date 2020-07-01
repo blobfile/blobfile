@@ -77,7 +77,7 @@ class RequestFailure(Error):
         else:
             err_desc = None
         super().__init__(
-            f"message={self.message}, request={self.request}, response={self.response}, status={self.response.status}, error_description={err_desc}"
+            f"message={self.message}, request={self.request}, status={self.response.status}, error_description={err_desc}"
         )
 
 

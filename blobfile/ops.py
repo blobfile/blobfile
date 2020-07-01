@@ -134,6 +134,7 @@ _max_connection_pool_count = DEFAULT_MAX_CONNECTION_POOL_COUNT
 # max 100MB https://docs.microsoft.com/en-us/rest/api/storageservices/put-block#remarks
 _azure_write_chunk_size = DEFAULT_AZURE_WRITE_CHUNK_SIZE
 _retry_log_threshold = DEFAULT_RETRY_LOG_THRESHOLD
+_retry_limit = None
 
 
 def _default_log_fn(msg: str) -> None:
@@ -217,6 +218,7 @@ def configure(
     max_connection_pool_count: int = DEFAULT_MAX_CONNECTION_POOL_COUNT,
     azure_write_chunk_size: int = DEFAULT_AZURE_WRITE_CHUNK_SIZE,
     retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
+    retry_limit: Optional[int] = None,
 ) -> None:
     """
     log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout
@@ -227,7 +229,7 @@ def configure(
     """
     global _log_callback
     _log_callback = log_callback
-    global _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size, _retry_log_threshold
+    global _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size, _retry_log_threshold, _retry_limit
     with _http_lock:
         _http = None
         _http_pid = None
@@ -235,6 +237,7 @@ def configure(
         _max_connection_pool_count = max_connection_pool_count
         _azure_write_chunk_size = azure_write_chunk_size
         _retry_log_threshold = retry_log_threshold
+        _retry_limit = retry_limit
 
 
 class TokenManager:
@@ -343,7 +346,7 @@ def _azure_can_access_account(account: str, auth: Tuple[str, str]) -> bool:
         return True
     container = out["EnumerationResults"]["Containers"]["Container"]["Name"]
 
-    	# https://myaccount.blob.core.windows.net/mycontainer?restype=container&comp=list
+    # https://myaccount.blob.core.windows.net/mycontainer?restype=container&comp=list
     def build_req() -> Request:
         req = Request(
             method="GET",
@@ -495,8 +498,7 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
         # we have a service principal, get an oauth token
         def build_req() -> Request:
             return azure.create_access_token_request(
-                creds=creds,
-                scope="https://storage.azure.com/",
+                creds=creds, scope="https://storage.azure.com/"
             )
 
         resp = _execute_request(build_req)
@@ -542,7 +544,10 @@ def _exponential_sleep_generator(
     base = initial
     while True:
         # https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
-        sleep = base * (1 - BACKOFF_JITTER_FRACTION) + base * random.random() * BACKOFF_JITTER_FRACTION
+        sleep = (
+            base * (1 - BACKOFF_JITTER_FRACTION)
+            + base * random.random() * BACKOFF_JITTER_FRACTION
+        )
         yield sleep
         base *= multiplier
         if base > maximum:
@@ -592,16 +597,16 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
                 retries=False,
                 redirect=False,
             )
-            if resp.status in req.retry_codes:
-                err = f"request failed with status {resp.status}"
-            elif resp.status in req.success_codes:
+            if resp.status in req.success_codes:
                 return resp
             else:
-                raise RequestFailure(
+                err = RequestFailure(
                     message=f"unexpected status {resp.status}",
                     request=req,
                     response=resp,
                 )
+                if resp.status not in req.retry_codes:
+                    raise err
         except (
             urllib3.exceptions.ConnectTimeoutError,
             urllib3.exceptions.ReadTimeoutError,
@@ -618,34 +623,41 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
             # https://github.com/urllib3/urllib3/issues/1764
             ssl.SSLError,
         ) as e:
-            err = e
-
-        if isinstance(err, urllib3.exceptions.NewConnectionError):
-            # azure accounts have unique urls and it's hard to tell apart
-            # an invalid hostname from a network error
-            url = urllib.parse.urlparse(req.url)
-            assert url.hostname is not None
-            if (
-                url.hostname.endswith(".blob.core.windows.net")
-                and _check_hostname(url.hostname) == HOSTNAME_DOES_NOT_EXIST
-            ):
-                # in order to handle the azure failures in some sort-of-reasonable way
-                # create a fake response that has a special status code we can
-                # handle just like a 404
-                fake_resp = urllib3.response.HTTPResponse(
-                    status=INVALID_HOSTNAME_STATUS,
-                    body=io.BytesIO(b""),  # avoid error when using "with resp:"
-                )
-                if fake_resp.status in req.success_codes:
-                    return fake_resp
-                else:
-                    raise RequestFailure(
-                        "host does not exist", request=req, response=fake_resp
+            if isinstance(e, urllib3.exceptions.NewConnectionError):
+                # azure accounts have unique urls and it's hard to tell apart
+                # an invalid hostname from a network error
+                url = urllib.parse.urlparse(req.url)
+                assert url.hostname is not None
+                if (
+                    url.hostname.endswith(".blob.core.windows.net")
+                    and _check_hostname(url.hostname) == HOSTNAME_DOES_NOT_EXIST
+                ):
+                    # in order to handle the azure failures in some sort-of-reasonable way
+                    # create a fake response that has a special status code we can
+                    # handle just like a 404
+                    fake_resp = urllib3.response.HTTPResponse(
+                        status=INVALID_HOSTNAME_STATUS,
+                        body=io.BytesIO(b""),  # avoid error when using "with resp:"
                     )
+                    if fake_resp.status in req.success_codes:
+                        return fake_resp
+                    else:
+                        raise RequestFailure(
+                            "host does not exist", request=req, response=fake_resp
+                        )
+
+            err = RequestFailure(
+                message=f"request failed with exception {e}",
+                request=req,
+                response=urllib3.response.HTTPResponse(status=0, body=io.BytesIO(b"")),
+            )
+
+        if _retry_limit is not None and attempt >= _retry_limit:
+            raise err
 
         if attempt >= _retry_log_threshold:
             _log_callback(
-                f"error {err} when executing http request {req}, sleeping for {backoff:.1f} seconds before retrying"
+                f"error {err} when executing http request {req} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
             )
         time.sleep(backoff)
     assert False, "unreachable"
@@ -829,15 +841,18 @@ def copy(
                     return m.hexdigest()
                 else:
                     return
-        except RestartableStreamingWriteFailure as e:
+        except RestartableStreamingWriteFailure as err:
             # currently this is the only type of failure we retry, since we can re-read the source
             # stream from the beginning
             # if this failure occurs, the upload must be restarted from the beginning
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
             # https://github.com/googleapis/gcs-resumable-upload/issues/15#issuecomment-249324122
+            if _retry_limit is not None and attempt >= _retry_limit:
+                raise
+
             if attempt >= _retry_log_threshold:
                 _log_callback(
-                    f"error {e} when executing a resumable upload to {dst}, sleeping for {backoff:.1f} seconds before retrying"
+                    f"error {err} when executing a streaming write to {dst} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
                 )
             time.sleep(backoff)
 
@@ -2331,7 +2346,9 @@ class _StreamingReadFile(io.RawIOBase):
                     # assume that the connection has died
                     # if the file was truncated, we'll try to open it again and end up
                     # returning a RangeError to exit out of this loop
-                    err = "failed to read from connection"
+                    err = Error(
+                        f"failed to read from connection while reading file at {self._path}"
+                    )
                 else:
                     # only break out if we successfully read at least one byte
                     break
@@ -2341,16 +2358,20 @@ class _StreamingReadFile(io.RawIOBase):
                 urllib3.exceptions.SSLError,
                 ssl.SSLError,
             ) as e:
-                err = e
+                err = Error(f"exception {e} while reading file at {self._path}")
             # assume that the connection has died or is in an unusable state
             # we don't want to put a broken connection back in the pool
             # so don't call self._f.release_conn()
             self._f.close()
             self._f = None
             self.failures += 1
+
+            if _retry_limit is not None and attempt >= _retry_limit:
+                raise err
+
             if attempt >= _retry_log_threshold:
                 _log_callback(
-                    f"error {err} when executing readinto({len(b)}) at offset {self._offset} on file {self._path}, sleeping for {backoff:.1f} seconds before retrying"
+                    f"error {err} when executing readinto({len(b)}) at offset {self._offset} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
                 )
             time.sleep(backoff)
 

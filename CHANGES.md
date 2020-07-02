@@ -2,13 +2,13 @@
 
 ## 0.17.0
 
+* Log all request failures by default rather than just errors after the first one, can now be set with the `retry_log_threshold` argument to `configure()`.  To get the previous behavior, use `bf.configure(retry_log_threshold=1)`
 * Use block blobs instead of append blobs in Azure Storage, the block size can be set via the `azure_write_chunk_size` option to `configure()`.  Writing a block blob will delete any existing file before starting the writing process and writing may raise a `ConcurrentWriteFailure` in the event of multiple processes writing to the same file at the same time.  If this happens, either avoid writing concurrently to the same file, or retry after some period.
 * Make service principals fall back to storage account keys and improve detection of when to fall back
 * Added `set_mtime` function to set the modified time for an object
 * Added `md5` to stat object, which will be the md5 hexdigest if present on a remote file.  Also add `version` which, for remote objects, represents some unique id that is changed when the file is changed.
 * Improved error descriptions
 * Require keyword arguments to `configure()`
-* Log all request failures by default rather than just errors after the first one, can now be set with the `retry_log_threshold` argument to `configure()`
 * Add `scanglob` which is `glob` but returnes `DirEntry` objects instead of strings
 * Add `scandir` which is `listdir` but returns `DirEntry` objects instead of strings
 * `listdir` entries for local paths are no longer returned in sorted order

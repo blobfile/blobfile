@@ -45,8 +45,8 @@ from typing import (
 
 if TYPE_CHECKING:
     # only supported in python 3.8+
-    # because this isn't used for a base class or casting, we don't need to postpone
-    # evaluation of type annotations with https://www.python.org/dev/peps/pep-0563/
+    # this works because we postponed evaluation of type annotations with PEP 563,
+    # and because we don't use Literal as a base class or for casting
     from typing import Literal
 
 

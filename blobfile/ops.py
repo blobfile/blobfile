@@ -45,8 +45,8 @@ from typing import (
 
 if TYPE_CHECKING:
     # only supported in python 3.8+
-    # because this isn't used for a base class or casting, we don't need to postpone
-    # evaluation of type annotations with https://www.python.org/dev/peps/pep-0563/
+    # this works because we postponed evaluation of type annotations with PEP 563,
+    # and because we don't use Literal as a base class or for casting
     from typing import Literal
 
 
@@ -2718,7 +2718,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
 @overload
 def BlobFile(
     path: str,
-    mode: Literal["rb"],
+    mode: Literal["rb", "wb", "ab"],
     streaming: Optional[bool] = ...,
     buffer_size: int = ...,
     cache_dir: Optional[str] = ...,
@@ -2729,51 +2729,7 @@ def BlobFile(
 @overload
 def BlobFile(
     path: str,
-    mode: Literal["wb"],
-    streaming: Optional[bool] = ...,
-    buffer_size: int = ...,
-    cache_dir: Optional[str] = ...,
-) -> BinaryIO:
-    ...
-
-
-@overload
-def BlobFile(
-    path: str,
-    mode: Literal["ab"],
-    streaming: Optional[bool] = ...,
-    buffer_size: int = ...,
-    cache_dir: Optional[str] = ...,
-) -> BinaryIO:
-    ...
-
-
-@overload
-def BlobFile(
-    path: str,
-    mode: Literal["r"],
-    streaming: Optional[bool] = ...,
-    buffer_size: int = ...,
-    cache_dir: Optional[str] = ...,
-) -> TextIO:
-    ...
-
-
-@overload
-def BlobFile(
-    path: str,
-    mode: Literal["w"],
-    streaming: Optional[bool] = ...,
-    buffer_size: int = ...,
-    cache_dir: Optional[str] = ...,
-) -> TextIO:
-    ...
-
-
-@overload
-def BlobFile(
-    path: str,
-    mode: Literal["a"],
+    mode: Literal["r", "w", "a"] = ...,
     streaming: Optional[bool] = ...,
     buffer_size: int = ...,
     cache_dir: Optional[str] = ...,
@@ -2799,7 +2755,7 @@ def BlobFile(
                 * Reading is done without downloading the entire remote file.
                 * Writing is done to the remote file directly, but only in chunks of a few MB in size.  `flush()` will not cause an early write.
                 * Appending is not implemented.
-            * `streaming=False`: 
+            * `streaming=False`:
                 * Reading is done by downloading the remote file to a local file during the constructor.
                 * Writing is done by uploading the file on `close()` or during destruction.
                 * Appending is done by downloading the file during construction and uploading on `close()`.
@@ -3025,7 +2981,7 @@ class _ProxyFile(io.FileIO):
 @overload
 def LocalBlobFile(
     path: str,
-    mode: Literal["rb"],
+    mode: Literal["rb", "wb", "ab"],
     buffer_size: int = ...,
     cache_dir: Optional[str] = ...,
 ) -> BinaryIO:
@@ -3035,47 +2991,7 @@ def LocalBlobFile(
 @overload
 def LocalBlobFile(
     path: str,
-    mode: Literal["wb"],
-    buffer_size: int = ...,
-    cache_dir: Optional[str] = ...,
-) -> BinaryIO:
-    ...
-
-
-@overload
-def LocalBlobFile(
-    path: str,
-    mode: Literal["ab"],
-    buffer_size: int = ...,
-    cache_dir: Optional[str] = ...,
-) -> BinaryIO:
-    ...
-
-
-@overload
-def LocalBlobFile(
-    path: str,
-    mode: Literal["r"],
-    buffer_size: int = ...,
-    cache_dir: Optional[str] = ...,
-) -> TextIO:
-    ...
-
-
-@overload
-def LocalBlobFile(
-    path: str,
-    mode: Literal["w"],
-    buffer_size: int = ...,
-    cache_dir: Optional[str] = ...,
-) -> TextIO:
-    ...
-
-
-@overload
-def LocalBlobFile(
-    path: str,
-    mode: Literal["a"],
+    mode: Literal["r", "w", "a"] = ...,
     buffer_size: int = ...,
     cache_dir: Optional[str] = ...,
 ) -> TextIO:

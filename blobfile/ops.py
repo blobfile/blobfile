@@ -2603,23 +2603,23 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             account, "/{container}/{blob}", container=container, blob=blob
         )
         # this will ensure that multiple concurrent writers to a blob do not overwrite each other
+        # if there are concurrent writers, all but one should fail with an error when finalizing
         self._upload_id = random.randint(0, 2 ** 47 - 1)
         self._block_index = 0
-        # check to see if there is an existing blob at this location
+        # check to see if there is an existing blob at this location with the wrong type
         req = Request(
             url=self._url,
             method="HEAD",
             success_codes=(200, 400, 404, INVALID_HOSTNAME_STATUS),
         )
         resp = _execute_azure_api_request(req)
-        if resp.status == 200:
+        if resp.status == 200 and resp.headers["x-ms-blob-type"] != "BlockBlob":
             # if the existing blob type is not compatible with the block blob we are about to write
             # we have to delete the file before writing our block blob or else we will get a 409
             # error when putting the first block
             # if the existing blob is compatible, then in the event of multiple concurrent writers
             # we run the risk of ending up with uncommitted blocks, which could hit the uncommitted
-            # block limit.  rather than deal with that, just remove the file before writing which
-            # will clear all uncommitted blocks
+            # block limit.
             # we could have a more elaborate upload system that does a write, then a copy, then a delete
             # but it's not obvious how to ensure that the temporary file is deleted without creating
             # a lifecycle rule on each container

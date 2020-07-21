@@ -19,6 +19,7 @@ OAUTH_TOKEN = "oauth_token"
 
 
 def load_credentials() -> Mapping[str, str]:
+    # https://github.com/Azure/azure-sdk-for-python/tree/master/sdk/identity/azure-identity#environment-variables
     # AZURE_STORAGE_KEY seems to be the environment variable mentioned by the az cli
     # AZURE_STORAGE_ACCOUNT_KEY is mentioned elsewhere on the internet
     for varname in ["AZURE_STORAGE_KEY", "AZURE_STORAGE_ACCOUNT_KEY"]:

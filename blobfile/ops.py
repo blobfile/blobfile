@@ -98,6 +98,15 @@ HOSTNAME_EXISTS = 0
 HOSTNAME_DOES_NOT_EXIST = 1
 HOSTNAME_STATUS_UNKNOWN = 2
 
+AZURE_RESPONSE_HEADER_TO_REQUEST_HEADER = {
+    "Cache-Control": "x-ms-blob-cache-control",
+    "Content-Type": "x-ms-blob-content-type",
+    "Content-MD5": "x-ms-blob-content-md5",
+    "Content-Encoding": "x-ms-blob-content-encoding",
+    "Content-Language": "x-ms-blob-content-language",
+    "Content-Disposition": "x-ms-blob-content-disposition",
+}
+
 ESCAPED_COLON = "___COLON___"
 
 
@@ -2159,22 +2168,13 @@ def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> bool:
 
     # these will be cleared if not provided, there does not appear to be a PATCH method like for GCS
     # https://docs.microsoft.com/en-us/rest/api/storageservices/set-blob-properties#remarks
-    property_names = {
-        "Cache-Control": "x-ms-blob-cache-control",
-        "Content-Type": "x-ms-blob-content-type",
-        # "Content-MD5": "x-ms-blob-content-md5",
-        "Content-Encoding": "x-ms-blob-content-encoding",
-        "Content-Language": "x-ms-blob-content-language",
-        "Content-Disposition": "x-ms-blob-content-disposition",
-    }
-    properties = {
-        "x-ms-blob-content-md5": base64.b64encode(binascii.unhexlify(hexdigest)).decode(
-            "utf8"
-        )
-    }
-    for src, dst in property_names.items():
+    headers: Dict[str, str] = {}
+    for src, dst in AZURE_RESPONSE_HEADER_TO_REQUEST_HEADER.items():
         if src in resp.headers:
-            properties[dst] = resp.headers[src]
+            headers[dst] = resp.headers[src]
+    headers["x-ms-blob-content-md5"] = base64.b64encode(
+        binascii.unhexlify(hexdigest)
+    ).decode("utf8")
 
     req = Request(
         url=azure.build_url(
@@ -2183,7 +2183,7 @@ def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> bool:
         method="PUT",
         params=dict(comp="properties"),
         headers={
-            **properties,
+            **headers,
             # https://docs.microsoft.com/en-us/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations
             "If-Match": etag,
         },
@@ -2596,6 +2596,41 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
                 raise
 
 
+def _clear_uncommitted_blocks(path: str, metadata: Dict[str, str]) -> None:
+    # to avoid leaking uncommitted blocks, we can do a Put Block List with
+    # all the existing blocks for a file
+    req = Request(
+        url=path, params=dict(comp="blocklist"), method="GET", success_codes=(200, 404)
+    )
+    resp = _execute_azure_api_request(req)
+    if resp.status != 200:
+        return
+
+    result = xmltodict.parse(resp.data)
+    if result["BlockList"]["CommittedBlocks"] is None:
+        return
+
+    blocks = result["BlockList"]["CommittedBlocks"]["Block"]
+    if isinstance(blocks, dict):
+        blocks = [blocks]
+
+    body = {"BlockList": {"Latest": [b["Name"] for b in blocks]}}
+    # make sure to preserve metadata for the file
+    headers: Dict[str, str] = {}
+    for src, dst in AZURE_RESPONSE_HEADER_TO_REQUEST_HEADER.items():
+        if src in metadata:
+            headers[dst] = metadata[src]
+    req = Request(
+        url=path,
+        method="PUT",
+        params=dict(comp="blocklist"),
+        headers={**headers, "If-Match": metadata["etag"]},
+        data=body,
+        success_codes=(201, 404, 412),
+    )
+    _execute_azure_api_request(req)
+
+
 class _AzureStreamingWriteFile(_StreamingWriteFile):
     def __init__(self, path: str) -> None:
         account, container, blob = azure.split_url(path)
@@ -2613,17 +2648,31 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             success_codes=(200, 400, 404, INVALID_HOSTNAME_STATUS),
         )
         resp = _execute_azure_api_request(req)
-        if resp.status == 200 and resp.headers["x-ms-blob-type"] != "BlockBlob":
-            # if the existing blob type is not compatible with the block blob we are about to write
-            # we have to delete the file before writing our block blob or else we will get a 409
-            # error when putting the first block
-            # if the existing blob is compatible, then in the event of multiple concurrent writers
-            # we run the risk of ending up with uncommitted blocks, which could hit the uncommitted
-            # block limit.
-            # we could have a more elaborate upload system that does a write, then a copy, then a delete
-            # but it's not obvious how to ensure that the temporary file is deleted without creating
-            # a lifecycle rule on each container
-            remove(path)
+        if resp.status == 200:
+            if resp.headers["x-ms-blob-type"] == "BlockBlob":
+                # if the existing blob is compatible, then in the event of multiple concurrent writers
+                # we run the risk of ending up with uncommitted blocks, which could hit the uncommitted
+                # block limit.
+                # we could have a more elaborate upload system that does a write, then a copy, then a delete
+                # but it's not obvious how to ensure that the temporary file is deleted without creating
+                # a lifecycle rule on each container
+                # instead, just delete all uncommitted blocks by doing a Put Block List
+                # this seems reasonably fast in practice, and means that if we leak
+                # uncommitted blocks, it won't really matter
+                # we could still end up hitting the uncommitted block limit with multiple
+                # concurrent writers, but multiple concurrent writers is not supported anyway
+                # so it should result in only a confusing error message, rather than ConcurrentWriteFailure
+                _clear_uncommitted_blocks(self._url, resp.headers)
+                # because we delete all the uncommitted blocks, any concurrent writers will fail
+                # but they would fail anyway since the first writer to finish would end up
+                # deleting all uncommitted blocks
+                # this means that the last writer to start is likely to win, the others should fail
+                # with ConcurrentWriteFailure
+            else:
+                # if the existing blob type is not compatible with the block blob we are about to write
+                # we have to delete the file before writing our block blob or else we will get a 409
+                # error when putting the first block
+                remove(path)
         elif resp.status in (400, INVALID_HOSTNAME_STATUS) or (
             resp.status == 404
             and resp.headers["x-ms-error-code"] == "ContainerNotFound"

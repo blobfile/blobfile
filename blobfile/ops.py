@@ -2599,6 +2599,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
 def _clear_uncommitted_blocks(path: str, metadata: Dict[str, str]) -> None:
     # to avoid leaking uncommitted blocks, we can do a Put Block List with
     # all the existing blocks for a file
+    # this will change the last-modified timestamp and the etag
     req = Request(
         url=path, params=dict(comp="blocklist"), method="GET", success_codes=(200, 404)
     )
@@ -2616,7 +2617,9 @@ def _clear_uncommitted_blocks(path: str, metadata: Dict[str, str]) -> None:
 
     body = {"BlockList": {"Latest": [b["Name"] for b in blocks]}}
     # make sure to preserve metadata for the file
-    headers: Dict[str, str] = {}
+    headers: Dict[str, str] = {
+        k: v for k, v in metadata.items() if k.startswith("x-ms-meta-")
+    }
     for src, dst in AZURE_RESPONSE_HEADER_TO_REQUEST_HEADER.items():
         if src in metadata:
             headers[dst] = metadata[src]
@@ -2637,8 +2640,79 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         self._url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
         )
-        # this will ensure that multiple concurrent writers to a blob do not overwrite each other
-        # if there are concurrent writers, all but one should fail with an error when finalizing
+        # block blobs let you upload up to 100,000 "uncommitted" blocks with user-chosen block ids
+        # using the "Put Block" call
+        # you may then call "Put Block List" with up to 50,000 block ids of the blocks you
+        # want to be in the blob (50,000 is the max blocks per blob)
+        # all unused uncommitted blocks will be deleted
+        # uncommitted blocks also expire after a week if they are not committed
+        #
+        # since we use block blobs, there are a few ways we could implement this streaming write file
+        #
+        # method 1:
+        #   upload the first chunk of the file as block id "0", the second as block id "1" etc
+        #   when we are done writing the file, we call "Put Block List" using range(num_blocks) as
+        #   the block ids
+        #
+        #   this has the advantage that if our program crashes, the same block ids will be reused
+        #   for the next upload and so we'll never get more than 50,000 uncommitted blocks
+        #
+        #   in general, azure does not seem to support concurrent writers except maybe 
+        #   for writing small files (GCS does to a limited extent through resumable upload sessions)
+        #
+        #   with method 1, if you have two writers:
+        #
+        #       writer 0: write block id "0"
+        #       writer 1: write block id "0"
+        #       writer 1: crash
+        #       writer 0: write block id "1"
+        #       writer 0: put block list ["0", "1"]
+        #
+        #   then you will end up with block "0" from writer 1 and block "1" from writer 0, which means
+        #   your file will be corrupted
+        #
+        #   this appears to be the method used by the azure python SDK
+        #
+        # method 2:
+        #   generate a random session id
+        #   upload the first chunk of the file as block id "<session id>-0",
+        #       the second block as "<session id>-1" etc
+        #   when we are done writing the file, call "Put Block List" using 
+        #       [f"<session id>-{i}" for i in range(num_blocks)] as the block list
+        #   
+        #   this has the advantage that we should not observe data corruption from concurrent writers
+        #       assuming that the session ids are unique, although whichever writer finishes first will
+        #       win, because calling "Put Block List" will delete all uncommitted blocks
+        #
+        #   this has the disadvantage that we can end up hitting the uncommitted block limit
+        #       1) with 100,000 concurrent writers, each one would write the first block, then all
+        #           would immediately hit the block limit and get 409 errors
+        #       2) with a single writer that crashes every time it writes the second block, it would
+        #           retry 100,000 times, then be unable to continue due to all the uncommitted blocks
+        #           it was generating
+        #
+        #   the workaround we use here is that whenever a file is opened for reading, we clear all
+        #       uncommitted blocks by calling "Put Block List" with the list of currently committed blocks
+        #
+        #   this seems to be reasonably fast in practice, and means that failure #2 should not be an issue
+        #
+        #   failure #1 could still happen with concurrent writers, but this should result only in a
+        #       confusing error message (409 error) instead of a ConcurrentWriteFailure, though we
+        #       could likely raise that error if we saw a 409 with the error RequestEntityTooLargeBlockCountExceedsLimit
+        #
+        #   this does change the behavior slightly, now the writer that will end up succeeding on "Put Block List"
+        #       is likely to be the last writer to open the file for writing, the others will fail
+        #       because their uncommitted blocks have been cleared
+        #
+        # it would be nice to replace this with a less odd method, but it's not obvious how
+        #   to do this on azure storage
+        #
+        # if there were upload sessions like GCS, this wouldn't be an issue
+        # if there was no uncommitted block limit, method 2 would work fine
+        # if blobs could automatically expire without having to add a container lifecycle rule
+        #   then we could upload to a temp path, then copy to the final path (assuming copy is atomic)
+        #   without automatic expiry, we'd leak temp files
+
         self._upload_id = random.randint(0, 2 ** 47 - 1)
         self._block_index = 0
         # check to see if there is an existing blob at this location with the wrong type
@@ -2650,24 +2724,12 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         resp = _execute_azure_api_request(req)
         if resp.status == 200:
             if resp.headers["x-ms-blob-type"] == "BlockBlob":
-                # if the existing blob is compatible, then in the event of multiple concurrent writers
-                # we run the risk of ending up with uncommitted blocks, which could hit the uncommitted
-                # block limit.
-                # we could have a more elaborate upload system that does a write, then a copy, then a delete
-                # but it's not obvious how to ensure that the temporary file is deleted without creating
-                # a lifecycle rule on each container
-                # instead, just delete all uncommitted blocks by doing a Put Block List
-                # this seems reasonably fast in practice, and means that if we leak
-                # uncommitted blocks, it won't really matter
-                # we could still end up hitting the uncommitted block limit with multiple
-                # concurrent writers, but multiple concurrent writers is not supported anyway
-                # so it should result in only a confusing error message, rather than ConcurrentWriteFailure
-                _clear_uncommitted_blocks(self._url, resp.headers)
                 # because we delete all the uncommitted blocks, any concurrent writers will fail
                 # but they would fail anyway since the first writer to finish would end up
                 # deleting all uncommitted blocks
                 # this means that the last writer to start is likely to win, the others should fail
                 # with ConcurrentWriteFailure
+                _clear_uncommitted_blocks(self._url, resp.headers)
             else:
                 # if the existing blob type is not compatible with the block blob we are about to write
                 # we have to delete the file before writing our block blob or else we will get a 409

@@ -385,6 +385,29 @@ def test_set_mtime(ctx):
         assert bf.stat(path).mtime == new_mtime
 
 
+@pytest.mark.parametrize("ctx", [_get_temp_as_path])
+def test_azure_metadata(ctx):
+    # make sure metadata is preserved when opening a file for writing
+    # which clears uncommitted blocks
+    contents = b"meow!"
+
+    with ctx() as path:
+        with bf.BlobFile(path, "wb") as f:
+            f.write(contents)
+
+        bf.set_mtime(path, 1)
+        _isfile, orig_metadata = ops._azure_isfile(path)
+        time.sleep(5)
+        with bf.BlobFile(path, "wb", streaming=True) as f:
+            _isfile, new_metadata = ops._azure_isfile(path)
+        keys = set(orig_metadata.keys()).union(new_metadata.keys())
+        for key in sorted(keys):
+            orig_val = orig_metadata.get(key)
+            new_val = new_metadata.get(key)
+            if key not in ["Date", "ETag", "Last-Modified", "x-ms-request-id"]:
+                assert orig_val == new_val
+
+
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )

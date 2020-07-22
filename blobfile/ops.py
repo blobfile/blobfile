@@ -2657,7 +2657,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         #   this has the advantage that if our program crashes, the same block ids will be reused
         #   for the next upload and so we'll never get more than 50,000 uncommitted blocks
         #
-        #   in general, azure does not seem to support concurrent writers except maybe 
+        #   in general, azure does not seem to support concurrent writers except maybe
         #   for writing small files (GCS does to a limited extent through resumable upload sessions)
         #
         #   with method 1, if you have two writers:
@@ -2677,9 +2677,9 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         #   generate a random session id
         #   upload the first chunk of the file as block id "<session id>-0",
         #       the second block as "<session id>-1" etc
-        #   when we are done writing the file, call "Put Block List" using 
+        #   when we are done writing the file, call "Put Block List" using
         #       [f"<session id>-{i}" for i in range(num_blocks)] as the block list
-        #   
+        #
         #   this has the advantage that we should not observe data corruption from concurrent writers
         #       assuming that the session ids are unique, although whichever writer finishes first will
         #       win, because calling "Put Block List" will delete all uncommitted blocks

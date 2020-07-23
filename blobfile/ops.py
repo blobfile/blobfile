@@ -132,9 +132,10 @@ _http_lock = threading.Lock()
 _connection_pool_max_size = DEFAULT_CONNECTION_POOL_MAX_SIZE
 _max_connection_pool_count = DEFAULT_MAX_CONNECTION_POOL_COUNT
 # https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-block-blobs
-# the chunk size determines the maximum size of an individual file for
-# append blobs, 4MB x 50,000 blocks = 195GB(?) according to the docs
+# the chunk size determines the maximum size of an individual blob for
+# block blobs, so for 4MiB, the maximum size is 4MiB x 50,000 blocks = 195GiB
 # max 100MB https://docs.microsoft.com/en-us/rest/api/storageservices/put-block#remarks
+# there is a preview version of the API that allows this to be 4000MiB
 _azure_write_chunk_size = DEFAULT_AZURE_WRITE_CHUNK_SIZE
 _retry_log_threshold = DEFAULT_RETRY_LOG_THRESHOLD
 _retry_limit = None
@@ -191,7 +192,15 @@ def _get_http_pool() -> urllib3.PoolManager:
         return _http
 
 
-# if another more options are added, this should probably be refactored
+def set_log_callback(fn: Callable[[str], None]) -> None:
+    """
+    DEPRECATED: use configure() instead
+    """
+    configure(log_callback=fn)
+
+
+# rather than a global configure object, there should probably be a context
+# object that tracks all the settings
 #
 # class Context:
 #   # class with all blobfile functions as methods
@@ -205,14 +214,6 @@ def _get_http_pool() -> urllib3.PoolManager:
 # def copy():
 #   # proxy functions for all methods on Context
 #   return _global_context.copy()
-
-
-def set_log_callback(fn: Callable[[str], None]) -> None:
-    """
-    DEPRECATED: use configure() instead
-    """
-    configure(log_callback=fn)
-
 
 def configure(
     *,
@@ -2443,7 +2444,6 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
             # likely the file was truncated while we were reading it
             # return an empty file and indicate to the caller what happened
             return urllib3.response.HTTPResponse(body=io.BytesIO()), _RangeError()
-        # we don't decode content, so this is actually a ReadableBinaryFile
         return resp, None
 
 

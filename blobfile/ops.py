@@ -2705,6 +2705,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         # if blobs could automatically expire without having to add a container lifecycle rule
         #   then we could upload to a temp path, then copy to the final path (assuming copy is atomic)
         #   without automatic expiry, we'd leak temp files
+        # we can use the lease system, but then we have to deal with leases
 
         self._upload_id = random.randint(0, 2 ** 47 - 1)
         self._block_index = 0

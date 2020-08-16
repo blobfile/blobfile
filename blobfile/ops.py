@@ -434,10 +434,9 @@ def _azure_get_storage_account_key(
                     raise Error(
                         f"Found storage account key, but it was unable to access storage account: '{account}'"
                     )
-        else:
-            raise Error(
-                f"Storage account was found, but storage account keys were missing: '{account}'"
-            )
+        raise Error(
+            f"Storage account was found, but storage account keys were missing: '{account}'"
+        )
     return None
 
 

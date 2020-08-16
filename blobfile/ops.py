@@ -109,12 +109,6 @@ class Stat(NamedTuple):
     version: Optional[str]
 
 
-class ReadStats(NamedTuple):
-    bytes_read: int
-    requests: int
-    failures: int
-
-
 class DirEntry(NamedTuple):
     path: str
     name: str

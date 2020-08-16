@@ -742,8 +742,8 @@ def copy(
     if _is_google_path(src) and _is_google_path(dst):
         srcbucket, srcname = google.split_url(src)
         dstbucket, dstname = google.split_url(dst)
+        params = {}
         while True:
-            params = {}
             req = Request(
                 url=google.build_url(
                     "/storage/v1/b/{sourceBucket}/o/{sourceObject}/rewriteTo/b/{destinationBucket}/o/{destinationObject}",

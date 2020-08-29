@@ -471,8 +471,8 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
         result = json.loads(resp.data)
         if resp.status == 400:
             if (
-                result["error"] == "invalid_grant"
-                and ("AADSTS700082" in result["error_description"] or "AADSTS50078" in result["error_description"])
+                (result["error"] == "invalid_grant"
+                and "AADSTS700082" in result["error_description"]) or (result["error"] == "interaction_required" and "AADSTS50078" in result["error_description"])
             ):
                 raise Error(
                     "Your refresh token has expired, please run `az login` to refresh it"

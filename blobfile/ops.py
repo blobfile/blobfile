@@ -215,6 +215,7 @@ def set_log_callback(fn: Callable[[str], None]) -> None:
 #   # proxy functions for all methods on Context
 #   return _global_context.copy()
 
+
 def configure(
     *,
     log_callback: Callable[[str], None] = _default_log_fn,
@@ -471,7 +472,7 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
         if resp.status == 400:
             if (
                 result["error"] == "invalid_grant"
-                and "AADSTS700082" in result["error_description"]
+                and ("AADSTS700082" in result["error_description"] or "AADSTS50078" in result["error_description"])
             ):
                 raise Error(
                     "Your refresh token has expired, please run `az login` to refresh it"

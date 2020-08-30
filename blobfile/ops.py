@@ -471,8 +471,11 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
         result = json.loads(resp.data)
         if resp.status == 400:
             if (
-                (result["error"] == "invalid_grant"
-                and "AADSTS700082" in result["error_description"]) or (result["error"] == "interaction_required" and "AADSTS50078" in result["error_description"])
+                result["error"] == "invalid_grant"
+                and "AADSTS700082" in result["error_description"]
+            ) or (
+                result["error"] == "interaction_required"
+                and "AADSTS50078" in result["error_description"]
             ):
                 raise Error(
                     "Your refresh token has expired, please run `az login` to refresh it"
@@ -604,11 +607,10 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
             if resp.status in req.success_codes:
                 return resp
             else:
-                err = RequestFailure(
-                    message=f"unexpected status {resp.status}",
-                    request=req,
-                    response=resp,
-                )
+                message = f"unexpected status {resp.status}"
+                if url.startswith(google.BASE_URL) and resp.status in (429, 503):
+                    message += ": if you are writing a blob this error may be due to multiple concurrent writers - make sure you are not writing to the same blob from multiple processes simultaneously"
+                err = RequestFailure(message=message, request=req, response=resp)
                 if resp.status not in req.retry_codes:
                     raise err
         except (

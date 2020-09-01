@@ -2939,6 +2939,17 @@ def BlobFile(
             return binary_f
         else:
             text_f = io.TextIOWrapper(binary_f, encoding="utf8")
+            # TextIOWrapper bypasses buffering on purpose: https://bugs.python.org/issue13393
+            # Example: https://gist.github.com/christopher-hesse/b4aab4f6f9bcba597d079f3363dfab2c
+            #
+            # This happens when TextIOWrapper calls f.read1(CHUNK_SIZE)
+            # https://github.com/python/cpython/blob/3d17c045b4c3d09b72bbd95ed78af1ae6f0d98d2/Modules/_io/textio.c#L1854
+            # and BufferedReader only reads the requested size, not the buffer_size
+            # https://github.com/python/cpython/blob/8666356280084f0426c28a981341f72eaaacd006/Modules/_io/bufferedio.c#L945
+            #
+            # The workaround appears to be to set the _CHUNK_SIZE property or monkey patch binary_f.read1 to call binary_f.read
+            if hasattr(text_f, "_CHUNK_SIZE"):
+                setattr(text_f, "_CHUNK_SIZE", buffer_size)
             return cast(TextIO, text_f)
     else:
         remote_path = None

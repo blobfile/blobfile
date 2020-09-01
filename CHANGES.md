@@ -2,6 +2,8 @@
 
 ## 0.17.1
 
+* Fixed GCS cloud copy for large files from @hauntsaninja
+* Added workaround for TextIOWrapper to buffer the same way when reading in text or binary mode
 * Don't clear block blobs when starting to write to them, instead clear only the uncommitted blocks.
 
 ## 0.17.0

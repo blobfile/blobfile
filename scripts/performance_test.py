@@ -16,15 +16,21 @@ def timer(name):
 
 
 def read_worker(path: str) -> None:
-    with bf.BlobFile(path, "rb") as f:
-        f.read()
+    for i in range(16):
+        with bf.BlobFile(path, "rb") as f:
+            f.read()
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--path", required=True)
+    parser.add_argument("--no-streaming-read-request", action="store_true")
+    parser.add_argument("--buffer-size", default=8192, type=int)
     parser.add_argument("--size", default=1_000_000_000, type=int)
     args = parser.parse_args()
+
+    if args.no_streaming_read_request:
+        ops.USE_STREAMING_READ_REQUEST = False
 
     path = bf.join(args.path, "large.bin")
     data = (b"meow" * 249 + b"mew\n") * (args.size // 1000)
@@ -34,19 +40,19 @@ def main():
 
     start = time.time()
     with timer("read_large_file"):
-        with bf.BlobFile(path, "rb") as f:
+        with bf.BlobFile(path, "rb", buffer_size=args.buffer_size) as f:
             f.read()
     end = time.time()
     print(f"MB/s {len(data) /1e6/(end - start)}")
 
     with timer("read_large_file_lines"):
-        with bf.BlobFile(path, "r") as f:
+        with bf.BlobFile(path, "r", buffer_size=args.buffer_size) as f:
             for _ in f:
                 pass
 
     with timer("seek_speed"):
-        with bf.BlobFile(path, "rb") as f:
-            for i in range(10_000):
+        with bf.BlobFile(path, "rb", buffer_size=args.buffer_size) as f:
+            for i in range(min(10_000, args.size)):
                 f.seek(i)
                 f.read(1)
 
@@ -68,8 +74,8 @@ def main():
 
     filepaths = list(bf.glob(f"gs://gcp-public-data-landsat/LC08/01/001/003/**/*.TIF"))
     with timer("read_small_files"):
-        for fp in filepaths:
-            with bf.BlobFile(fp, "rb") as f:
+        for fp in filepaths[:100]:
+            with bf.BlobFile(fp, "rb", buffer_size=args.buffer_size) as f:
                 f.read(1)
 
     with timer("glob"):

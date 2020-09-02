@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.2
+
+* Allow seeking past end of file
+
 ## 0.17.1
 
 * Fixed GCS cloud copy for large files from @hauntsaninja

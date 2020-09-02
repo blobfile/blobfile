@@ -63,7 +63,7 @@ from blobfile.common import (
     ConcurrentWriteFailure,
 )
 
-
+USE_STREAMING_READ_REQUEST = True
 BLOBFILE_BACKENDS_ENV_VAR = "BLOBFILE_BACKENDS"
 BACKOFF_INITIAL = 0.1
 BACKOFF_MAX = 60.0
@@ -2270,13 +2270,6 @@ def md5(path: str) -> str:
             return _block_md5(f).hex()
 
 
-class _RangeError:
-    """
-    Indicate to the caller that we attempted to read past the end of a file
-    This can happen if a file was truncated while reading
-    """
-
-
 class _StreamingReadFile(io.RawIOBase):
     def __init__(self, path: str, size: int) -> None:
         super().__init__()
@@ -2289,9 +2282,9 @@ class _StreamingReadFile(io.RawIOBase):
         self.failures = 0
         self.bytes_read = 0
 
-    def _get_file(
-        self, offset: int
-    ) -> Tuple[urllib3.response.HTTPResponse, Optional[_RangeError]]:
+    def _request_chunk(
+        self, streaming: bool, start: int, end: Optional[int] = None
+    ) -> urllib3.response.HTTPResponse:
         raise NotImplementedError
 
     def readall(self) -> bytes:
@@ -2316,62 +2309,75 @@ class _StreamingReadFile(io.RawIOBase):
     # https://bugs.python.org/issue27501
     def readinto(self, b: Any) -> Optional[int]:
         bytes_remaining = self._size - self._offset
-        if bytes_remaining == 0:
+        if bytes_remaining <= 0:
             return 0
-        assert bytes_remaining > 0, "read past expected end of file"
 
         if len(b) > bytes_remaining:
-            # if we the file was larger than we expected, don't read the extra data
+            # if we get a file that was larger than we expected, don't read the extra data
             b = b[:bytes_remaining]
 
         n = 0  # for pyright
-        for attempt, backoff in enumerate(
-            _exponential_sleep_generator(0.1, maximum=60.0)
-        ):
-            if self._f is None:
-                self._f, file_err = self._get_file(self._offset)
-                if isinstance(file_err, _RangeError):
-                    return 0
-                self.requests += 1
+        if USE_STREAMING_READ_REQUEST:
+            for attempt, backoff in enumerate(
+                _exponential_sleep_generator(0.1, maximum=60.0)
+            ):
+                if self._f is None:
+                    resp = self._request_chunk(streaming=True, start=self._offset)
+                    if resp.status == 416:
+                        # likely the file was truncated while we were reading it
+                        # return an empty string
+                        return 0
+                    self._f = resp
+                    self.requests += 1
 
-            err = None
-            try:
-                opt_n = self._f.readinto(b)
-                assert opt_n is not None, "file is in non-blocking mode"
-                n = opt_n
-                if n == 0:
-                    # assume that the connection has died
-                    # if the file was truncated, we'll try to open it again and end up
-                    # returning a RangeError to exit out of this loop
-                    err = Error(
-                        f"failed to read from connection while reading file at {self._path}"
+                err = None
+                try:
+                    opt_n = self._f.readinto(b)
+                    assert opt_n is not None, "file is in non-blocking mode"
+                    n = opt_n
+                    if n == 0:
+                        # assume that the connection has died
+                        # if the file was truncated, we'll try to open it again and end up
+                        # returning out of this loop
+                        err = Error(
+                            f"failed to read from connection while reading file at {self._path}"
+                        )
+                    else:
+                        # only break out if we successfully read at least one byte
+                        break
+                except (
+                    urllib3.exceptions.ReadTimeoutError,  # haven't seen this error here, but seems possible
+                    urllib3.exceptions.ProtocolError,
+                    urllib3.exceptions.SSLError,
+                    ssl.SSLError,
+                ) as e:
+                    err = Error(f"exception {e} while reading file at {self._path}")
+                # assume that the connection has died or is in an unusable state
+                # we don't want to put a broken connection back in the pool
+                # so don't call self._f.release_conn()
+                self._f.close()
+                self._f = None
+                self.failures += 1
+
+                if _retry_limit is not None and attempt >= _retry_limit:
+                    raise err
+
+                if attempt >= _retry_log_threshold:
+                    _log_callback(
+                        f"error {err} when executing readinto({len(b)}) at offset {self._offset} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
                     )
-                else:
-                    # only break out if we successfully read at least one byte
-                    break
-            except (
-                urllib3.exceptions.ReadTimeoutError,  # haven't seen this error here, but seems possible
-                urllib3.exceptions.ProtocolError,
-                urllib3.exceptions.SSLError,
-                ssl.SSLError,
-            ) as e:
-                err = Error(f"exception {e} while reading file at {self._path}")
-            # assume that the connection has died or is in an unusable state
-            # we don't want to put a broken connection back in the pool
-            # so don't call self._f.release_conn()
-            self._f.close()
-            self._f = None
-            self.failures += 1
-
-            if _retry_limit is not None and attempt >= _retry_limit:
-                raise err
-
-            if attempt >= _retry_log_threshold:
-                _log_callback(
-                    f"error {err} when executing readinto({len(b)}) at offset {self._offset} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
-                )
-            time.sleep(backoff)
-
+                time.sleep(backoff)
+        else:
+            resp = self._request_chunk(
+                streaming=False, start=self._offset, end=self._offset + len(b)
+            )
+            if resp.status == 416:
+                # likely the file was truncated while we were reading it
+                # return an empty string
+                return 0
+            self.requests += 1
+            n = len(resp.data)
+            b[:n] = resp.data
         self.bytes_read += n
         self._offset += n
         return n
@@ -2425,9 +2431,9 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
             raise FileNotFoundError(f"No such file or bucket: '{path}'")
         super().__init__(path, int(self._metadata["size"]))
 
-    def _get_file(
-        self, offset: int
-    ) -> Tuple[urllib3.response.HTTPResponse, Optional[_RangeError]]:
+    def _request_chunk(
+        self, streaming: bool, start: int, end: Optional[int] = None
+    ) -> urllib3.response.HTTPResponse:
         req = Request(
             url=google.build_url(
                 "/storage/v1/b/{bucket}/o/{name}",
@@ -2436,18 +2442,13 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
             ),
             method="GET",
             params=dict(alt="media"),
-            headers={"Range": _calc_range(start=offset)},
+            headers={"Range": _calc_range(start=start, end=end)},
             success_codes=(206, 416),
-            # since we are reading the entire remainder of the file, make
+            # if we are streaming the data, make
             # sure we don't preload it
-            preload_content=False,
+            preload_content=not streaming,
         )
-        resp = _execute_google_api_request(req)
-        if resp.status == 416:
-            # likely the file was truncated while we were reading it
-            # return an empty file and indicate to the caller what happened
-            return urllib3.response.HTTPResponse(body=io.BytesIO()), _RangeError()
-        return resp, None
+        return _execute_google_api_request(req)
 
 
 class _AzureStreamingReadFile(_StreamingReadFile):
@@ -2457,27 +2458,23 @@ class _AzureStreamingReadFile(_StreamingReadFile):
             raise FileNotFoundError(f"No such file or directory: '{path}'")
         super().__init__(path, int(self._metadata["Content-Length"]))
 
-    def _get_file(
-        self, offset: int
-    ) -> Tuple[urllib3.response.HTTPResponse, Optional[_RangeError]]:
+    def _request_chunk(
+        self, streaming: bool, start: int, end: Optional[int] = None
+    ) -> urllib3.response.HTTPResponse:
         account, container, blob = azure.split_url(self._path)
         req = Request(
             url=azure.build_url(
                 account, "/{container}/{blob}", container=container, blob=blob
             ),
             method="GET",
-            headers={"Range": _calc_range(start=offset)},
+            headers={"Range": _calc_range(start=start, end=end)},
             success_codes=(206, 416),
-            # since we are reading the entire remainder of the file, make
+            # if we are streaming the data, make
             # sure we don't preload it
-            preload_content=False,
+            preload_content=not streaming,
         )
         resp = _execute_azure_api_request(req)
-        if resp.status == 416:
-            # likely the file was truncated while we were reading it
-            # return an empty file and indicate to the caller what happened
-            return urllib3.response.HTTPResponse(body=io.BytesIO()), _RangeError()
-        return resp, None
+        return resp
 
 
 class _StreamingWriteFile(io.BufferedIOBase):

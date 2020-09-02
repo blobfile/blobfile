@@ -947,6 +947,8 @@ def test_read_stats(buffer_size, ctx):
             r.read(1)
             r.seek(4)
             r.read(1)
+            r.seek(1000000)
+            assert r.read(1) == b""
 
         if buffer_size == 1:
             assert r.raw.requests == 2  # type: ignore

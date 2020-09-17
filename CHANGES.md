@@ -3,6 +3,7 @@
 ## 0.17.2
 
 * Allow seeking past end of file
+* Allow anonymous access for azure containers
 
 ## 0.17.1
 

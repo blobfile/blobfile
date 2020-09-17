@@ -250,13 +250,13 @@ class TokenManager:
     Automatically refresh a token when it expires
     """
 
-    def __init__(self, get_token_fn: Callable[[str], Tuple[Any, float]]) -> None:
+    def __init__(self, get_token_fn: Callable[[Any], Tuple[Any, float]]) -> None:
         self._get_token_fn = get_token_fn
         self._tokens = {}
         self._lock = threading.Lock()
         self._expiration = None
 
-    def get_token(self, key: str) -> Any:
+    def get_token(self, key: Any) -> Any:
         with self._lock:
             now = time.time()
             if (
@@ -325,48 +325,30 @@ def _google_get_access_token(key: str) -> Tuple[Any, float]:
         raise Error(err)
 
 
-def _azure_can_access_account(account: str, auth: Tuple[str, str]) -> bool:
-    def build_req() -> Request:
-        req = Request(
-            method="GET",
-            url=azure.build_url(account, ""),
-            params={"comp": "list", "maxresults": "1"},
-            success_codes=(200, 403, INVALID_HOSTNAME_STATUS),
-        )
-        return azure.make_api_request(req, auth=auth)
-
-    resp = _execute_request(build_req)
-    if resp.status == 403:
-        return False
-    # technically INVALID_HOSTNAME_STATUS means we can't access the account because it
-    # doesn't exist, but to be consistent with how we treat this error elsewhere we
-    # ignore it here
-    if resp.status == INVALID_HOSTNAME_STATUS:
-        return True
-
-    out = xmltodict.parse(resp.data)
-    if out["EnumerationResults"]["Containers"] is None:
-        # there are no containers in this storage account
-        # we can't test if we can access this storage account or not, so presume we can
-        return True
-    container = out["EnumerationResults"]["Containers"]["Container"]["Name"]
-
+def _azure_can_access_container(
+    account: str, container: str, auth: Tuple[str, str]
+) -> bool:
     # https://myaccount.blob.core.windows.net/mycontainer?restype=container&comp=list
     def build_req() -> Request:
         req = Request(
             method="GET",
             url=azure.build_url(account, "/{container}", container=container),
             params={"restype": "container", "comp": "list", "maxresults": "1"},
-            success_codes=(200, 403),
+            success_codes=(200, 403, 404, INVALID_HOSTNAME_STATUS),
         )
         return azure.make_api_request(req, auth=auth)
 
     resp = _execute_request(build_req)
-    return resp.status == 200
+    # technically INVALID_HOSTNAME_STATUS means we can't access the account because it
+    # doesn't exist, but to be consistent with how we treat this error elsewhere we
+    # ignore it here
+    if resp.status == INVALID_HOSTNAME_STATUS:
+        return True
+    return resp.status in (200, 404)
 
 
 def _azure_get_storage_account_key(
-    account: str, creds: Mapping[str, str]
+    account: str, container: str, creds: Mapping[str, str]
 ) -> Optional[Tuple[Any, float]]:
     # get an access token for the management service
     def build_req() -> Request:
@@ -430,7 +412,7 @@ def _azure_get_storage_account_key(
         for key in result["keys"]:
             if key["permissions"] == "FULL":
                 storage_key_auth = (azure.SHARED_KEY, key["value"])
-                if _azure_can_access_account(account, storage_key_auth):
+                if _azure_can_access_container(account, container, storage_key_auth):
                     return storage_key_auth
                 else:
                     raise Error(
@@ -442,7 +424,8 @@ def _azure_get_storage_account_key(
     return None
 
 
-def _azure_get_access_token(account: str) -> Tuple[Any, float]:
+def _azure_get_access_token(key: Any) -> Tuple[Any, float]:
+    account, container = key
     now = time.time()
     creds = azure.load_credentials()
     if "storageAccountKey" in creds:
@@ -452,7 +435,7 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
                     f"Found credentials for account '{creds['account']}' but needed credentials for account '{account}'"
                 )
         auth = (azure.SHARED_KEY, creds["storageAccountKey"])
-        if _azure_can_access_account(account, auth):
+        if _azure_can_access_container(account, container, auth):
             return (auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
         else:
             raise Error(
@@ -488,19 +471,8 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
         auth = (azure.OAUTH_TOKEN, result["access_token"])
 
         # for some azure accounts this access token does not work, check if it works
-        if _azure_can_access_account(account, auth):
+        if _azure_can_access_container(account, container, auth):
             return (auth, now + float(result["expires_in"]))
-
-        # it didn't work, fall back to getting the storage keys
-        storage_account_key_auth = _azure_get_storage_account_key(
-            account=account, creds=creds
-        )
-        if storage_account_key_auth is not None:
-            return (storage_account_key_auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
-
-        raise Error(
-            f"Could not find any credentials that grant access to storage account: '{account}'"
-        )
     else:
         # we have a service principal, get an oauth token
         def build_req() -> Request:
@@ -511,23 +483,32 @@ def _azure_get_access_token(account: str) -> Tuple[Any, float]:
         resp = _execute_request(build_req)
         result = json.loads(resp.data)
         auth = (azure.OAUTH_TOKEN, result["access_token"])
-        if _azure_can_access_account(account, auth):
+        if _azure_can_access_container(account, container, auth):
             return (auth, now + float(result["expires_in"]))
 
-        storage_account_key_auth = _azure_get_storage_account_key(
-            account=account, creds=creds
-        )
-        if storage_account_key_auth is not None:
-            return (storage_account_key_auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
-        raise Error(
-            f"Could not find any credentials that grant access to storage account: '{account}'"
-        )
+    # the above didn't work, fall back to getting the storage keys
+    storage_account_key_auth = _azure_get_storage_account_key(
+        account=account, container=container, creds=creds
+    )
+    if storage_account_key_auth is not None:
+        return (storage_account_key_auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
+
+    # well that didn't work either, try accessing the container as an anonymous user
+    anonymous_auth = (azure.ANONYMOUS, "")
+    if _azure_can_access_container(account, container, anonymous_auth):
+        return (anonymous_auth, float("inf"))
+
+    raise Error(
+        f"Could not find any credentials that grant access to storage account: '{account}' and container: '{container}'"
+    )
 
 
-def _azure_get_sas_token(account: str) -> Tuple[Any, float]:
+def _azure_get_sas_token(key: Any) -> Tuple[Any, float]:
+    account, _ = key
+
     def build_req() -> Request:
         req = azure.create_user_delegation_sas_request(account=account)
-        auth = global_azure_access_token_manager.get_token(key=account)
+        auth = global_azure_access_token_manager.get_token(key=key)
         if auth[0] != azure.OAUTH_TOKEN:
             raise Error("Only oauth tokens can be used to get SAS tokens")
         return azure.make_api_request(req, auth=auth)
@@ -564,10 +545,15 @@ def _exponential_sleep_generator(
 def _execute_azure_api_request(req: Request) -> urllib3.HTTPResponse:
     u = urllib.parse.urlparse(req.url)
     account = u.netloc.split(".")[0]
+    path_parts = u.path.split("/")
+    if len(path_parts) < 2:
+        raise Error("missing container from path")
+    container = u.path.split("/")[1]
 
     def build_req() -> Request:
         return azure.make_api_request(
-            req, auth=global_azure_access_token_manager.get_token(key=account)
+            req,
+            auth=global_azure_access_token_manager.get_token(key=(account, container)),
         )
 
     return _execute_request(build_req)
@@ -2131,7 +2117,7 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
         url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
         )
-        token = global_azure_sas_token_manager.get_token(key=account)
+        token = global_azure_sas_token_manager.get_token(key=(account, container))
         return azure.generate_signed_url(key=token, url=url)
     elif _is_local_path(path):
         return f"file://{path}", None

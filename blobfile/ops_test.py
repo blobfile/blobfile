@@ -17,6 +17,7 @@ import subprocess as sp
 import multiprocessing as mp
 import platform
 import base64
+import gzip
 
 import av
 import pytest
@@ -30,12 +31,15 @@ from blobfile import ops, azure
 GCS_TEST_BUCKET = "csh-test-3"
 AS_TEST_ACCOUNT = "cshteststorage2"
 AS_TEST_CONTAINER = "testcontainer2"
+AS_INVALID_ACCOUNT = f"{AS_TEST_ACCOUNT}-does-not-exist"
 
 AZURE_VALID_CONTAINER = (
     f"https://{AS_TEST_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}"
 )
 AZURE_INVALID_CONTAINER = f"https://{AS_TEST_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}-does-not-exist"
-AZURE_INVALID_ACCOUNT = f"https://{AS_TEST_ACCOUNT}-does-not-exist.blob.core.windows.net/{AS_TEST_CONTAINER}"
+AZURE_INVALID_CONTAINER_NO_ACCOUNT = (
+    f"https://{AS_INVALID_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}"
+)
 GCS_VALID_BUCKET = f"gs://{GCS_TEST_BUCKET}"
 GCS_INVALID_BUCKET = f"gs://{GCS_TEST_BUCKET}-does-not-exist"
 
@@ -840,10 +844,10 @@ def test_more_exists():
         (GCS_INVALID_BUCKET + "/", False),
         (GCS_INVALID_BUCKET + "//", False),
         (GCS_INVALID_BUCKET + "/invalid.file", False),
-        (AZURE_INVALID_ACCOUNT, False),
-        (AZURE_INVALID_ACCOUNT + "/", False),
-        (AZURE_INVALID_ACCOUNT + "//", False),
-        (AZURE_INVALID_ACCOUNT + "/invalid.file", False),
+        (AZURE_INVALID_CONTAINER_NO_ACCOUNT, False),
+        (AZURE_INVALID_CONTAINER_NO_ACCOUNT + "/", False),
+        (AZURE_INVALID_CONTAINER_NO_ACCOUNT + "//", False),
+        (AZURE_INVALID_CONTAINER_NO_ACCOUNT + "/invalid.file", False),
         (AZURE_VALID_CONTAINER, True),
         (AZURE_VALID_CONTAINER + "/", True),
         (AZURE_VALID_CONTAINER + "//", False),
@@ -860,7 +864,8 @@ def test_more_exists():
 
 
 @pytest.mark.parametrize(
-    "base_path", [AZURE_INVALID_ACCOUNT, AZURE_INVALID_CONTAINER, GCS_INVALID_BUCKET]
+    "base_path",
+    [AZURE_INVALID_CONTAINER_NO_ACCOUNT, AZURE_INVALID_CONTAINER, GCS_INVALID_BUCKET],
 )
 def test_invalid_paths(base_path):
     for suffix in ["", "/", "//", "/invalid.file", "/invalid/dir/"]:
@@ -898,7 +903,7 @@ def test_invalid_paths(base_path):
         with pytest.raises(FileNotFoundError):
             bf.stat(path)
 
-        if base_path == AZURE_INVALID_ACCOUNT:
+        if base_path == AZURE_INVALID_CONTAINER_NO_ACCOUNT:
             with pytest.raises(bf.Error):
                 bf.get_url(path)
         else:
@@ -1293,3 +1298,25 @@ def test_fork():
     child = q.get()
     assert parent1 == parent2
     assert child != parent1
+
+
+def test_azure_public_container():
+    for should_error, accountname in [
+        (
+            False,
+            "nexradsa",
+        ),  # https://azure.microsoft.com/en-us/services/open-datasets/catalog/nexrad-l2/
+        (True, "accountname"),  # an account that exists but that is not public
+        (True, AS_INVALID_ACCOUNT),  # account that does not exist
+    ]:
+        ctx = contextlib.nullcontext()
+        if should_error:
+            ctx = pytest.raises(FileNotFoundError)
+        with ctx:
+            with bf.BlobFile(
+                f"https://{accountname}.blob.core.windows.net/nexrad-l2/1997/07/07/KHPX/KHPX19970707_000827.gz",
+                "rb",
+            ) as f:
+                with gzip.open(f) as gf:
+                    contents = gf.read()
+                    assert contents.startswith(b"ARCHIVE2.122")

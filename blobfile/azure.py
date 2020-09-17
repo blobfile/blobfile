@@ -16,6 +16,7 @@ from blobfile.common import Request, Error
 
 SHARED_KEY = "shared_key"
 OAUTH_TOKEN = "oauth_token"
+ANONYMOUS = "anonymous"
 
 
 def load_credentials() -> Mapping[str, str]:
@@ -184,6 +185,8 @@ def make_api_request(req: Request, auth: Tuple[str, str]) -> Request:
         headers["Authorization"] = sign_with_shared_key(result, token)
     elif kind == OAUTH_TOKEN:
         headers["Authorization"] = f"Bearer {token}"
+    elif kind == ANONYMOUS:
+        pass
     return result
 
 

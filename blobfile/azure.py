@@ -83,13 +83,7 @@ def load_credentials() -> Mapping[str, str]:
                 token["subscriptions"] = subscriptions
                 return token
 
-    raise Error(
-        """Azure credentials not found, please do one of the following:
-
-1) Log in with 'az login', blobfile will use your default credentials to lookup your storage account key
-2) Set the environment variable 'AZURE_STORAGE_KEY' to your storage account key which you can find by following this guide: https://docs.microsoft.com/en-us/azure/storage/common/storage-account-keys-manage
-3) Create an account with 'az ad sp create-for-rbac --name <name>' and set the 'AZURE_APPLICATION_CREDENTIALS' environment variable to the path of the output from that command or individually set the 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', and 'AZURE_TENANT_ID' environment variables"""
-    )
+    return {}
 
 
 def build_url(account: str, template: str, **data: str) -> str:

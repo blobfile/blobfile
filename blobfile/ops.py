@@ -437,10 +437,6 @@ def _azure_get_access_token(key: Any) -> Tuple[Any, float]:
         auth = (azure.SHARED_KEY, creds["storageAccountKey"])
         if _azure_can_access_container(account, container, auth):
             return (auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
-        else:
-            raise Error(
-                f"Found storage account key, but it was unable to access storage account: '{account}'"
-            )
     elif "refreshToken" in creds:
         # we have a refresh token, convert it into an access token for this account
         def build_req() -> Request:
@@ -473,7 +469,14 @@ def _azure_get_access_token(key: Any) -> Tuple[Any, float]:
         # for some azure accounts this access token does not work, check if it works
         if _azure_can_access_container(account, container, auth):
             return (auth, now + float(result["expires_in"]))
-    else:
+
+        # fall back to getting the storage keys
+        storage_account_key_auth = _azure_get_storage_account_key(
+            account=account, container=container, creds=creds
+        )
+        if storage_account_key_auth is not None:
+            return (storage_account_key_auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
+    elif "appId" in creds:
         # we have a service principal, get an oauth token
         def build_req() -> Request:
             return azure.create_access_token_request(
@@ -486,21 +489,27 @@ def _azure_get_access_token(key: Any) -> Tuple[Any, float]:
         if _azure_can_access_container(account, container, auth):
             return (auth, now + float(result["expires_in"]))
 
-    # the above didn't work, fall back to getting the storage keys
-    storage_account_key_auth = _azure_get_storage_account_key(
-        account=account, container=container, creds=creds
-    )
-    if storage_account_key_auth is not None:
-        return (storage_account_key_auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
+        # fall back to getting the storage keys
+        storage_account_key_auth = _azure_get_storage_account_key(
+            account=account, container=container, creds=creds
+        )
+        if storage_account_key_auth is not None:
+            return (storage_account_key_auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
 
-    # well that didn't work either, try accessing the container as an anonymous user
     anonymous_auth = (azure.ANONYMOUS, "")
     if _azure_can_access_container(account, container, anonymous_auth):
         return (anonymous_auth, float("inf"))
 
-    raise Error(
-        f"Could not find any credentials that grant access to storage account: '{account}' and container: '{container}'"
-    )
+    msg = f"Could not find any credentials that grant access to storage account: '{account}' and container: '{container}'"
+    if len(creds) == 0:
+        msg += """
+
+No Azure credentials were found.  If the container is not marked as public, please do one of the following:
+
+1) Log in with 'az login', blobfile will use your default credentials to lookup your storage account key
+2) Set the environment variable 'AZURE_STORAGE_KEY' to your storage account key which you can find by following this guide: https://docs.microsoft.com/en-us/azure/storage/common/storage-account-keys-manage
+3) Create an account with 'az ad sp create-for-rbac --name <name>' and set the 'AZURE_APPLICATION_CREDENTIALS' environment variable to the path of the output from that command or individually set the 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', and 'AZURE_TENANT_ID' environment variables"""
+    raise Error(msg)
 
 
 def _azure_get_sas_token(key: Any) -> Tuple[Any, float]:

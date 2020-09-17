@@ -279,7 +279,7 @@ def _is_gce_instance() -> bool:
     return True
 
 
-def _google_get_access_token(key: str) -> Tuple[Any, float]:
+def _google_get_access_token(key: Any) -> Tuple[Any, float]:
     now = time.time()
 
     # https://github.com/googleapis/google-auth-library-java/blob/master/README.md#application-default-credentials
@@ -496,6 +496,8 @@ def _azure_get_access_token(key: Any) -> Tuple[Any, float]:
         if storage_account_key_auth is not None:
             return (storage_account_key_auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
 
+    # oddly, it seems that if you request a public container with a valid azure account, you cannot list the bucket
+    # but if you list it with no account, that works fine
     anonymous_auth = (azure.ANONYMOUS, "")
     if _azure_can_access_container(account, container, anonymous_auth):
         return (anonymous_auth, float("inf"))

@@ -3,7 +3,7 @@
 ## 0.17.2
 
 * Allow seeking past end of file
-* Allow anonymous access for azure containers
+* Allow anonymous access for azure containers.  Try anonymous access if other methods fail and allow blobfile to work if user has no valid azure credentials.
 
 ## 0.17.1
 

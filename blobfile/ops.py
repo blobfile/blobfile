@@ -344,6 +344,11 @@ def _azure_can_access_container(
     # ignore it here
     if resp.status == INVALID_HOSTNAME_STATUS:
         return True
+    # anonymous requests will for some reason get a 404 when they should get a 403
+    # so treat a 404 from anon accounts as a 403
+    if resp.status == 404 and auth[0] == azure.ANONYMOUS:
+        return False
+    # if the container list succeeds or the container doesn't exist, return success
     return resp.status in (200, 404)
 
 
@@ -416,7 +421,7 @@ def _azure_get_storage_account_key(
                     return storage_key_auth
                 else:
                     raise Error(
-                        f"Found storage account key, but it was unable to access storage account: '{account}'"
+                        f"Found storage account key, but it was unable to access storage account: '{account}' and container: '{container}'"
                     )
         raise Error(
             f"Storage account was found, but storage account keys were missing: '{account}'"

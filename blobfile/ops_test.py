@@ -1320,3 +1320,18 @@ def test_azure_public_container():
                 with gzip.open(f) as gf:
                     contents = gf.read()
                     assert contents.startswith(b"ARCHIVE2.122")
+
+
+def test_scandir_error():
+    for error, path in [
+        (None, AZURE_VALID_CONTAINER),
+        (FileNotFoundError, AZURE_INVALID_CONTAINER),
+        (FileNotFoundError, AZURE_INVALID_CONTAINER_NO_ACCOUNT),
+        (bf.Error, "https://accountname.blob.core.windows.net/container"),
+    ]:
+        ctx = contextlib.nullcontext()
+        if error is not None:
+            ctx = pytest.raises(error)
+        with ctx:
+            print(path)
+            list(bf.scandir(path))

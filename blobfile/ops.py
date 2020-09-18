@@ -345,7 +345,7 @@ def _azure_can_access_container(
     if resp.status == INVALID_HOSTNAME_STATUS:
         return True
     # anonymous requests will for some reason get a 404 when they should get a 403
-    # so treat a 404 from anon accounts as a 403
+    # so treat a 404 from anon requests as a 403
     if resp.status == 404 and auth[0] == azure.ANONYMOUS:
         return False
     # if the container list succeeds or the container doesn't exist, return success

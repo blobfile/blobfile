@@ -1301,17 +1301,17 @@ def test_fork():
 
 
 def test_azure_public_container():
-    for should_error, accountname in [
+    for error, accountname in [
         (
-            False,
+            None,
             "nexradsa",
         ),  # https://azure.microsoft.com/en-us/services/open-datasets/catalog/nexrad-l2/
-        (True, "accountname"),  # an account that exists but that is not public
-        (True, AS_INVALID_ACCOUNT),  # account that does not exist
+        (bf.Error, "accountname"),  # an account that exists but that is not public
+        (FileNotFoundError, AS_INVALID_ACCOUNT),  # account that does not exist
     ]:
         ctx = contextlib.nullcontext()
-        if should_error:
-            ctx = pytest.raises(FileNotFoundError)
+        if error is not None:
+            ctx = pytest.raises(error)
         with ctx:
             with bf.BlobFile(
                 f"https://{accountname}.blob.core.windows.net/nexrad-l2/1997/07/07/KHPX/KHPX19970707_000827.gz",

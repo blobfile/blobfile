@@ -85,7 +85,7 @@ The following methods will be tried in order:
 4) Check the environment variable `AZURE_STORAGE_CONNECTION_STRING` for an [Azure Storage connection string](https://docs.microsoft.com/en-us/azure/storage/common/storage-configure-connection-string)
 5) Use credentials from the `az` command line tool if they can be found.
 
-If access using credentials fails, anonymous access will be tried.  `blobfile` support public access for containers marked as public, but not individual blobs.
+If access using credentials fails, anonymous access will be tried.  `blobfile` supports public access for containers marked as public, but not individual blobs.
 
 ## Paths
 

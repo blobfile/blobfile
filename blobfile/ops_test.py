@@ -45,7 +45,8 @@ AZURE_INVALID_CONTAINER_NO_ACCOUNT = (
 GCS_VALID_BUCKET = f"gs://{GCS_TEST_BUCKET}"
 GCS_INVALID_BUCKET = f"gs://{GCS_TEST_BUCKET}-does-not-exist"
 
-PNG_HEADER = b"\x89PNG"
+AZURE_PUBLIC_URL = "https://tartanair.blob.core.windows.net/tartanair-release1/abandonedfactory/Easy/P000/image_left/000000_left.png"
+AZURE_PUBLIC_URL_HEADER = b"\x89PNG"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -329,6 +330,13 @@ def test_get_url(ctx):
         _write_contents(path, contents)
         url, _ = bf.get_url(path)
         assert urllib.request.urlopen(url).read() == contents
+
+
+def test_azure_public_get_url():
+    contents = urllib.request.urlopen(AZURE_PUBLIC_URL).read()
+    assert contents.startswith(AZURE_PUBLIC_URL_HEADER)
+    url, _ = bf.get_url(AZURE_PUBLIC_URL)
+    assert urllib.request.urlopen(url).read() == contents
 
 
 @pytest.mark.parametrize(
@@ -759,11 +767,8 @@ def test_copy():
 
 def test_copy_azure_public():
     with _get_temp_as_path() as dst:
-        bf.copy(
-            "https://tartanair.blob.core.windows.net/tartanair-release1/abandonedfactory/Easy/P000/image_left/000000_left.png",
-            dst,
-        )
-        assert _read_contents(dst)[:4] == PNG_HEADER
+        bf.copy(AZURE_PUBLIC_URL, dst)
+        assert _read_contents(dst)[:4] == AZURE_PUBLIC_URL_HEADER
 
 
 @pytest.mark.parametrize(
@@ -1331,7 +1336,7 @@ def test_azure_public_container():
                 "rb",
             ) as f:
                 contents = f.read()
-                assert contents[:4] == PNG_HEADER
+                assert contents.startswith(AZURE_PUBLIC_URL_HEADER)
 
 
 def test_scandir_error():

@@ -85,6 +85,8 @@ The following methods will be tried in order:
 4) Check the environment variable `AZURE_STORAGE_CONNECTION_STRING` for an [Azure Storage connection string](https://docs.microsoft.com/en-us/azure/storage/common/storage-configure-connection-string)
 5) Use credentials from the `az` command line tool if they can be found.
 
+If access using credentials fails, anonymous access will be tried.  `blobfile` support public access for containers marked as public, but not individual blobs.
+
 ## Paths
 
 For Google Cloud Storage and Azure Blobs directories don't really exist.  These storage systems store the files in a single flat list.  The "/" separators are just part of the filenames and there is no need to call the equivalent of `os.mkdir` on one of these systems.

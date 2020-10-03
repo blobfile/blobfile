@@ -522,7 +522,8 @@ No Azure credentials were found.  If the container is not marked as public, plea
 def _azure_get_sas_token(key: Any) -> Tuple[Any, float]:
     auth = global_azure_access_token_manager.get_token(key=key)
     if auth[0] == azure.ANONYMOUS:
-        # we don't have access to this bucket, return None as our token
+        # for public containers, use None as the token so that this will be cached
+        # and we can tell when we don't have a real SAS token for a container
         return (None, time.time() + AZURE_SAS_TOKEN_EXPIRATION_SECONDS)
 
     account, _ = key
@@ -2157,6 +2158,9 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
             account, "/{container}/{blob}", container=container, blob=blob
         )
         token = global_azure_sas_token_manager.get_token(key=(account, container))
+        if token is None:
+            # the container has public access
+            return url, float("inf")
         return azure.generate_signed_url(key=token, url=url)
     elif _is_local_path(path):
         return f"file://{path}", None

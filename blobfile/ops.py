@@ -784,24 +784,23 @@ def copy(
         src_account, src_container, src_blob = azure.split_url(src)
 
         def build_req() -> Request:
-            # the signed url can expire, so technically we should get the sas_token and build the signed url
-            # each time we build a new request
-            sas_token = global_azure_sas_token_manager.get_token(
-                key=(src_account, src_container)
-            )
             src_url = azure.build_url(
                 src_account,
                 "/{container}/{blob}",
                 container=src_container,
                 blob=src_blob,
             )
-            # if we fail to get the token (likely a container that we have anon access to) just use the bare url
-            if sas_token is None:
-                signed_src_url = src_url
-            else:
-                signed_src_url, _ = azure.generate_signed_url(
-                    key=sas_token, url=src_url
+            if src_account != dst_account:
+                # the signed url can expire, so technically we should get the sas_token and build the signed url
+                # each time we build a new request
+                sas_token = global_azure_sas_token_manager.get_token(
+                    key=(src_account, src_container)
                 )
+                # if we don't get a token, it's likely we have anonymous access to the container
+                # if we do get a token, the container is likely private and we need to use
+                # a signed url as the source
+                if sas_token is not None:
+                    src_url, _ = azure.generate_signed_url(key=sas_token, url=src_url)
             req = Request(
                 url=azure.build_url(
                     dst_account,
@@ -810,7 +809,7 @@ def copy(
                     blob=dst_blob,
                 ),
                 method="PUT",
-                headers={"x-ms-copy-source": signed_src_url},
+                headers={"x-ms-copy-source": src_url},
                 success_codes=(202, 404),
             )
             return azure.make_api_request(

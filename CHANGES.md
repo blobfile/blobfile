@@ -2,6 +2,8 @@
 
 ## 0.17.3
 
+* Fix `bf.copy` between multiple azure storage accounts, thanks @hauntsaninja for reporting this
+
 ## 0.17.2
 
 * Allow seeking past end of file

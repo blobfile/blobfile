@@ -30,7 +30,9 @@ from blobfile import ops, azure
 
 GCS_TEST_BUCKET = "csh-test-3"
 AS_TEST_ACCOUNT = "cshteststorage2"
+AS_TEST_ACCOUNT2 = "cshteststorage3"
 AS_TEST_CONTAINER = "testcontainer2"
+AS_TEST_CONTAINER2 = "testcontainer3"
 AS_INVALID_ACCOUNT = f"{AS_TEST_ACCOUNT}-does-not-exist"
 
 AZURE_VALID_CONTAINER = (
@@ -42,6 +44,8 @@ AZURE_INVALID_CONTAINER_NO_ACCOUNT = (
 )
 GCS_VALID_BUCKET = f"gs://{GCS_TEST_BUCKET}"
 GCS_INVALID_BUCKET = f"gs://{GCS_TEST_BUCKET}-does-not-exist"
+
+PNG_HEADER = b"\x89PNG"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -87,12 +91,9 @@ def _get_temp_gcs_path():
 
 
 @contextlib.contextmanager
-def _get_temp_as_path():
+def _get_temp_as_path(account=AS_TEST_ACCOUNT, container=AS_TEST_CONTAINER):
     random_id = "".join(random.choice(string.ascii_lowercase) for i in range(16))
-    path = (
-        f"https://{AS_TEST_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}/"
-        + random_id
-    )
+    path = f"https://{account}.blob.core.windows.net/{container}/" + random_id
     yield path + "/file.name"
     sp.run(
         [
@@ -101,9 +102,9 @@ def _get_temp_as_path():
             "blob",
             "delete-batch",
             "--account-name",
-            AS_TEST_ACCOUNT,
+            account,
             "--source",
-            AS_TEST_CONTAINER,
+            container,
             "--pattern",
             f"{random_id}/*",
         ],
@@ -726,7 +727,9 @@ def test_rmtree(ctx):
 
 def test_copy():
     contents = b"meow!"
-    with _get_temp_local_path() as local_path1, _get_temp_local_path() as local_path2, _get_temp_local_path() as local_path3, _get_temp_gcs_path() as gcs_path1, _get_temp_gcs_path() as gcs_path2, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2:
+    with _get_temp_local_path() as local_path1, _get_temp_local_path() as local_path2, _get_temp_local_path() as local_path3, _get_temp_gcs_path() as gcs_path1, _get_temp_gcs_path() as gcs_path2, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2, _get_temp_as_path(
+        account=AS_TEST_ACCOUNT2, container=AS_TEST_CONTAINER2
+    ) as as_path3:
         with pytest.raises(FileNotFoundError):
             bf.copy(gcs_path1, gcs_path2)
         with pytest.raises(FileNotFoundError):
@@ -740,7 +743,8 @@ def test_copy():
             (gcs_path1, gcs_path2),
             (gcs_path2, as_path1),
             (as_path1, as_path2),
-            (as_path2, local_path3),
+            (as_path2, as_path3),
+            (as_path3, local_path3),
         ]
 
         for src, dst in testcases:
@@ -751,6 +755,15 @@ def test_copy():
                 bf.copy(src, dst)
             bf.copy(src, dst, overwrite=True)
             assert _read_contents(dst) == contents
+
+
+def test_copy_azure_public():
+    with _get_temp_as_path() as dst:
+        bf.copy(
+            "https://tartanair.blob.core.windows.net/tartanair-release1/abandonedfactory/Easy/P000/image_left/000000_left.png",
+            dst,
+        )
+        assert _read_contents(dst)[:4] == PNG_HEADER
 
 
 @pytest.mark.parametrize(
@@ -1304,8 +1317,8 @@ def test_azure_public_container():
     for error, accountname in [
         (
             None,
-            "nexradsa",
-        ),  # https://azure.microsoft.com/en-us/services/open-datasets/catalog/nexrad-l2/
+            "tartanair",
+        ),  # https://azure.microsoft.com/en-us/services/open-datasets/catalog/tartanair-airsim-simultaneous-localization-and-mapping/
         (bf.Error, "accountname"),  # an account that exists but that is not public
         (FileNotFoundError, AS_INVALID_ACCOUNT),  # account that does not exist
     ]:
@@ -1314,12 +1327,11 @@ def test_azure_public_container():
             ctx = pytest.raises(error)
         with ctx:
             with bf.BlobFile(
-                f"https://{accountname}.blob.core.windows.net/nexrad-l2/1997/07/07/KHPX/KHPX19970707_000827.gz",
+                f"https://{accountname}.blob.core.windows.net/tartanair-release1/abandonedfactory/Easy/P000/image_left/000000_left.png",
                 "rb",
             ) as f:
-                with gzip.open(f) as gf:
-                    contents = gf.read()
-                    assert contents.startswith(b"ARCHIVE2.122")
+                contents = f.read()
+                assert contents[:4] == PNG_HEADER
 
 
 def test_scandir_error():

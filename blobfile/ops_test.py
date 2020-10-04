@@ -733,7 +733,8 @@ def test_rmtree(ctx):
         )
 
 
-def test_copy():
+@pytest.mark.parametrize("parallel", [False, True])
+def test_copy(parallel):
     contents = b"meow!"
     with _get_temp_local_path() as local_path1, _get_temp_local_path() as local_path2, _get_temp_local_path() as local_path3, _get_temp_gcs_path() as gcs_path1, _get_temp_gcs_path() as gcs_path2, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2, _get_temp_as_path(
         account=AS_TEST_ACCOUNT2, container=AS_TEST_CONTAINER2
@@ -756,12 +757,12 @@ def test_copy():
         ]
 
         for src, dst in testcases:
-            h = bf.copy(src, dst, return_md5=True)
+            h = bf.copy(src, dst, return_md5=True, parallel=parallel)
             assert h == hashlib.md5(contents).hexdigest()
             assert _read_contents(dst) == contents
             with pytest.raises(FileExistsError):
                 bf.copy(src, dst)
-            bf.copy(src, dst, overwrite=True)
+            bf.copy(src, dst, overwrite=True, parallel=parallel)
             assert _read_contents(dst) == contents
 
 

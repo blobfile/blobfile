@@ -19,10 +19,12 @@ import shutil
 import collections
 import itertools
 import random
+import math
 import ssl
 import socket
 import threading
 import platform
+import concurrent.futures
 import multiprocessing as mp
 from typing import (
     overload,
@@ -84,7 +86,12 @@ assert GOOGLE_CHUNK_SIZE % (256 * 1024) == 0
 AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
 # these seem to be expired manually, but we don't currently detect that
 AZURE_SHARED_KEY_EXPIRATION_SECONDS = 24 * 60 * 60
+# max 100MB https://docs.microsoft.com/en-us/rest/api/storageservices/put-block#remarks
+# there is a preview version of the API that allows this to be 4000MiB
+AZURE_MAX_BLOCK_SIZE = 100_000_000
 AZURE_BLOCK_COUNT_LIMIT = 50_000
+MAX_WORKERS = os.cpu_count() or 1
+PARALLEL_COPY_MINIMUM_PART_SIZE = 2 ** 20
 
 INVALID_HOSTNAME_STATUS = 600  # fake status for invalid hostname
 
@@ -134,8 +141,6 @@ _max_connection_pool_count = DEFAULT_MAX_CONNECTION_POOL_COUNT
 # https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-block-blobs
 # the chunk size determines the maximum size of an individual blob for
 # block blobs, so for 4MiB, the maximum size is 4MiB x 50,000 blocks = 195GiB
-# max 100MB https://docs.microsoft.com/en-us/rest/api/storageservices/put-block#remarks
-# there is a preview version of the API that allows this to be 4000MiB
 _azure_write_chunk_size = DEFAULT_AZURE_WRITE_CHUNK_SIZE
 _retry_log_threshold = DEFAULT_RETRY_LOG_THRESHOLD
 _retry_limit = None
@@ -722,17 +727,223 @@ def _is_azure_path(path: str) -> bool:
     return url.scheme == "https" and url.netloc.endswith(".blob.core.windows.net")
 
 
+def _download_chunk(path: str, start: int, size: int) -> bytes:
+    with BlobFile(path, "rb") as f:
+        f.seek(start)
+        return f.read(size)
+
+
+def _parallel_download(
+    src: str, dst: str
+) -> str:
+    s = stat(src)
+    part_size = max(math.ceil(s.size / MAX_WORKERS), PARALLEL_COPY_MINIMUM_PART_SIZE)
+    m = hashlib.md5()
+    with BlobFile(dst, "wb") as dst_f:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            start = 0
+            futures = []
+            while start < s.size:
+                future = executor.submit(_download_chunk, src, start, part_size)
+                futures.append(future)
+                start += part_size
+            for future in futures:
+                block = future.result()
+                dst_f.write(block)
+                m.update(block)
+    return m.hexdigest()
+
+
+def _azure_upload_chunk(
+    path: str, start: int, size: int, url: str, block_id: str
+) -> None:
+    with BlobFile(path, "rb") as f:
+        f.seek(start)
+        data = f.read(size)
+        req = Request(
+            url=url,
+            method="PUT",
+            params=dict(comp="block", blockid=block_id),
+            data=data,
+            success_codes=(201,),
+        )
+        _execute_azure_api_request(req)
+
+
+def _azure_finalize_blob(url: str, block_ids: List[str], md5_digest: bytes) -> None:
+    body = {"BlockList": {"Latest": block_ids}}
+    req = Request(
+        url=url,
+        method="PUT",
+        # azure does not calculate md5s for us, we have to do that manually
+        # https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
+        headers={"x-ms-blob-content-md5": base64.b64encode(md5_digest).decode("utf8")},
+        params=dict(comp="blocklist"),
+        data=body,
+        success_codes=(201, 400),
+    )
+    resp = _execute_azure_api_request(req)
+    if resp.status == 400:
+        result = xmltodict.parse(resp.data)
+        if result["Error"]["Code"] == "InvalidBlockList":
+            # the most likely way this could happen is if the file was deleted while
+            # we were uploading, so assume that is what happened
+            # this could be interpreted as a sort of RestartableStreamingWriteFailure but
+            # that could result in two processes fighting while uploading the file
+            raise ConcurrentWriteFailure(
+                f"Invalid block list, most likely a concurrent writer wrote to the same path: `{url}`",
+                request=req,
+                response=resp,
+            )
+        else:
+            raise RequestFailure(
+                message=f"unexpected status {resp.status}", request=req, response=resp
+            )
+
+
+def _azure_block_index_to_block_id(index: int, upload_id: int) -> str:
+    assert index < 2 ** 17
+    id_plus_index = (upload_id << 17) + index
+    assert id_plus_index < 2 ** 64
+    return base64.b64encode(id_plus_index.to_bytes(8, byteorder="big")).decode("utf8")
+
+
+def _azure_parallel_upload(src: str, dst: str) -> str:
+    assert _is_local_path(src) and _is_azure_path(dst)
+
+    with BlobFile(src, "rb") as f:
+        md5_digest = _block_md5(f)
+
+    upload_id = random.randint(0, 2 ** 47 - 1)
+    s = stat(src)
+    part_size = min(max(math.ceil(s.size / MAX_WORKERS), PARALLEL_COPY_MINIMUM_PART_SIZE), AZURE_MAX_BLOCK_SIZE)
+    block_ids = []
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        i = 0
+        start = 0
+        futures = []
+        while start < s.size:
+            block_id = _azure_block_index_to_block_id(i, upload_id)
+            future = executor.submit(
+                _azure_upload_chunk, src, start, _azure_write_chunk_size, dst, block_id
+            )
+            futures.append(future)
+            block_ids.append(block_id)
+            i += 1
+            start += part_size
+        for future in futures:
+            future.result()
+
+    _azure_finalize_blob(url=dst, block_ids=block_ids, md5_digest=md5_digest)
+    return binascii.hexlify(md5_digest).decode("utf8")
+
+
+def _google_upload_part(src: str, start: int, size: int, dst: str) -> str:
+    with BlobFile(src, "rb") as f:
+        f.seek(start)
+        data = f.read(size)
+        bucket, blob = google.split_url(dst)
+        req = Request(
+            url=google.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
+            method="POST",
+            params=dict(uploadType="media", name=blob),
+            data=data,
+            success_codes=(200,),
+        )
+        resp = _execute_google_api_request(req)
+        metadata = json.loads(resp.data)
+        return metadata["generation"]
+
+
+def _google_delete_part(bucket: str, name: str) -> None:
+    req = Request(
+        url=google.build_url(
+            "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=name
+        ),
+        method="DELETE",
+        success_codes=(204, 404),
+    )
+    _execute_google_api_request(req)
+
+
+def _google_parallel_upload(src: str, dst: str) -> str:
+    assert _is_local_path(src) and _is_google_path(dst)
+
+    with BlobFile(src, "rb") as f:
+        md5_digest = _block_md5(f)
+
+    s = stat(src)
+    part_size = max(math.ceil(s.size / MAX_WORKERS), PARALLEL_COPY_MINIMUM_PART_SIZE)
+
+    dstbucket, dstname = google.split_url(dst)
+    source_objects = []
+    object_names = []
+    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        i = 0
+        start = 0
+        futures = []
+        while start < s.size:
+            suffix = f".part.{i}"
+            future = executor.submit(
+                _google_upload_part, src, start, part_size, dst + suffix
+            )
+            futures.append(future)
+            object_names.append(dstname + suffix)
+            i += 1
+            start += part_size
+        for name, future in zip(object_names, futures):
+            generation = future.result()
+            source_objects.append(
+                {
+                    "name": name,
+                    "generation": generation,
+                    "objectPreconditions": {"ifGenerationMatch": generation},
+                }
+            )
+
+        req = Request(
+            url=google.build_url(
+                "/storage/v1/b/{destinationBucket}/o/{destinationObject}/compose",
+                destinationBucket=dstbucket,
+                destinationObject=dstname,
+            ),
+            method="POST",
+            data={"sourceObjects": source_objects},
+            success_codes=(200,),
+        )
+        resp = _execute_google_api_request(req)
+        metadata = json.loads(resp.data)
+        hexdigest = binascii.hexlify(md5_digest).decode("utf8")
+        _google_maybe_update_md5(dst, metadata["generation"], hexdigest)
+
+        # delete parts in parallel
+        delete_futures = []
+        for name in object_names:
+            future = executor.submit(_google_delete_part, dstbucket, name)
+            delete_futures.append(future)
+        for future in delete_futures:
+            future.result()
+
+    return hexdigest
+
+
 def copy(
-    src: str, dst: str, overwrite: bool = False, return_md5: bool = False
+    src: str,
+    dst: str,
+    overwrite: bool = False,
+    parallel: bool = False,
+    return_md5: bool = False,
 ) -> Optional[str]:
     """
     Copy a file from one path to another
 
-    If both paths are on GCS, this will perform a remote copy operation without downloading
+    If both paths are on the same blob storage, this will perform a remote copy operation without downloading
     the contents locally.
 
     If `overwrite` is `False` (the default), an exception will be raised if the destination
     path exists.
+
+    If `parallel` is `True`, use multiple processes to dowload or upload the file.  For this to work, one path must be on blob storage and the other path must be local.  The default is `False`.
 
     If `return_md5` is set to `True`, an md5 will be calculated during the copy and returned if available,
     or else None will be returned.
@@ -774,7 +985,7 @@ def copy(
             result = json.loads(resp.data)
             if result["done"]:
                 if return_md5:
-                    return base64.b64decode(result["resource"]["md5Hash"]).hex()
+                    return _google_get_md5(result["resource"])
                 else:
                     return
             params["rewriteToken"] = result["rewriteToken"]
@@ -853,6 +1064,24 @@ def copy(
             if isfile and metadata["etag"] == etag:
                 return _azure_get_md5(metadata)
         return
+
+    if parallel:
+        copy_fn = None
+        if (_is_azure_path(src) or _is_google_path(src)) and _is_local_path(dst):
+            copy_fn = _parallel_download
+
+        if _is_local_path(src) and _is_azure_path(dst):
+            copy_fn = _azure_parallel_upload
+
+        if _is_local_path(src) and _is_google_path(dst):
+            copy_fn = _google_parallel_upload
+
+        if copy_fn is not None:
+            hexdigest = copy_fn(src, dst)
+            if return_md5:
+                return hexdigest
+            else:
+                return
 
     for attempt, backoff in enumerate(
         _exponential_sleep_generator(initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX)
@@ -1827,7 +2056,6 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
             ),
             method="PATCH",
             params=params,
-            headers={"Content-Type": "application/json"},
             data=dict(metadata={"blobfile-mtime": str(mtime)}),
             success_codes=(200, 404, 412),
         )
@@ -2228,12 +2456,12 @@ def _google_maybe_update_md5(path: str, generation: str, hexdigest: str) -> bool
         method="PATCH",
         params=dict(ifGenerationMatch=generation),
         # it looks like we can't set the underlying md5Hash, only the metadata fields
-        headers={"Content-Type": "application/json"},
         data=dict(metadata={"md5": hexdigest}),
         success_codes=(200, 404, 412),
     )
 
     resp = _execute_google_api_request(req)
+    print(resp.status)
     return resp.status == 200
 
 
@@ -2571,7 +2799,6 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
             ),
             method="POST",
             data=dict(name=name),
-            headers={"Content-Type": "application/json; charset=UTF-8"},
             success_codes=(200, 400, 404),
         )
         resp = _execute_google_api_request(req)
@@ -2768,14 +2995,6 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
         self._md5 = hashlib.md5()
         super().__init__(chunk_size=_azure_write_chunk_size)
 
-    def _block_index_to_block_id(self, index: int) -> str:
-        assert index < 2 ** 17
-        id_plus_index = (self._upload_id << 17) + index
-        assert id_plus_index < 2 ** 64
-        return base64.b64encode(id_plus_index.to_bytes(8, byteorder="big")).decode(
-            "utf8"
-        )
-
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         start = 0
         while start < len(chunk):
@@ -2791,7 +3010,9 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                 method="PUT",
                 params=dict(
                     comp="block",
-                    blockid=self._block_index_to_block_id(self._block_index),
+                    blockid=_azure_block_index_to_block_id(
+                        self._block_index, self._upload_id
+                    ),
                 ),
                 data=data,
                 success_codes=(201,),
@@ -2806,47 +3027,13 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             start += _azure_write_chunk_size
 
         if finalize:
-            body = {
-                "BlockList": {
-                    "Latest": [
-                        self._block_index_to_block_id(i)
-                        for i in range(self._block_index)
-                    ]
-                }
-            }
-            req = Request(
-                url=self._url,
-                method="PUT",
-                # azure does not calculate md5s for us, we have to do that manually
-                # https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
-                headers={
-                    "x-ms-blob-content-md5": base64.b64encode(
-                        self._md5.digest()
-                    ).decode("utf8")
-                },
-                params=dict(comp="blocklist"),
-                data=body,
-                success_codes=(201, 400),
+            block_ids = [
+                _azure_block_index_to_block_id(i, self._upload_id)
+                for i in range(self._block_index)
+            ]
+            _azure_finalize_blob(
+                url=self._url, block_ids=block_ids, md5_digest=self._md5.digest()
             )
-            resp = _execute_azure_api_request(req)
-            if resp.status == 400:
-                result = xmltodict.parse(resp.data)
-                if result["Error"]["Code"] == "InvalidBlockList":
-                    # the most likely way this could happen is if the file was deleted while
-                    # we were uploading, so assume that is what happened
-                    # this could be interpreted as a sort of RestartableStreamingWriteFailure but
-                    # that could result in two processes fighting while uploading the file
-                    raise ConcurrentWriteFailure(
-                        f"Invalid block list, most likely a concurrent writer wrote to the same path: `{self._url}`",
-                        request=req,
-                        response=resp,
-                    )
-                else:
-                    raise RequestFailure(
-                        message=f"unexpected status {resp.status}",
-                        request=req,
-                        response=resp,
-                    )
 
 
 @overload

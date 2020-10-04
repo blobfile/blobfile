@@ -2,6 +2,7 @@
 
 ## 0.17.3
 
+* Add `parallel` option to `bf.copy` to do some operations in parallel
 * Fix `bf.copy` between multiple azure storage accounts, thanks @hauntsaninja for reporting this
 
 ## 0.17.2

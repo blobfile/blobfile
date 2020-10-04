@@ -147,6 +147,8 @@ def make_api_request(req: Request, access_token: str) -> Request:
     data = req.data
     if data is not None and not isinstance(data, (bytes, bytearray)):
         data = json.dumps(data).encode("utf8")
+        assert "Content-Type" not in headers
+        headers["Content-Type"] = "application/json"
     return Request(
         method=req.method,
         url=req.url,

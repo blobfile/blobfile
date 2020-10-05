@@ -5,7 +5,6 @@ import argparse
 import multiprocessing as mp
 
 import blobfile as bf
-from blobfile import ops
 
 
 @contextlib.contextmanager
@@ -38,16 +37,12 @@ def main():
         with timer(f"{name}_serial", args.size * args.loops):
             for i in range(args.loops):
                 bf.copy(src, dst + str(i))
-
-        for i in range(args.loops):
-            bf.remove(dst + str(i))
+                bf.remove(dst + str(i))
 
         with timer(f"{name}_parallel", args.size * args.loops):
             for i in range(args.loops):
                 bf.copy(src, dst + str(i), parallel=True)
-
-        for i in range(args.loops):
-            bf.remove(dst + str(i))
+                bf.remove(dst + str(i))
 
         bf.remove(src)
 

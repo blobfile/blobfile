@@ -91,7 +91,7 @@ AZURE_SHARED_KEY_EXPIRATION_SECONDS = 24 * 60 * 60
 AZURE_MAX_BLOCK_SIZE = 100_000_000
 AZURE_BLOCK_COUNT_LIMIT = 50_000
 MAX_WORKERS = os.cpu_count() or 1
-PARALLEL_COPY_MINIMUM_PART_SIZE = 2 ** 20
+PARALLEL_COPY_MINIMUM_PART_SIZE = 32 * 2 ** 20
 
 INVALID_HOSTNAME_STATUS = 600  # fake status for invalid hostname
 
@@ -756,7 +756,9 @@ def _download_chunk(src: str, dst: str, start: int, size: int) -> None:
     else:
         raise Error(f"Invalid path: '{src}'")
 
-    with open(dst, "wb") as f:
+    # open file such that we can write directly to the correct range
+    with open(dst, "rb+") as f:
+        f.seek(start)
         while True:
             block = resp.read(CHUNK_SIZE)
             if block == b"":
@@ -765,31 +767,30 @@ def _download_chunk(src: str, dst: str, start: int, size: int) -> None:
     resp.release_conn()
 
 
-def _parallel_download(src: str, dst: str) -> str:
+def _parallel_download(src: str, dst: str, return_md5: bool) -> Optional[str]:
     s = stat(src)
     part_size = max(math.ceil(s.size / MAX_WORKERS), PARALLEL_COPY_MINIMUM_PART_SIZE)
-    m = hashlib.md5()
-    with BlobFile(dst, "wb") as dst_f:
-        with concurrent.futures.ProcessPoolExecutor(
-            max_workers=MAX_WORKERS
-        ) as executor, tempfile.TemporaryDirectory() as tmpdir:
-            start = 0
-            futures = []
-            while start < s.size:
-                tmp_path = join(tmpdir, f"{start}.bin")
-                future = executor.submit(_download_chunk, src, tmp_path, start, part_size)
-                futures.append((future, tmp_path))
-                start += part_size
-            for future, tmp_path in futures:
-                future.result()
-                with open(tmp_path, "rb") as f:
-                    while True:
-                        block = f.read(CHUNK_SIZE)
-                        if block == b"":
-                            break
-                        dst_f.write(block)
-                        m.update(block)
-    return m.hexdigest()
+
+    # pre-allocate output file
+    with open(dst, "wb") as f:
+        f.seek(s.size - 1)
+        f.write(b"\0")
+
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=MAX_WORKERS
+    ) as executor:
+        start = 0
+        futures = []
+        while start < s.size:
+            future = executor.submit(_download_chunk, src, dst, start, part_size)
+            futures.append(future)
+            start += part_size
+        for future in futures:
+            future.result()
+
+    if return_md5:
+        with BlobFile(dst, "rb") as f:
+            return binascii.hexlify(_block_md5(f)).decode("utf8")
 
 
 def _azure_upload_chunk(
@@ -797,12 +798,11 @@ def _azure_upload_chunk(
 ) -> None:
     with BlobFile(path, "rb") as f:
         f.seek(start)
-        data = f.read(size)
         req = Request(
             url=url,
             method="PUT",
             params=dict(comp="block", blockid=block_id),
-            data=data,
+            data=_LimitedFile(f, limit=size),
             success_codes=(201,),
         )
         _execute_azure_api_request(req)
@@ -846,7 +846,7 @@ def _azure_block_index_to_block_id(index: int, upload_id: int) -> str:
     return base64.b64encode(id_plus_index.to_bytes(8, byteorder="big")).decode("utf8")
 
 
-def _azure_parallel_upload(src: str, dst: str) -> str:
+def _azure_parallel_upload(src: str, dst: str, return_md5: bool) -> Optional[str]:
     assert _is_local_path(src) and _is_azure_path(dst)
 
     with BlobFile(src, "rb") as f:
@@ -876,19 +876,31 @@ def _azure_parallel_upload(src: str, dst: str) -> str:
             future.result()
 
     _azure_finalize_blob(url=dst, block_ids=block_ids, md5_digest=md5_digest)
-    return binascii.hexlify(md5_digest).decode("utf8")
+    return binascii.hexlify(md5_digest).decode("utf8") if return_md5 else None
+
+
+class _LimitedFile:
+    def __init__(self, f: Any, limit: int) -> None:
+        self._f = f
+        self._remaining = limit
+
+    def read(self, n: Optional[int] = None) -> None:
+        if n is None:
+            n = self._remaining
+        buf = self._f.read(min(n, self._remaining))
+        self._remaining -= len(buf)
+        return buf
 
 
 def _google_upload_part(src: str, start: int, size: int, dst: str) -> str:
     with BlobFile(src, "rb") as f:
         f.seek(start)
-        data = f.read(size)
         bucket, blob = google.split_url(dst)
         req = Request(
             url=google.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
             method="POST",
             params=dict(uploadType="media", name=blob),
-            data=data,
+            data=_LimitedFile(f, limit=size),
             success_codes=(200,),
         )
         resp = _execute_google_api_request(req)
@@ -907,7 +919,7 @@ def _google_delete_part(bucket: str, name: str) -> None:
     _execute_google_api_request(req)
 
 
-def _google_parallel_upload(src: str, dst: str) -> str:
+def _google_parallel_upload(src: str, dst: str, return_md5: bool) -> Optional[str]:
     assert _is_local_path(src) and _is_google_path(dst)
 
     with BlobFile(src, "rb") as f:
@@ -965,7 +977,7 @@ def _google_parallel_upload(src: str, dst: str) -> str:
         for future in delete_futures:
             future.result()
 
-    return hexdigest
+    return hexdigest if return_md5 else None
 
 
 def copy(
@@ -1118,11 +1130,7 @@ def copy(
             copy_fn = _google_parallel_upload
 
         if copy_fn is not None:
-            hexdigest = copy_fn(src, dst)
-            if return_md5:
-                return hexdigest
-            else:
-                return
+            return copy_fn(src, dst, return_md5=return_md5)
 
     for attempt, backoff in enumerate(
         _exponential_sleep_generator(initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX)

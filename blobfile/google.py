@@ -145,7 +145,7 @@ def make_api_request(req: Request, access_token: str) -> Request:
 
     headers["Authorization"] = f"Bearer {access_token}"
     data = req.data
-    if data is not None and not isinstance(data, (bytes, bytearray)):
+    if data is not None and isinstance(data, dict):
         data = json.dumps(data).encode("utf8")
         assert "Content-Type" not in headers
         headers["Content-Type"] = "application/json"

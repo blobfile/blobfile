@@ -159,7 +159,7 @@ def make_api_request(req: Request, auth: Tuple[str, str]) -> Request:
         "%a, %d %b %Y %H:%M:%S GMT"
     )
     data = req.data
-    if data is not None and not isinstance(data, (bytes, bytearray)):
+    if data is not None and isinstance(data, dict):
         data = xmltodict.unparse(data).encode("utf8")
 
     result = Request(

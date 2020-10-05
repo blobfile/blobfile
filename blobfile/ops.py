@@ -73,12 +73,12 @@ BACKOFF_JITTER_FRACTION = 0.5
 EARLY_EXPIRATION_SECONDS = 5 * 60
 DEFAULT_CONNECTION_POOL_MAX_SIZE = 32
 DEFAULT_MAX_CONNECTION_POOL_COUNT = 10
-DEFAULT_AZURE_WRITE_CHUNK_SIZE = 4 * 2 ** 20
+DEFAULT_AZURE_WRITE_CHUNK_SIZE = 32 * 2 ** 20
 DEFAULT_RETRY_LOG_THRESHOLD = 0
 CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 30
 CHUNK_SIZE = 2 ** 20
-GOOGLE_CHUNK_SIZE = 2 ** 20
+GOOGLE_CHUNK_SIZE = 32 * 2 ** 20
 # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
 assert GOOGLE_CHUNK_SIZE % (256 * 1024) == 0
 # it looks like azure signed urls cannot exceed the lifetime of the token used
@@ -139,8 +139,7 @@ _http_lock = threading.Lock()
 _connection_pool_max_size = DEFAULT_CONNECTION_POOL_MAX_SIZE
 _max_connection_pool_count = DEFAULT_MAX_CONNECTION_POOL_COUNT
 # https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-block-blobs
-# the chunk size determines the maximum size of an individual blob for
-# block blobs, so for 4MiB, the maximum size is 4MiB x 50,000 blocks = 195GiB
+# the chunk size determines the maximum size of an individual blob
 _azure_write_chunk_size = DEFAULT_AZURE_WRITE_CHUNK_SIZE
 _retry_log_threshold = DEFAULT_RETRY_LOG_THRESHOLD
 _retry_limit = None

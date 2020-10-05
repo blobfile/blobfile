@@ -36,15 +36,20 @@ def main():
             f.write(data)
 
         with timer(f"{name}_serial", args.size * args.loops):
-            for _ in range(args.loops):
-                bf.copy(src, dst, overwrite=True)
+            for i in range(args.loops):
+                bf.copy(src, dst + str(i))
+
+        for i in range(args.loops):
+            bf.remove(dst + str(i))
 
         with timer(f"{name}_parallel", args.size * args.loops):
-            for _ in range(args.loops):
-                bf.copy(src, dst, parallel=True, overwrite=True)
+            for i in range(args.loops):
+                bf.copy(src, dst + str(i), parallel=True)
+
+        for i in range(args.loops):
+            bf.remove(dst + str(i))
 
         bf.remove(src)
-        bf.remove(dst)
 
 if __name__ == "__main__":
     main()

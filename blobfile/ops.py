@@ -726,10 +726,10 @@ def _is_azure_path(path: str) -> bool:
     return url.scheme == "https" and url.netloc.endswith(".blob.core.windows.net")
 
 
-def _download_chunk(path: str, start: int, size: int) -> bytes:
+def _download_chunk(src: str, dst: str, start: int, size: int) -> None:
     # directly get ranges instead of using StreamingReadFile to avoid metadata query and re-use connections
-    if _is_google_path(path):
-        bucket, blob = google.split_url(path)
+    if _is_google_path(src):
+        bucket, blob = google.split_url(src)
         req = Request(
             url=google.build_url(
                 "/storage/v1/b/{bucket}/o/{name}", bucket=bucket, name=blob
@@ -738,11 +738,11 @@ def _download_chunk(path: str, start: int, size: int) -> bytes:
             params=dict(alt="media"),
             headers={"Range": _calc_range(start=start, end=start + size)},
             success_codes=(206,),
+            preload_content=False,
         )
         resp = _execute_google_api_request(req)
-        return resp.data
-    elif _is_azure_path(path):
-        account, container, blob = azure.split_url(path)
+    elif _is_azure_path(src):
+        account, container, blob = azure.split_url(src)
         req = Request(
             url=azure.build_url(
                 account, "/{container}/{blob}", container=container, blob=blob
@@ -750,11 +750,19 @@ def _download_chunk(path: str, start: int, size: int) -> bytes:
             method="GET",
             headers={"Range": _calc_range(start=start, end=start + size)},
             success_codes=(206,),
+            preload_content=False,
         )
         resp = _execute_azure_api_request(req)
-        return resp.data
     else:
-        raise Error(f"Invalid path: '{path}'")
+        raise Error(f"Invalid path: '{src}'")
+
+    with open(dst, "wb") as f:
+        while True:
+            block = resp.read(CHUNK_SIZE)
+            if block == b"":
+                break
+            f.write(block)
+    resp.release_conn()
 
 
 def _parallel_download(src: str, dst: str) -> str:
@@ -764,17 +772,23 @@ def _parallel_download(src: str, dst: str) -> str:
     with BlobFile(dst, "wb") as dst_f:
         with concurrent.futures.ProcessPoolExecutor(
             max_workers=MAX_WORKERS
-        ) as executor:
+        ) as executor, tempfile.TemporaryDirectory() as tmpdir:
             start = 0
             futures = []
             while start < s.size:
-                future = executor.submit(_download_chunk, src, start, part_size)
-                futures.append(future)
+                tmp_path = join(tmpdir, f"{start}.bin")
+                future = executor.submit(_download_chunk, src, tmp_path, start, part_size)
+                futures.append((future, tmp_path))
                 start += part_size
-            for future in futures:
-                block = future.result()
-                dst_f.write(block)
-                m.update(block)
+            for future, tmp_path in futures:
+                future.result()
+                with open(tmp_path, "rb") as f:
+                    while True:
+                        block = f.read(CHUNK_SIZE)
+                        if block == b"":
+                            break
+                        dst_f.write(block)
+                        m.update(block)
     return m.hexdigest()
 
 

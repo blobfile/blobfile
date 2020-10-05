@@ -740,9 +740,9 @@ def test_copy(parallel):
         account=AS_TEST_ACCOUNT2, container=AS_TEST_CONTAINER2
     ) as as_path3:
         with pytest.raises(FileNotFoundError):
-            bf.copy(gcs_path1, gcs_path2)
+            bf.copy(gcs_path1, gcs_path2, parallel=parallel)
         with pytest.raises(FileNotFoundError):
-            bf.copy(as_path1, as_path2)
+            bf.copy(as_path1, as_path2, parallel=parallel)
 
         _write_contents(local_path1, contents)
 
@@ -761,7 +761,7 @@ def test_copy(parallel):
             assert h == hashlib.md5(contents).hexdigest()
             assert _read_contents(dst) == contents
             with pytest.raises(FileExistsError):
-                bf.copy(src, dst)
+                bf.copy(src, dst, parallel=parallel)
             bf.copy(src, dst, overwrite=True, parallel=parallel)
             assert _read_contents(dst) == contents
 

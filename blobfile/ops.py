@@ -728,19 +728,43 @@ def _is_azure_path(path: str) -> bool:
 
 
 def _download_chunk(path: str, start: int, size: int) -> bytes:
-    with BlobFile(path, "rb") as f:
-        f.seek(start)
-        return f.read(size)
+    if _is_google_path(path):
+        bucket, blob = google.split_url(path)
+        req = Request(
+            url=google.build_url(
+                "/storage/v1/b/{bucket}/o/{name}", bucket=bucket, name=blob
+            ),
+            method="GET",
+            params=dict(alt="media"),
+            headers={"Range": _calc_range(start=start, end=start + size)},
+            success_codes=(206,),
+        )
+        resp = _execute_google_api_request(req)
+        return resp.data
+    elif _is_azure_path(path):
+        account, container, blob = azure.split_url(path)
+        req = Request(
+            url=azure.build_url(
+                account, "/{container}/{blob}", container=container, blob=blob
+            ),
+            method="GET",
+            headers={"Range": _calc_range(start=start, end=start + size)},
+            success_codes=(206,),
+        )
+        resp = _execute_azure_api_request(req)
+        return resp.data
+    else:
+        raise Error(f"Invalid path: '{path}'")
 
 
-def _parallel_download(
-    src: str, dst: str
-) -> str:
+def _parallel_download(src: str, dst: str) -> str:
     s = stat(src)
     part_size = max(math.ceil(s.size / MAX_WORKERS), PARALLEL_COPY_MINIMUM_PART_SIZE)
     m = hashlib.md5()
     with BlobFile(dst, "wb") as dst_f:
-        with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=MAX_WORKERS
+        ) as executor:
             start = 0
             futures = []
             while start < s.size:
@@ -816,7 +840,10 @@ def _azure_parallel_upload(src: str, dst: str) -> str:
 
     upload_id = random.randint(0, 2 ** 47 - 1)
     s = stat(src)
-    part_size = min(max(math.ceil(s.size / MAX_WORKERS), PARALLEL_COPY_MINIMUM_PART_SIZE), AZURE_MAX_BLOCK_SIZE)
+    part_size = min(
+        max(math.ceil(s.size / MAX_WORKERS), PARALLEL_COPY_MINIMUM_PART_SIZE),
+        AZURE_MAX_BLOCK_SIZE,
+    )
     block_ids = []
     with concurrent.futures.ProcessPoolExecutor() as executor:
         i = 0

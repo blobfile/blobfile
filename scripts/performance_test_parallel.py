@@ -24,8 +24,16 @@ def main():
     args = parser.parse_args()
 
     tests = [
-        ("local_to_remote", bf.join(args.local_dir, "file.bin"), bf.join(args.remote_dir, "file.bin")),
-        ("remote_to_local", bf.join(args.remote_dir, "file.bin"), bf.join(args.local_dir, "file.bin")),
+        (
+            "local_to_remote",
+            bf.join(args.local_dir, "file.bin"),
+            bf.join(args.remote_dir, "file.bin"),
+        ),
+        (
+            "remote_to_local",
+            bf.join(args.remote_dir, "file.bin"),
+            bf.join(args.local_dir, "file.bin"),
+        ),
     ]
 
     for name, src, dst in tests:
@@ -45,6 +53,7 @@ def main():
                 bf.remove(dst + str(i))
 
         bf.remove(src)
+
 
 if __name__ == "__main__":
     main()

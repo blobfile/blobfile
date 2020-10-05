@@ -728,9 +728,34 @@ def _is_azure_path(path: str) -> bool:
 
 
 def _download_chunk(path: str, start: int, size: int) -> bytes:
-    with BlobFile(path, "rb") as f:
-        f.seek(start)
-        return f.read(size)
+    # directly get ranges instead of using StreamingReadFile to avoid metadata query and re-use connections
+    if _is_google_path(path):
+        bucket, blob = google.split_url(path)
+        req = Request(
+            url=google.build_url(
+                "/storage/v1/b/{bucket}/o/{name}", bucket=bucket, name=blob
+            ),
+            method="GET",
+            params=dict(alt="media"),
+            headers={"Range": _calc_range(start=start, end=start + size)},
+            success_codes=(206,),
+        )
+        resp = _execute_google_api_request(req)
+        return resp.data
+    elif _is_azure_path(path):
+        account, container, blob = azure.split_url(path)
+        req = Request(
+            url=azure.build_url(
+                account, "/{container}/{blob}", container=container, blob=blob
+            ),
+            method="GET",
+            headers={"Range": _calc_range(start=start, end=start + size)},
+            success_codes=(206,),
+        )
+        resp = _execute_azure_api_request(req)
+        return resp.data
+    else:
+        raise Error(f"Invalid path: '{path}'")
 
 
 def _parallel_download(src: str, dst: str) -> str:

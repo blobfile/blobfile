@@ -2461,7 +2461,6 @@ def _google_maybe_update_md5(path: str, generation: str, hexdigest: str) -> bool
     )
 
     resp = _execute_google_api_request(req)
-    print(resp.status)
     return resp.status == 200
 
 

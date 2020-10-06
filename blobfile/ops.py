@@ -90,7 +90,6 @@ AZURE_SHARED_KEY_EXPIRATION_SECONDS = 24 * 60 * 60
 # there is a preview version of the API that allows this to be 4000MiB
 AZURE_MAX_BLOCK_SIZE = 100_000_000
 AZURE_BLOCK_COUNT_LIMIT = 50_000
-MAX_WORKERS = os.cpu_count() or 1
 PARALLEL_COPY_MINIMUM_PART_SIZE = 32 * 2 ** 20
 
 INVALID_HOSTNAME_STATUS = 600  # fake status for invalid hostname
@@ -760,7 +759,7 @@ def _download_chunk(src: str, dst: str, start: int, size: int) -> None:
     with open(dst, "rb+") as f:
         f.seek(start)
         while True:
-            block = resp.read(CHUNK_SIZE)
+            block: bytes = resp.read(CHUNK_SIZE)
             if block == b"":
                 break
             f.write(block)
@@ -769,16 +768,15 @@ def _download_chunk(src: str, dst: str, start: int, size: int) -> None:
 
 def _parallel_download(src: str, dst: str, return_md5: bool) -> Optional[str]:
     s = stat(src)
-    part_size = max(math.ceil(s.size / MAX_WORKERS), PARALLEL_COPY_MINIMUM_PART_SIZE)
 
     # pre-allocate output file
     with open(dst, "wb") as f:
         f.seek(s.size - 1)
         f.write(b"\0")
 
-    with concurrent.futures.ProcessPoolExecutor(
-        max_workers=MAX_WORKERS
-    ) as executor:
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
+        part_size = max(math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE)
         start = 0
         futures = []
         while start < s.size:
@@ -854,12 +852,13 @@ def _azure_parallel_upload(src: str, dst: str, return_md5: bool) -> Optional[str
 
     upload_id = random.randint(0, 2 ** 47 - 1)
     s = stat(src)
-    part_size = min(
-        max(math.ceil(s.size / MAX_WORKERS), PARALLEL_COPY_MINIMUM_PART_SIZE),
-        AZURE_MAX_BLOCK_SIZE,
-    )
     block_ids = []
     with concurrent.futures.ProcessPoolExecutor() as executor:
+        max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
+        part_size = min(
+            max(math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE),
+            AZURE_MAX_BLOCK_SIZE,
+        )
         i = 0
         start = 0
         futures = []
@@ -926,12 +925,13 @@ def _google_parallel_upload(src: str, dst: str, return_md5: bool) -> Optional[st
         md5_digest = _block_md5(f)
 
     s = stat(src)
-    part_size = max(math.ceil(s.size / MAX_WORKERS), PARALLEL_COPY_MINIMUM_PART_SIZE)
 
     dstbucket, dstname = google.split_url(dst)
     source_objects = []
     object_names = []
-    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
+        part_size = max(math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE)
         i = 0
         start = 0
         futures = []

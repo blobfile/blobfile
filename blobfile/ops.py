@@ -776,7 +776,9 @@ def _parallel_download(src: str, dst: str, return_md5: bool) -> Optional[str]:
 
     with concurrent.futures.ProcessPoolExecutor() as executor:
         max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
-        part_size = max(math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE)
+        part_size = max(
+            math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE
+        )
         start = 0
         futures = []
         while start < s.size:
@@ -931,7 +933,9 @@ def _google_parallel_upload(src: str, dst: str, return_md5: bool) -> Optional[st
     object_names = []
     with concurrent.futures.ProcessPoolExecutor() as executor:
         max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
-        part_size = max(math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE)
+        part_size = max(
+            math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE
+        )
         i = 0
         start = 0
         futures = []

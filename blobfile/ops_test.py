@@ -800,6 +800,7 @@ def test_concurrent_write_gcs():
 
 def test_concurrent_write_as():
     with _get_temp_as_path() as path:
+        bf.configure(azure_write_chunk_size=2 ** 20)
         outer_contents = b"miso" * (2 ** 20 + 1)
         inner_contents = b"momo" * (2 ** 20 + 1)
         # the inner write will invalidate the outer one, the last writer
@@ -813,6 +814,7 @@ def test_concurrent_write_as():
         # the outer write will finish last and overwrite the inner one
         with bf.BlobFile(path, "rb") as f:
             assert f.read() == inner_contents
+        bf.configure()
 
 
 @contextlib.contextmanager

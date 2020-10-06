@@ -766,7 +766,9 @@ def _download_chunk(src: str, dst: str, start: int, size: int) -> None:
     resp.release_conn()
 
 
-def _parallel_download(src: str, dst: str, return_md5: bool) -> Optional[str]:
+def _parallel_download(
+    executor: concurrent.futures.Executor, src: str, dst: str, return_md5: bool
+) -> Optional[str]:
     s = stat(src)
 
     # pre-allocate output file
@@ -774,19 +776,16 @@ def _parallel_download(src: str, dst: str, return_md5: bool) -> Optional[str]:
         f.seek(s.size - 1)
         f.write(b"\0")
 
-    with concurrent.futures.ProcessPoolExecutor() as executor:
-        max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
-        part_size = max(
-            math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE
-        )
-        start = 0
-        futures = []
-        while start < s.size:
-            future = executor.submit(_download_chunk, src, dst, start, part_size)
-            futures.append(future)
-            start += part_size
-        for future in futures:
-            future.result()
+    max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
+    part_size = max(math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE)
+    start = 0
+    futures = []
+    while start < s.size:
+        future = executor.submit(_download_chunk, src, dst, start, part_size)
+        futures.append(future)
+        start += part_size
+    for future in futures:
+        future.result()
 
     if return_md5:
         with BlobFile(dst, "rb") as f:
@@ -846,7 +845,9 @@ def _azure_block_index_to_block_id(index: int, upload_id: int) -> str:
     return base64.b64encode(id_plus_index.to_bytes(8, byteorder="big")).decode("utf8")
 
 
-def _azure_parallel_upload(src: str, dst: str, return_md5: bool) -> Optional[str]:
+def _azure_parallel_upload(
+    executor: concurrent.futures.Executor, src: str, dst: str, return_md5: bool
+) -> Optional[str]:
     assert _is_local_path(src) and _is_azure_path(dst)
 
     with BlobFile(src, "rb") as f:
@@ -855,26 +856,25 @@ def _azure_parallel_upload(src: str, dst: str, return_md5: bool) -> Optional[str
     upload_id = random.randint(0, 2 ** 47 - 1)
     s = stat(src)
     block_ids = []
-    with concurrent.futures.ProcessPoolExecutor() as executor:
-        max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
-        part_size = min(
-            max(math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE),
-            AZURE_MAX_BLOCK_SIZE,
+    max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
+    part_size = min(
+        max(math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE),
+        AZURE_MAX_BLOCK_SIZE,
+    )
+    i = 0
+    start = 0
+    futures = []
+    while start < s.size:
+        block_id = _azure_block_index_to_block_id(i, upload_id)
+        future = executor.submit(
+            _azure_upload_chunk, src, start, _azure_write_chunk_size, dst, block_id
         )
-        i = 0
-        start = 0
-        futures = []
-        while start < s.size:
-            block_id = _azure_block_index_to_block_id(i, upload_id)
-            future = executor.submit(
-                _azure_upload_chunk, src, start, _azure_write_chunk_size, dst, block_id
-            )
-            futures.append(future)
-            block_ids.append(block_id)
-            i += 1
-            start += part_size
-        for future in futures:
-            future.result()
+        futures.append(future)
+        block_ids.append(block_id)
+        i += 1
+        start += part_size
+    for future in futures:
+        future.result()
 
     _azure_finalize_blob(url=dst, block_ids=block_ids, md5_digest=md5_digest)
     return binascii.hexlify(md5_digest).decode("utf8") if return_md5 else None
@@ -920,7 +920,9 @@ def _google_delete_part(bucket: str, name: str) -> None:
     _execute_google_api_request(req)
 
 
-def _google_parallel_upload(src: str, dst: str, return_md5: bool) -> Optional[str]:
+def _google_parallel_upload(
+    executor: concurrent.futures.Executor, src: str, dst: str, return_md5: bool
+) -> Optional[str]:
     assert _is_local_path(src) and _is_google_path(dst)
 
     with BlobFile(src, "rb") as f:
@@ -931,55 +933,52 @@ def _google_parallel_upload(src: str, dst: str, return_md5: bool) -> Optional[st
     dstbucket, dstname = google.split_url(dst)
     source_objects = []
     object_names = []
-    with concurrent.futures.ProcessPoolExecutor() as executor:
-        max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
-        part_size = max(
-            math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE
+    max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
+    part_size = max(math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE)
+    i = 0
+    start = 0
+    futures = []
+    while start < s.size:
+        suffix = f".part.{i}"
+        future = executor.submit(
+            _google_upload_part, src, start, part_size, dst + suffix
         )
-        i = 0
-        start = 0
-        futures = []
-        while start < s.size:
-            suffix = f".part.{i}"
-            future = executor.submit(
-                _google_upload_part, src, start, part_size, dst + suffix
-            )
-            futures.append(future)
-            object_names.append(dstname + suffix)
-            i += 1
-            start += part_size
-        for name, future in zip(object_names, futures):
-            generation = future.result()
-            source_objects.append(
-                {
-                    "name": name,
-                    "generation": generation,
-                    "objectPreconditions": {"ifGenerationMatch": generation},
-                }
-            )
-
-        req = Request(
-            url=google.build_url(
-                "/storage/v1/b/{destinationBucket}/o/{destinationObject}/compose",
-                destinationBucket=dstbucket,
-                destinationObject=dstname,
-            ),
-            method="POST",
-            data={"sourceObjects": source_objects},
-            success_codes=(200,),
+        futures.append(future)
+        object_names.append(dstname + suffix)
+        i += 1
+        start += part_size
+    for name, future in zip(object_names, futures):
+        generation = future.result()
+        source_objects.append(
+            {
+                "name": name,
+                "generation": generation,
+                "objectPreconditions": {"ifGenerationMatch": generation},
+            }
         )
-        resp = _execute_google_api_request(req)
-        metadata = json.loads(resp.data)
-        hexdigest = binascii.hexlify(md5_digest).decode("utf8")
-        _google_maybe_update_md5(dst, metadata["generation"], hexdigest)
 
-        # delete parts in parallel
-        delete_futures = []
-        for name in object_names:
-            future = executor.submit(_google_delete_part, dstbucket, name)
-            delete_futures.append(future)
-        for future in delete_futures:
-            future.result()
+    req = Request(
+        url=google.build_url(
+            "/storage/v1/b/{destinationBucket}/o/{destinationObject}/compose",
+            destinationBucket=dstbucket,
+            destinationObject=dstname,
+        ),
+        method="POST",
+        data={"sourceObjects": source_objects},
+        success_codes=(200,),
+    )
+    resp = _execute_google_api_request(req)
+    metadata = json.loads(resp.data)
+    hexdigest = binascii.hexlify(md5_digest).decode("utf8")
+    _google_maybe_update_md5(dst, metadata["generation"], hexdigest)
+
+    # delete parts in parallel
+    delete_futures = []
+    for name in object_names:
+        future = executor.submit(_google_delete_part, dstbucket, name)
+        delete_futures.append(future)
+    for future in delete_futures:
+        future.result()
 
     return hexdigest if return_md5 else None
 
@@ -989,6 +988,7 @@ def copy(
     dst: str,
     overwrite: bool = False,
     parallel: bool = False,
+    parallel_executor: Optional[concurrent.futures.Executor] = None,
     return_md5: bool = False,
 ) -> Optional[str]:
     """
@@ -1000,7 +1000,9 @@ def copy(
     If `overwrite` is `False` (the default), an exception will be raised if the destination
     path exists.
 
-    If `parallel` is `True`, use multiple processes to dowload or upload the file.  For this to work, one path must be on blob storage and the other path must be local.  The default is `False`.
+    If `parallel` is `True`, use multiple processes to dowload or upload the file.  For this to work, one path must be on blob storage and the other path must be local.  This can be faster on cloud machines but is not in general guaranteed to be faster than using serial copy.  The default is `False`.
+
+    If `parallel_executor` is set to a `concurrent.futures.Executor` and `parallel` is set to `True`, the provided executor will be used instead of creating a new one for each call to `copy()`.
 
     If `return_md5` is set to `True`, an md5 will be calculated during the copy and returned if available,
     or else None will be returned.
@@ -1134,7 +1136,11 @@ def copy(
             copy_fn = _google_parallel_upload
 
         if copy_fn is not None:
-            return copy_fn(src, dst, return_md5=return_md5)
+            if parallel_executor is None:
+                with concurrent.futures.ProcessPoolExecutor() as executor:
+                    return copy_fn(executor, src, dst, return_md5=return_md5)
+            else:
+                return copy_fn(parallel_executor, src, dst, return_md5=return_md5)
 
     for attempt, backoff in enumerate(
         _exponential_sleep_generator(initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX)

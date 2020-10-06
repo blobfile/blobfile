@@ -1739,7 +1739,7 @@ def _list_blobs_in_dir(prefix: str, exclude_prefix: bool) -> Iterator[DirEntry]:
 
 def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
     """
-    Returns an iterator of the contents of the dire ctory at `path`
+    Returns an iterator of the contents of the directory at `path`
 
     If your filenames are uniformly distributed (like hashes) then you can use `shard_prefix_length`
     to query them more quickly.  `shard_prefix_length` will do multiple queries in parallel,

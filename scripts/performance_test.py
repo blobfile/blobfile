@@ -27,10 +27,16 @@ def main():
     parser.add_argument("--no-streaming-read-request", action="store_true")
     parser.add_argument("--buffer-size", default=8192, type=int)
     parser.add_argument("--size", default=1_000_000_000, type=int)
+    parser.add_argument("--write-chunk-size", default=32 * 2 ** 20, type=int)
     args = parser.parse_args()
 
     if args.no_streaming_read_request:
         ops.USE_STREAMING_READ_REQUEST = False
+
+    bf.configure(
+        azure_write_chunk_size=args.write_chunk_size,
+        google_write_chunk_size=args.write_chunk_size,
+    )
 
     path = bf.join(args.path, "large.bin")
     data = (b"meow" * 249 + b"mew\n") * (args.size // 1000)

@@ -74,13 +74,11 @@ EARLY_EXPIRATION_SECONDS = 5 * 60
 DEFAULT_CONNECTION_POOL_MAX_SIZE = 32
 DEFAULT_MAX_CONNECTION_POOL_COUNT = 10
 DEFAULT_AZURE_WRITE_CHUNK_SIZE = 32 * 2 ** 20
+DEFAULT_GOOGLE_WRITE_CHUNK_SIZE = 32 * 2 ** 20
 DEFAULT_RETRY_LOG_THRESHOLD = 0
 CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 30
 CHUNK_SIZE = 2 ** 20
-GOOGLE_CHUNK_SIZE = 32 * 2 ** 20
-# https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
-assert GOOGLE_CHUNK_SIZE % (256 * 1024) == 0
 # it looks like azure signed urls cannot exceed the lifetime of the token used
 # to create them, so don't keep the key around too long
 AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
@@ -140,6 +138,7 @@ _max_connection_pool_count = DEFAULT_MAX_CONNECTION_POOL_COUNT
 # https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-block-blobs
 # the chunk size determines the maximum size of an individual blob
 _azure_write_chunk_size = DEFAULT_AZURE_WRITE_CHUNK_SIZE
+_google_write_chunk_size = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE
 _retry_log_threshold = DEFAULT_RETRY_LOG_THRESHOLD
 _retry_limit = None
 
@@ -225,6 +224,7 @@ def configure(
     connection_pool_max_size: int = DEFAULT_CONNECTION_POOL_MAX_SIZE,
     max_connection_pool_count: int = DEFAULT_MAX_CONNECTION_POOL_COUNT,
     azure_write_chunk_size: int = DEFAULT_AZURE_WRITE_CHUNK_SIZE,
+    google_write_chunk_size: int = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
     retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
     retry_limit: Optional[int] = None,
 ) -> None:
@@ -237,13 +237,14 @@ def configure(
     """
     global _log_callback
     _log_callback = log_callback
-    global _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size, _retry_log_threshold, _retry_limit
+    global _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size, _retry_log_threshold, _retry_limit, _google_write_chunk_size
     with _http_lock:
         _http = None
         _http_pid = None
         _connection_pool_max_size = connection_pool_max_size
         _max_connection_pool_count = max_connection_pool_count
         _azure_write_chunk_size = azure_write_chunk_size
+        _google_write_chunk_size = google_write_chunk_size
         _retry_log_threshold = retry_log_threshold
         _retry_limit = retry_limit
 
@@ -2863,7 +2864,9 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
         if resp.status in (400, 404):
             raise FileNotFoundError(f"No such file or bucket: '{path}'")
         self._upload_url = resp.headers["Location"]
-        super().__init__(chunk_size=GOOGLE_CHUNK_SIZE)
+        # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
+        assert _google_write_chunk_size % (256 * 1024) == 0
+        super().__init__(chunk_size=_google_write_chunk_size)
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         start = self._offset

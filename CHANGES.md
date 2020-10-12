@@ -2,7 +2,7 @@
 
 ## 0.17.3
 
-* Change default write block size to 32 MB
+* Change default write block size to 8 MB
 * Add `parallel` option to `bf.copy` to do some operations in parallel as well as `parallel_executor` argument to set the executor to be used.
 * Fix `bf.copy` between multiple azure storage accounts, thanks @hauntsaninja for reporting this
 

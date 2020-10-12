@@ -13,7 +13,7 @@ def timer(name, size):
     start = time.time()
     yield
     end = time.time()
-    print(f"{name}: {end - start} MB/s {size /1e6/(end - start)}")
+    print(f"{name}: {end - start}s {size /1e6/(end - start)}MB/s")
 
 
 def verify_hash(ref_hash, path):

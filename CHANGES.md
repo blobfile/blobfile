@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.17.4
+
 ## 0.17.3
 
 * Change default write block size to 8 MB

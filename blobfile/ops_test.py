@@ -1178,7 +1178,7 @@ def test_more_read_write(binary, streaming, ctx):
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
-def test_video(blobfile, streaming, ctx):
+def test_video(streaming, ctx):
     rng = np.random.RandomState(0)
     shape = (256, 64, 64, 3)
     video_data = rng.randint(0, 256, size=np.prod(shape), dtype=np.uint8).reshape(shape)

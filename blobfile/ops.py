@@ -3133,7 +3133,7 @@ def BlobFile(
             * `streaming=False`:
                 * Reading is done by downloading the remote file to a local file during the constructor.
                 * Writing is done by uploading the file on `close()` or during destruction.
-                * Appending is done by downloading the file during construction and uploading on `close()`.
+                * Appending is done by downloading the file during construction and uploading on `close()` or during destruction.
         buffer_size: number of bytes to buffer, this can potentially make reading more efficient.
         cache_dir: a directory in which to cache files for reading, only valid if `streaming=False` and `mode` is in `"r", "rb"`.   You are reponsible for cleaning up the cache directory.
 

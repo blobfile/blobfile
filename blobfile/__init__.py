@@ -18,10 +18,8 @@ from blobfile.ops import (
     get_url,
     md5,
     set_mtime,
-    set_log_callback,
     configure,
     BlobFile,
-    LocalBlobFile,
 )
 from blobfile.common import (
     Request,
@@ -51,10 +49,8 @@ __all__ = [
     "get_url",
     "md5",
     "set_mtime",
-    "set_log_callback",
     "configure",
     "BlobFile",
-    "LocalBlobFile",
     "Request",
     "Error",
     "RequestFailure",

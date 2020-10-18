@@ -364,9 +364,9 @@ def test_append(ctx):
     contents = b"meow!\n"
     additional_contents = b"purr\n"
     with ctx() as path:
-        with bf.LocalBlobFile(path, "ab") as w:
+        with bf.BlobFile(path, "ab", streaming=False) as w:
             w.write(contents)
-        with bf.LocalBlobFile(path, "ab") as w:
+        with bf.BlobFile(path, "ab", streaming=False) as w:
             w.write(additional_contents)
         with bf.BlobFile(path, "rb") as r:
             assert r.read() == contents + additional_contents
@@ -992,7 +992,7 @@ def test_cache_dir(ctx):
     with ctx() as path:
         with bf.BlobFile(path, mode="wb") as f:
             f.write(contents)
-        with bf.LocalBlobFile(path, mode="rb", cache_dir=cache_dir) as f:
+        with bf.BlobFile(path, mode="rb", streaming=False, cache_dir=cache_dir) as f:
             assert f.read() == contents
         content_hash = hashlib.md5(contents).hexdigest()
         cache_path = bf.join(cache_dir, content_hash, bf.basename(path))
@@ -1001,7 +1001,7 @@ def test_cache_dir(ctx):
         # alter the cached file to make sure we are not re-reading the remote file
         with open(cache_path, "wb") as f:
             f.write(alternative_contents)
-        with bf.LocalBlobFile(path, mode="rb", cache_dir=cache_dir) as f:
+        with bf.BlobFile(path, mode="rb", streaming=False, cache_dir=cache_dir) as f:
             assert f.read() == alternative_contents
 
 
@@ -1094,11 +1094,11 @@ def test_create_local_intermediate_dirs():
 
 
 @pytest.mark.parametrize("binary", [True, False])
-@pytest.mark.parametrize("blobfile", [bf.BlobFile, bf.LocalBlobFile])
+@pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
-def test_more_read_write(binary, blobfile, ctx):
+def test_more_read_write(binary, streaming, ctx):
     rng = np.random.RandomState(0)
 
     with ctx() as path:
@@ -1109,25 +1109,25 @@ def test_more_read_write(binary, blobfile, ctx):
             read_mode = "r"
             write_mode = "w"
 
-        with blobfile(path, write_mode) as w:
+        with bf.BlobFile(path, write_mode, streaming=streaming) as w:
             pass
 
-        with blobfile(path, read_mode) as r:
+        with bf.BlobFile(path, read_mode, streaming=streaming) as r:
             assert len(r.read()) == 0
 
         contents = b"meow!"
         if not binary:
             contents = contents.decode("utf8")
 
-        with blobfile(path, write_mode) as w:
+        with bf.BlobFile(path, write_mode, streaming=streaming) as w:
             w.write(contents)
 
-        with blobfile(path, read_mode) as r:
+        with bf.BlobFile(path, read_mode, streaming=streaming) as r:
             assert r.read(1) == contents[:1]
             assert r.read() == contents[1:]
             assert len(r.read()) == 0
 
-        with blobfile(path, read_mode) as r:
+        with bf.BlobFile(path, read_mode, streaming=streaming) as r:
             for i in range(len(contents)):
                 assert r.read(1) == contents[i : i + 1]
             assert len(r.read()) == 0
@@ -1139,23 +1139,23 @@ def test_more_read_write(binary, blobfile, ctx):
             contents = contents.decode("utf8")
             lines = [line.decode("utf8") for line in lines]
 
-        with blobfile(path, write_mode) as w:
+        with bf.BlobFile(path, write_mode, streaming=streaming) as w:
             w.write(contents)
 
-        with blobfile(path, read_mode) as r:
+        with bf.BlobFile(path, read_mode, streaming=streaming) as r:
             assert r.readlines() == lines
 
-        with blobfile(path, read_mode) as r:
+        with bf.BlobFile(path, read_mode, streaming=streaming) as r:
             assert [line for line in r] == lines
 
         if binary:
             for size in [2 * 2 ** 20, 12_345_678]:
                 contents = rng.randint(0, 256, size=size, dtype=np.uint8).tobytes()
 
-                with blobfile(path, write_mode) as w:
+                with bf.BlobFile(path, write_mode, streaming=streaming) as w:
                     w.write(contents)
 
-                with blobfile(path, read_mode) as r:
+                with bf.BlobFile(path, read_mode, streaming=streaming) as r:
                     size = rng.randint(0, 1_000_000)
                     buf = b""
                     while True:
@@ -1167,24 +1167,24 @@ def test_more_read_write(binary, blobfile, ctx):
         else:
             obj = {"a": 1}
 
-            with blobfile(path, write_mode) as w:
+            with bf.BlobFile(path, write_mode, streaming=streaming) as w:
                 json.dump(obj, w)
 
-            with blobfile(path, read_mode) as r:
+            with bf.BlobFile(path, read_mode, streaming=streaming) as r:
                 assert json.load(r) == obj
 
 
-@pytest.mark.parametrize("blobfile", [bf.BlobFile, bf.LocalBlobFile])
+@pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
-def test_video(blobfile, ctx):
+def test_video(blobfile, streaming, ctx):
     rng = np.random.RandomState(0)
     shape = (256, 64, 64, 3)
     video_data = rng.randint(0, 256, size=np.prod(shape), dtype=np.uint8).reshape(shape)
 
     with ctx() as path:
-        with blobfile(path, mode="wb") as wf:
+        with bf.BlobFile(path, mode="wb", streaming=streaming) as wf:
             with imageio.get_writer(
                 wf,
                 format="ffmpeg",
@@ -1196,14 +1196,14 @@ def test_video(blobfile, ctx):
                 for frame in video_data:
                     w.append_data(frame)
 
-        with blobfile(path, mode="rb") as rf:
+        with bf.BlobFile(path, mode="rb", streaming=streaming) as rf:
             with imageio.get_reader(
                 rf, format="ffmpeg", input_params=["-f", "mp4"]
             ) as r:
                 for idx, frame in enumerate(r):
                     assert np.array_equal(frame, video_data[idx])
 
-        with blobfile(path, mode="rb") as rf:
+        with bf.BlobFile(path, mode="rb", streaming=streaming) as rf:
             container = av.open(rf)
             stream = container.streams.video[0]
             for idx, frame in enumerate(container.decode(stream)):

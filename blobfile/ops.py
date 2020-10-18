@@ -194,13 +194,6 @@ def _get_http_pool() -> urllib3.PoolManager:
         return _http
 
 
-def set_log_callback(fn: Callable[[str], None]) -> None:
-    """
-    DEPRECATED: use configure() instead
-    """
-    configure(log_callback=fn)
-
-
 # rather than a global configure object, there should probably be a context
 # object that tracks all the settings
 #
@@ -3369,41 +3362,3 @@ class _ProxyFile(io.FileIO):
                 os.remove(self._local_path)
                 os.rmdir(self._tmp_dir)
         self._closed = True
-
-
-@overload
-def LocalBlobFile(
-    path: str,
-    mode: Literal["rb", "wb", "ab"],
-    buffer_size: int = ...,
-    cache_dir: Optional[str] = ...,
-) -> BinaryIO:
-    ...
-
-
-@overload
-def LocalBlobFile(
-    path: str,
-    mode: Literal["r", "w", "a"] = ...,
-    buffer_size: int = ...,
-    cache_dir: Optional[str] = ...,
-) -> TextIO:
-    ...
-
-
-def LocalBlobFile(
-    path: str,
-    mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r",
-    buffer_size: int = io.DEFAULT_BUFFER_SIZE,
-    cache_dir: Optional[str] = None,
-):
-    """
-    DEPRECATED: use BlobFile(streaming=False) instead
-    """
-    return BlobFile(
-        path=path,
-        streaming=False,
-        mode=mode,
-        buffer_size=buffer_size,
-        cache_dir=cache_dir,
-    )

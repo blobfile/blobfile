@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.17.4
+## 1.0.0
+
+* Remove deprecated functions `LocalBlobFile` (use `BlobFile` with `streaming=False`) and `set_log_callback` (use `configure` with `log_callback=<fn>`)
 
 ## 0.17.3
 

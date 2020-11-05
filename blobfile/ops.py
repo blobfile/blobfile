@@ -452,18 +452,25 @@ def _azure_get_access_token(key: Any) -> Tuple[Any, float]:
         result = json.loads(resp.data)
         if resp.status == 400:
             if (
-                result["error"] == "invalid_grant"
-                and "AADSTS700082" in result["error_description"]
-            ) or (
-                result["error"] == "interaction_required"
-                and "AADSTS50078" in result["error_description"]
+                (
+                    result["error"] == "invalid_grant"
+                    and "AADSTS700082" in result["error_description"]
+                )
+                or (
+                    result["error"] == "interaction_required"
+                    and "AADSTS50078" in result["error_description"]
+                )
+                or (
+                    result["error"] == "interaction_required"
+                    and "AADSTS50076" in result["error_description"]
+                )
             ):
                 raise Error(
-                    "Your refresh token has expired, please run `az login` to refresh it"
+                    "Your refresh token is no longer valid, please run `az login` to get a new one"
                 )
             else:
                 raise Error(
-                    f"Encountered an error when requesting an access token: `{result['error']}: {result['error_description']}`"
+                    f"Encountered an error when requesting an access token: `{result['error']}: {result['error_description']}`.  You can attempt to fix this by re-running `az login`."
                 )
 
         auth = (azure.OAUTH_TOKEN, result["access_token"])
@@ -510,9 +517,9 @@ def _azure_get_access_token(key: Any) -> Tuple[Any, float]:
 
 No Azure credentials were found.  If the container is not marked as public, please do one of the following:
 
-1) Log in with 'az login', blobfile will use your default credentials to lookup your storage account key
-2) Set the environment variable 'AZURE_STORAGE_KEY' to your storage account key which you can find by following this guide: https://docs.microsoft.com/en-us/azure/storage/common/storage-account-keys-manage
-3) Create an account with 'az ad sp create-for-rbac --name <name>' and set the 'AZURE_APPLICATION_CREDENTIALS' environment variable to the path of the output from that command or individually set the 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', and 'AZURE_TENANT_ID' environment variables"""
+* Log in with 'az login', blobfile will use your default credentials to lookup your storage account key
+* Set the environment variable 'AZURE_STORAGE_KEY' to your storage account key which you can find by following this guide: https://docs.microsoft.com/en-us/azure/storage/common/storage-account-keys-manage
+* Create an account with 'az ad sp create-for-rbac --name <name>' and set the 'AZURE_APPLICATION_CREDENTIALS' environment variable to the path of the output from that command or individually set the 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', and 'AZURE_TENANT_ID' environment variables"""
     raise Error(msg)
 
 

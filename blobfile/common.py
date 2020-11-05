@@ -47,7 +47,7 @@ class Error(Exception):
         super().__init__(message)
 
 
-def _extract_error_description(data: bytes) -> Optional[str]:
+def _extract_error(data: bytes) -> Optional[str]:
     if data.startswith(b"\xef\xbb\xbf<?xml"):
         try:
             result = xmltodict.parse(data)
@@ -57,7 +57,12 @@ def _extract_error_description(data: bytes) -> Optional[str]:
     elif data.startswith(b"{"):
         try:
             result = json.loads(data)
-            return str(result["error"])
+            err = ""
+            if "error" in result:
+                err += str(result["error"])
+                if "error_description" in result:
+                    err += ": " + str(result["error_description"])
+            return err
         except Exception:
             pass
     return None
@@ -73,11 +78,11 @@ class RequestFailure(Error):
         self.request = request
         self.response = response
         if self.response.data is not None:
-            err_desc = _extract_error_description(self.response.data)
+            err = _extract_error(self.response.data)
         else:
-            err_desc = None
+            err = None
         super().__init__(
-            f"message={self.message}, request={self.request}, status={self.response.status}, error_description={err_desc}"
+            f"message={self.message}, request={self.request}, status={self.response.status}, error={err}"
         )
 
 

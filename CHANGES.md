@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1
+
+* Better error message for bad refresh token, thanks @hauntsaninja for reporting this
+* Include more error information when a request fails
+
 ## 1.0.0
 
 * Remove deprecated functions `LocalBlobFile` (use `BlobFile` with `streaming=False`) and `set_log_callback` (use `configure` with `log_callback=<fn>`)

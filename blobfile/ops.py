@@ -622,7 +622,7 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
                 message = f"unexpected status {resp.status}"
                 if url.startswith(google.BASE_URL) and resp.status in (429, 503):
                     message += ": if you are writing a blob this error may be due to multiple concurrent writers - make sure you are not writing to the same blob from multiple processes simultaneously"
-                err = RequestFailure(message=message, request=req, response=resp)
+                err = RequestFailure.create_from_request_response(message=message, request=req, response=resp)
                 if resp.status not in req.retry_codes:
                     raise err
         except (
@@ -660,11 +660,11 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
                     if fake_resp.status in req.success_codes:
                         return fake_resp
                     else:
-                        raise RequestFailure(
+                        raise RequestFailure.create_from_request_response(
                             "host does not exist", request=req, response=fake_resp
                         )
 
-            err = RequestFailure(
+            err = RequestFailure.create_from_request_response(
                 message=f"request failed with exception {e}",
                 request=req,
                 response=urllib3.response.HTTPResponse(status=0, body=io.BytesIO(b"")),
@@ -828,13 +828,13 @@ def _azure_finalize_blob(url: str, block_ids: List[str], md5_digest: bytes) -> N
             # we were uploading, so assume that is what happened
             # this could be interpreted as a sort of RestartableStreamingWriteFailure but
             # that could result in two processes fighting while uploading the file
-            raise ConcurrentWriteFailure(
+            raise ConcurrentWriteFailure.create_from_request_response(
                 f"Invalid block list, most likely a concurrent writer wrote to the same path: `{url}`",
                 request=req,
                 response=resp,
             )
         else:
-            raise RequestFailure(
+            raise RequestFailure.create_from_request_response(
                 message=f"unexpected status {resp.status}", request=req, response=resp
             )
 
@@ -2899,7 +2899,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
         except RequestFailure as e:
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
             if e.response is not None and e.response.status in (404, 410):
-                raise RestartableStreamingWriteFailure(
+                raise RestartableStreamingWriteFailure.create_from_request_response(
                     message=e.message, request=e.request, response=e.response
                 )
             else:

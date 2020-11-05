@@ -1,6 +1,6 @@
 import json
 import urllib
-from typing import Mapping, Optional, Any, Sequence
+from typing import Mapping, Optional, Any, Sequence, Tuple
 
 import urllib3
 import xmltodict
@@ -42,28 +42,25 @@ def build_url(base_url: str, template: str, **data: str) -> str:
 class Error(Exception):
     """Base class for blobfile exceptions."""
 
-    def __init__(self, message: str):
+    def __init__(self, message: str, *args: Any):
         self.message = message
-        super().__init__(message)
+        super().__init__(message, *args)
 
 
-def _extract_error(data: bytes) -> Optional[str]:
+def _extract_error(data: bytes) -> Tuple[Optional[str], Optional[str]]:
     if data.startswith(b"\xef\xbb\xbf<?xml"):
         try:
             result = xmltodict.parse(data)
-            return result["Error"]["Code"]
+            return result["Error"]["Code"], None
         except Exception:
             pass
     elif data.startswith(b"{"):
         try:
             result = json.loads(data)
-            err = str(result["error"])
-            if "error_description" in result:
-                err += ": " + str(result["error_description"])
-            return err
+            return str(result["error"]), result.get("error_description")
         except Exception:
             pass
-    return None
+    return None, None
 
 
 class RequestFailure(Error):
@@ -71,17 +68,30 @@ class RequestFailure(Error):
     A request failed, possibly after some number of retries
     """
 
-    def __init__(self, message: str, request: Request, response: urllib3.HTTPResponse):
-        self.message = message
-        self.request = request
-        self.response = response
-        if self.response.data is not None:
-            err = _extract_error(self.response.data)
-        else:
-            err = None
+    def __init__(self, message: str, request_string: str, response_status: int, error: Optional[str], error_description: Optional[str]):
+        self.request_string = request_string
+        self.response_status = response_status
+        self.error = error
+        self.error_description = error_description
         super().__init__(
-            f"message={self.message}, request={self.request}, status={self.response.status}, error={err}"
+            message, self.request_string, self.response_status, self.error, self.error_description
         )
+
+    def __str__(self):
+        return f"message={self.message}, request={self.request_string}, status={self.response_status}, error={self.error} error_description={self.error_description}"
+
+    @classmethod
+    def create_from_request_response(cls, message: str, request: Request, response: urllib3.HTTPResponse) -> Any:
+        # this helper function exists because if you make a custom Exception subclass it cannot
+        # be unpickled easily: https://stackoverflow.com/questions/41808912/cannot-unpickle-exception-subclass
+
+        err = None
+        err_desc = None
+        if response.data is not None:
+            err, err_desc = _extract_error(response.data)
+        # use string representation since request may not be serializable
+        # exceptions need to be serializable when raised from subprocesses
+        return cls(message=message, request_string=str(request), response_status=response.status, error=err, error_description=err_desc)
 
 
 class RestartableStreamingWriteFailure(RequestFailure):

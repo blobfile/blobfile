@@ -463,7 +463,8 @@ def _azure_get_access_token(key: Any) -> Tuple[Any, float]:
                 )
             else:
                 raise Error(
-                    f"Encountered an error when requesting an access token: `{result['error']}: {result['error_description']}`"
+                    f"Encountered an error when requesting an access token: `{result['error']}: {result['error_description']}`\n"
+                    "Try running `az login`?"
                 )
 
         auth = (azure.OAUTH_TOKEN, result["access_token"])

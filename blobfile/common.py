@@ -57,11 +57,9 @@ def _extract_error(data: bytes) -> Optional[str]:
     elif data.startswith(b"{"):
         try:
             result = json.loads(data)
-            err = ""
-            if "error" in result:
-                err += str(result["error"])
-                if "error_description" in result:
-                    err += ": " + str(result["error_description"])
+            err = str(result["error"])
+            if "error_description" in result:
+                err += ": " + str(result["error_description"])
             return err
         except Exception:
             pass

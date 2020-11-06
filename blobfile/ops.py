@@ -66,7 +66,9 @@ from blobfile.common import (
     ConcurrentWriteFailure,
 )
 
+# feature flags
 USE_STREAMING_READ_REQUEST = True
+
 BLOBFILE_BACKENDS_ENV_VAR = "BLOBFILE_BACKENDS"
 BACKOFF_INITIAL = 0.1
 BACKOFF_MAX = 60.0
@@ -740,44 +742,27 @@ def _is_azure_path(path: str) -> bool:
 
 
 def _download_chunk(src: str, dst: str, start: int, size: int) -> None:
-    # directly get ranges instead of using StreamingReadFile to avoid metadata query and re-use connections
-    if _is_google_path(src):
-        bucket, blob = google.split_url(src)
-        req = Request(
-            url=google.build_url(
-                "/storage/v1/b/{bucket}/o/{name}", bucket=bucket, name=blob
-            ),
-            method="GET",
-            params=dict(alt="media"),
-            headers={"Range": _calc_range(start=start, end=start + size)},
-            success_codes=(206,),
-            preload_content=False,
-        )
-        resp = _execute_google_api_request(req)
-    elif _is_azure_path(src):
-        account, container, blob = azure.split_url(src)
-        req = Request(
-            url=azure.build_url(
-                account, "/{container}/{blob}", container=container, blob=blob
-            ),
-            method="GET",
-            headers={"Range": _calc_range(start=start, end=start + size)},
-            success_codes=(206,),
-            preload_content=False,
-        )
-        resp = _execute_azure_api_request(req)
-    else:
-        raise Error(f"Invalid path: '{src}'")
-
-    # open file such that we can write directly to the correct range
-    with open(dst, "rb+") as f:
-        f.seek(start)
-        while True:
-            block: bytes = resp.read(CHUNK_SIZE)
-            if block == b"":
-                break
-            f.write(block)
-    resp.release_conn()
+    # this is a little inefficient because each time we open a file we do
+    # a query for file metadata, we could call the StreamingReadFile subclass
+    # directly with the known size and avoid this
+    with BlobFile(src, "rb") as src_f:
+        src_f.seek(start)
+        # open output file such that we can write directly to the correct range
+        with open(dst, "rb+") as dst_f:
+            dst_f.seek(start)
+            bytes_read = 0
+            while True:
+                n = min(CHUNK_SIZE, size - bytes_read)
+                assert n >= 0
+                block = src_f.read(n)
+                if block == b"":
+                    if bytes_read != size:
+                        raise Error(
+                            f"read wrong number of bytes from file `{src}`, expected {size} but read {bytes_read}"
+                        )
+                    break
+                dst_f.write(block)
+                bytes_read += len(block)
 
 
 def _parallel_download(
@@ -795,7 +780,9 @@ def _parallel_download(
     start = 0
     futures = []
     while start < s.size:
-        future = executor.submit(_download_chunk, src, dst, start, part_size)
+        future = executor.submit(
+            _download_chunk, src, dst, start, min(part_size, s.size - start)
+        )
         futures.append(future)
         start += part_size
     for future in futures:
@@ -2790,19 +2777,18 @@ class _StreamingReadFile(io.RawIOBase):
 
 class _GoogleStreamingReadFile(_StreamingReadFile):
     def __init__(self, path: str) -> None:
-        isfile, self._metadata = _google_isfile(path)
+        isfile, metadata = _google_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file or bucket: '{path}'")
-        super().__init__(path, int(self._metadata["size"]))
+        super().__init__(path, int(metadata["size"]))
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
     ) -> urllib3.response.HTTPResponse:
+        bucket, name = google.split_url(self._path)
         req = Request(
             url=google.build_url(
-                "/storage/v1/b/{bucket}/o/{name}",
-                bucket=self._metadata["bucket"],
-                name=self._metadata["name"],
+                "/storage/v1/b/{bucket}/o/{name}", bucket=bucket, name=name
             ),
             method="GET",
             params=dict(alt="media"),
@@ -2817,10 +2803,10 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
 
 class _AzureStreamingReadFile(_StreamingReadFile):
     def __init__(self, path: str) -> None:
-        isfile, self._metadata = _azure_isfile(path)
+        isfile, metadata = _azure_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
-        super().__init__(path, int(self._metadata["Content-Length"]))
+        super().__init__(path, int(metadata["Content-Length"]))
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None

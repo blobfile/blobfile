@@ -2,6 +2,8 @@
 
 ## 1.0.4
 
+* Fewer calls to azure API to reduce change of hitting rate limits, thanks to @hauntsaninja for the PR
+
 ## 1.0.3
 
 * Sleep when checking copy status, thanks to @hauntsaninja for the PR

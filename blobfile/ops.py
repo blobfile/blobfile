@@ -1094,9 +1094,9 @@ def copy(
         # wait for potentially async copy operation to finish
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob
         # pending, success, aborted, failed
-        sleep = _exponential_sleep_generator(initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX)
+        backoff = _exponential_sleep_generator(initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX)
         while copy_status == "pending":
-            time.sleep(next(sleep))
+            time.sleep(next(backoff))
             req = Request(
                 url=azure.build_url(
                     dst_account,

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.3
+
+* Sleep when checking copy status, thanks to @hauntsaninja for the PR
+
 ## 1.0.2
 
 * New version to work around pypi upload failure

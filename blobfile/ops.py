@@ -554,7 +554,9 @@ global_azure_sas_token_manager = TokenManager(_azure_get_sas_token)
 
 
 def _exponential_sleep_generator(
-    initial: float, maximum: float, multiplier: float = 2
+    initial: float = BACKOFF_INITIAL,
+    maximum: float = BACKOFF_MAX,
+    multiplier: float = 2,
 ) -> Iterator[float]:
     base = initial
     while True:
@@ -596,9 +598,7 @@ def _execute_google_api_request(req: Request) -> urllib3.HTTPResponse:
 
 
 def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
-    for attempt, backoff in enumerate(
-        _exponential_sleep_generator(initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX)
-    ):
+    for attempt, backoff in enumerate(_exponential_sleep_generator()):
         req = build_req()
         url = req.url
         if req.params is not None:
@@ -1151,7 +1151,7 @@ def copy(
         # wait for potentially async copy operation to finish
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob
         # pending, success, aborted, failed
-        backoff = _exponential_sleep_generator(initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX)
+        backoff = _exponential_sleep_generator()
         while copy_status == "pending":
             time.sleep(next(backoff))
             req = Request(
@@ -1195,9 +1195,7 @@ def copy(
             else:
                 return copy_fn(parallel_executor, src, dst, return_md5=return_md5)
 
-    for attempt, backoff in enumerate(
-        _exponential_sleep_generator(initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX)
-    ):
+    for attempt, backoff in enumerate(_exponential_sleep_generator()):
         try:
             with BlobFile(src, "rb", streaming=True) as src_f, BlobFile(
                 dst, "wb", streaming=True
@@ -2686,9 +2684,7 @@ class _StreamingReadFile(io.RawIOBase):
 
         n = 0  # for pyright
         if USE_STREAMING_READ_REQUEST:
-            for attempt, backoff in enumerate(
-                _exponential_sleep_generator(initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX)
-            ):
+            for attempt, backoff in enumerate(_exponential_sleep_generator()):
                 if self._f is None:
                     resp = self._request_chunk(streaming=True, start=self._offset)
                     if resp.status == 416:

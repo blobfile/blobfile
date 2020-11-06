@@ -1,5 +1,7 @@
 # Changelog
 
+## 1.0.4
+
 ## 1.0.3
 
 * Sleep when checking copy status, thanks to @hauntsaninja for the PR

@@ -863,6 +863,11 @@ def _azure_parallel_upload(
     with BlobFile(src, "rb") as f:
         md5_digest = _block_md5(f)
 
+    account, container, blob = azure.split_url(dst)
+    dst_url = azure.build_url(
+        account, "/{container}/{blob}", container=container, blob=blob
+    )
+
     upload_id = random.randint(0, 2 ** 47 - 1)
     s = stat(src)
     block_ids = []
@@ -881,7 +886,7 @@ def _azure_parallel_upload(
             src,
             start,
             min(_azure_write_chunk_size, s.size - start),
-            dst,
+            dst_url,
             block_id,
         )
         futures.append(future)
@@ -891,7 +896,7 @@ def _azure_parallel_upload(
     for future in futures:
         future.result()
 
-    _azure_finalize_blob(url=dst, block_ids=block_ids, md5_digest=md5_digest)
+    _azure_finalize_blob(url=dst_url, block_ids=block_ids, md5_digest=md5_digest)
     return binascii.hexlify(md5_digest).decode("utf8") if return_md5 else None
 
 
@@ -2948,12 +2953,12 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
                 raise
 
 
-def _clear_uncommitted_blocks(path: str, metadata: Dict[str, str]) -> None:
+def _clear_uncommitted_blocks(url: str, metadata: Dict[str, str]) -> None:
     # to avoid leaking uncommitted blocks, we can do a Put Block List with
     # all the existing blocks for a file
     # this will change the last-modified timestamp and the etag
     req = Request(
-        url=path, params=dict(comp="blocklist"), method="GET", success_codes=(200, 404)
+        url=url, params=dict(comp="blocklist"), method="GET", success_codes=(200, 404)
     )
     resp = _execute_azure_api_request(req)
     if resp.status != 200:
@@ -2976,7 +2981,7 @@ def _clear_uncommitted_blocks(path: str, metadata: Dict[str, str]) -> None:
         if src in metadata:
             headers[dst] = metadata[src]
     req = Request(
-        url=path,
+        url=url,
         method="PUT",
         params=dict(comp="blocklist"),
         headers={**headers, "If-Match": metadata["etag"]},

@@ -4,6 +4,7 @@
 
 * Better error message for bad refresh token, thanks @hauntsaninja for reporting this
 * Include more error information when a request fails
+* Fix `bf.copy(..., parallel=True)` logic, versions `1.0.0` and `0.17.3` could upload the wrong data when requests are retried internally by `bf.copy`.
 
 ## 1.0.0
 

@@ -51,7 +51,7 @@ def _extract_error(data: bytes) -> Tuple[Optional[str], Optional[str]]:
     if data.startswith(b"\xef\xbb\xbf<?xml"):
         try:
             result = xmltodict.parse(data)
-            return result["Error"]["Code"], None
+            return result["Error"]["Code"], result["Error"].get("Message")
         except Exception:
             pass
     elif data.startswith(b"{"):
@@ -68,20 +68,33 @@ class RequestFailure(Error):
     A request failed, possibly after some number of retries
     """
 
-    def __init__(self, message: str, request_string: str, response_status: int, error: Optional[str], error_description: Optional[str]):
+    def __init__(
+        self,
+        message: str,
+        request_string: str,
+        response_status: int,
+        error: Optional[str],
+        error_description: Optional[str],
+    ):
         self.request_string = request_string
         self.response_status = response_status
         self.error = error
         self.error_description = error_description
         super().__init__(
-            message, self.request_string, self.response_status, self.error, self.error_description
+            message,
+            self.request_string,
+            self.response_status,
+            self.error,
+            self.error_description,
         )
 
     def __str__(self):
         return f"message={self.message}, request={self.request_string}, status={self.response_status}, error={self.error} error_description={self.error_description}"
 
     @classmethod
-    def create_from_request_response(cls, message: str, request: Request, response: urllib3.HTTPResponse) -> Any:
+    def create_from_request_response(
+        cls, message: str, request: Request, response: urllib3.HTTPResponse
+    ) -> Any:
         # this helper function exists because if you make a custom Exception subclass it cannot
         # be unpickled easily: https://stackoverflow.com/questions/41808912/cannot-unpickle-exception-subclass
 
@@ -91,7 +104,13 @@ class RequestFailure(Error):
             err, err_desc = _extract_error(response.data)
         # use string representation since request may not be serializable
         # exceptions need to be serializable when raised from subprocesses
-        return cls(message=message, request_string=str(request), response_status=response.status, error=err, error_description=err_desc)
+        return cls(
+            message=message,
+            request_string=str(request),
+            response_status=response.status,
+            error=err,
+            error_description=err_desc,
+        )
 
 
 class RestartableStreamingWriteFailure(RequestFailure):

@@ -2,6 +2,7 @@ import contextlib
 import time
 import argparse
 import hashlib
+import os
 
 import blobfile as bf
 
@@ -50,11 +51,9 @@ def main():
     ]
 
     for name, src, dst in tests:
-        data = (b"meow" * 249 + b"mew\n") * (args.size // 1000)
-        assert len(data) == args.size
-        if not bf.exists(src) or bf.stat(src).size != args.size:
-            with bf.BlobFile(src, "wb") as f:
-                f.write(data)
+        data = os.urandom(args.size)
+        with bf.BlobFile(src, "wb") as f:
+            f.write(data)
         m = hashlib.md5()
         m.update(data)
         data_hash = m.hexdigest()

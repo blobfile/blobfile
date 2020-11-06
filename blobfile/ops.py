@@ -568,7 +568,7 @@ def _exponential_sleep_generator(
             base = maximum
 
 
-def _execute_azure_api_request(req: Request) -> urllib3.HTTPResponse:
+def _execute_azure_api_request(req: Request, data_pos: Optional[int] = None) -> urllib3.HTTPResponse:
     u = urllib.parse.urlparse(req.url)
     account = u.netloc.split(".")[0]
     path_parts = u.path.split("/")
@@ -577,19 +577,25 @@ def _execute_azure_api_request(req: Request) -> urllib3.HTTPResponse:
     container = u.path.split("/")[1]
 
     def build_req() -> Request:
-        return azure.make_api_request(
+        r = azure.make_api_request(
             req,
             auth=global_azure_access_token_manager.get_token(key=(account, container)),
         )
+        if data_pos is not None:
+            r.data.seek(data_pos)
+        return r
 
     return _execute_request(build_req)
 
 
-def _execute_google_api_request(req: Request) -> urllib3.HTTPResponse:
+def _execute_google_api_request(req: Request, data_pos: Optional[int] = None) -> urllib3.HTTPResponse:
     def build_req() -> Request:
-        return google.make_api_request(
+        r = google.make_api_request(
             req, access_token=global_google_access_token_manager.get_token(key="")
         )
+        if data_pos is not None:
+            r.data.seek(data_pos)
+        return r
 
     return _execute_request(build_req)
 
@@ -622,7 +628,9 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
                 message = f"unexpected status {resp.status}"
                 if url.startswith(google.BASE_URL) and resp.status in (429, 503):
                     message += ": if you are writing a blob this error may be due to multiple concurrent writers - make sure you are not writing to the same blob from multiple processes simultaneously"
-                err = RequestFailure.create_from_request_response(message=message, request=req, response=resp)
+                err = RequestFailure.create_from_request_response(
+                    message=message, request=req, response=resp
+                )
                 if resp.status not in req.retry_codes:
                     raise err
         except (
@@ -669,7 +677,7 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
                 request=req,
                 response=urllib3.response.HTTPResponse(status=0, body=io.BytesIO(b"")),
             )
-
+    
         if _retry_limit is not None and attempt >= _retry_limit:
             raise err
 
@@ -796,16 +804,17 @@ def _parallel_download(
 def _azure_upload_chunk(
     path: str, start: int, size: int, url: str, block_id: str
 ) -> None:
-    with BlobFile(path, "rb") as f:
-        f.seek(start)
+    with open(path, "rb") as f:
         req = Request(
             url=url,
             method="PUT",
             params=dict(comp="block", blockid=block_id),
-            data=_LimitedFile(f, limit=size),
+            # this needs to be specified since we use a file object for the data
+            headers={"Content-Length": str(size)},
+            data=_WindowedFile(f, start=start, end=start + size),
             success_codes=(201,),
         )
-        _execute_azure_api_request(req)
+        _execute_azure_api_request(req, data_pos=0)
 
 
 def _azure_finalize_blob(url: str, block_ids: List[str], md5_digest: bytes) -> None:
@@ -868,7 +877,12 @@ def _azure_parallel_upload(
     while start < s.size:
         block_id = _azure_block_index_to_block_id(i, upload_id)
         future = executor.submit(
-            _azure_upload_chunk, src, start, _azure_write_chunk_size, dst, block_id
+            _azure_upload_chunk,
+            src,
+            start,
+            min(_azure_write_chunk_size, s.size - start),
+            dst,
+            block_id,
         )
         futures.append(future)
         block_ids.append(block_id)
@@ -881,31 +895,51 @@ def _azure_parallel_upload(
     return binascii.hexlify(md5_digest).decode("utf8") if return_md5 else None
 
 
-class _LimitedFile:
-    def __init__(self, f: Any, limit: int) -> None:
-        self._f = f
-        self._remaining = limit
+class _WindowedFile:
+    """
+    A file object that reads from a window into a file
+    """
 
-    def read(self, n: Optional[int] = None) -> None:
+    def __init__(self, f: Any, start: int, end: int) -> None:
+        self._f = f
+        self._start = start
+        self._end = end
+        self._pos = -1
+        self.seek(0)
+
+    def tell(self) -> int:
+        return self._pos - self._start
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> None:
+        new_pos = self._start + offset
+        assert whence == io.SEEK_SET and self._start <= new_pos < self._end
+        self._f.seek(new_pos, whence)
+        self._pos = new_pos
+
+    def read(self, n: Optional[int] = None) -> Any:
+        assert self._pos <= self._end
         if n is None:
-            n = self._remaining
-        buf = self._f.read(min(n, self._remaining))
-        self._remaining -= len(buf)
+            n = self._end - self._pos
+        n = min(n, self._end - self._pos)
+        buf = self._f.read(n)
+        self._pos += len(buf)
+        if n > 0 and len(buf) == 0:
+            raise Error("failed to read expected amount of data from file")
+        assert self._pos <= self._end
         return buf
 
 
 def _google_upload_part(src: str, start: int, size: int, dst: str) -> str:
-    with BlobFile(src, "rb") as f:
-        f.seek(start)
+    with open(src, "rb") as f:
         bucket, blob = google.split_url(dst)
         req = Request(
             url=google.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
             method="POST",
             params=dict(uploadType="media", name=blob),
-            data=_LimitedFile(f, limit=size),
+            data=_WindowedFile(f, start=start, end=start + size),
             success_codes=(200,),
         )
-        resp = _execute_google_api_request(req)
+        resp = _execute_google_api_request(req, data_pos=0)
         metadata = json.loads(resp.data)
         return metadata["generation"]
 
@@ -942,7 +976,11 @@ def _google_parallel_upload(
     while start < s.size:
         suffix = f".part.{i}"
         future = executor.submit(
-            _google_upload_part, src, start, part_size, dst + suffix
+            _google_upload_part,
+            src,
+            start,
+            min(part_size, s.size - start),
+            dst + suffix,
         )
         futures.append(future)
         object_names.append(dstname + suffix)
@@ -2898,9 +2936,13 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
             _execute_google_api_request(req)
         except RequestFailure as e:
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
-            if e.response is not None and e.response.status in (404, 410):
-                raise RestartableStreamingWriteFailure.create_from_request_response(
-                    message=e.message, request=e.request, response=e.response
+            if e.response_status in (404, 410):
+                raise RestartableStreamingWriteFailure(
+                    message=e.message,
+                    request_string=e.request_string,
+                    response_status=e.response_status,
+                    error=e.error,
+                    error_description=e.error_description,
                 )
             else:
                 raise

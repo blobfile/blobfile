@@ -13,14 +13,22 @@ pip install blobfile
 ## Usage
 
 ```py
+# write a file, then read it back
+
 import blobfile as bf
 
-with bf.BlobFile("gs://my-bucket-name/cats", "wb") as w:
-    w.write(b"meow!")
+with bf.BlobFile("gs://my-bucket-name/cats", "wb") as f:
+    f.write(b"meow!")
+
+print("exists:", bf.exists("gs://my-bucket-name/cats"))
+
+with bf.BlobFile("gs://my-bucket-name/cats", "rb") as f:
+    print("contents:", f.read())
 ```
 
+There are also some [examples processing many blobs in parallel](docs/parallel_examples.md).
 
-Here are the functions:
+Here are the functions in `blobfile`:
 
 * `BlobFile` - like `open()` but works with remote paths too, data can be streamed to/from the remote file.  It accepts the following arguments:
     * `streaming`:
@@ -89,7 +97,7 @@ If access using credentials fails, anonymous access will be tried.  `blobfile` s
 
 ## Paths
 
-For Google Cloud Storage and Azure Blobs directories don't really exist.  These storage systems store the files in a single flat list.  The "/" separators are just part of the filenames and there is no need to call the equivalent of `os.mkdir` on one of these systems.
+For Google Cloud Storage and Azure Blobs, directories don't really exist.  These storage systems store the files in a single flat list.  The "/" separators are just part of the filenames and there is no need to call the equivalent of `os.mkdir` on one of these systems.
 
 <!-- As a result, directories can be either "implicit" or "explicit".
 
@@ -124,38 +132,20 @@ Azure Blobs URLs have the format `https://<account>.blob.core.windows.net/<conta
 
 To route those log lines, use `configure(log_callback=<fn>)` to set a callback function which will be called whenever a log line should be printed.  The default callback prints to stdout with the prefix `blobfile:`.
 
-While `blobfile` does not use the python `logging` module, it does use other libraries which uses that module.  So if you configure the python `logging` module, you may need to change the settings to adjust logging behavior:
+While `blobfile` does not use the python `logging` module, it does use other libraries which use that module.  So if you configure the python `logging` module, you may need to change the settings to adjust logging behavior:
 
 * `urllib3`: `logging.getLogger("urllib3").setLevel(logging.ERROR)`
 * `filelock`: `logging.getLogger("filelock").setLevel(logging.ERROR)`
 
 ## Safety
 
-The library should be thread safe and fork safe except that a `BlobFile` instance is not thread safe (only 1 thread should own a `BlobFile` instance at a time).
+The library should be thread safe and fork safe, except that a `BlobFile` instance is not thread safe (only 1 thread should own a `BlobFile` instance at a time).
 
 ### Concurrent Writers
 
 Google Cloud Storage supports multiple writers for the same blob and the last one to finish should win.  However, in the event of a large number of simultaneous writers, the service will return 429 or 503 errors and most writers will stall.  In this case, write to different blobs instead.
 
-Azure Blobs doesn't support multiple writers for the same blob.  With the way `BlobFile` is currently configured, the last writer to start writing will win.  Other writers will get a `ConcurrentWriteFailure`.  In addition, all writers could fail if the file size is large.  In this case, you can write to a temporary blob (with a random filename), copy it to the final location, and then delete the original.  The copy will be within a container so it should be fast.
-
-
-## Examples
-
-### Write and read a file
-
-```py
-import blobfile as bf
-
-with bf.BlobFile("gs://my-bucket/file.name", "wb") as f:
-    f.write(b"meow")
-
-print("exists:", bf.exists("gs://my-bucket/file.name"))
-
-print("contents:", bf.BlobFile("gs://my-bucket/file.name", "rb").read())
-```
-
-See [Parallel Examples](docs/parallel_examples.md)
+Azure Blobs doesn't support multiple writers for the same blob.  With the way `BlobFile` is currently configured, the last writer to start writing will win.  Other writers will get a `ConcurrentWriteFailure`.  In addition, all writers could fail if the file size is large and there are enough concurrent writers.  In this case, you can write to a temporary blob (with a random filename), copy it to the final location, and then delete the original.  The copy will be within a container so it should be fast.
 
 ## Changes
 

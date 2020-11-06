@@ -817,7 +817,7 @@ def _azure_upload_chunk(
         _execute_azure_api_request(req, data_pos=0)
 
 
-def _azure_finalize_blob(url: str, block_ids: List[str], md5_digest: bytes) -> None:
+def _azure_finalize_blob(path: str, url: str, block_ids: List[str], md5_digest: bytes) -> None:
     body = {"BlockList": {"Latest": block_ids}}
     req = Request(
         url=url,
@@ -838,7 +838,7 @@ def _azure_finalize_blob(url: str, block_ids: List[str], md5_digest: bytes) -> N
             # this could be interpreted as a sort of RestartableStreamingWriteFailure but
             # that could result in two processes fighting while uploading the file
             raise ConcurrentWriteFailure.create_from_request_response(
-                f"Invalid block list, most likely a concurrent writer wrote to the same path: `{url}`",
+                f"Invalid block list, most likely a concurrent writer wrote to the same path: `{path}`",
                 request=req,
                 response=resp,
             )
@@ -896,7 +896,7 @@ def _azure_parallel_upload(
     for future in futures:
         future.result()
 
-    _azure_finalize_blob(url=dst_url, block_ids=block_ids, md5_digest=md5_digest)
+    _azure_finalize_blob(path=dst, url=dst_url, block_ids=block_ids, md5_digest=md5_digest)
     return binascii.hexlify(md5_digest).decode("utf8") if return_md5 else None
 
 
@@ -2993,6 +2993,7 @@ def _clear_uncommitted_blocks(url: str, metadata: Dict[str, str]) -> None:
 
 class _AzureStreamingWriteFile(_StreamingWriteFile):
     def __init__(self, path: str) -> None:
+        self._path = path
         account, container, blob = azure.split_url(path)
         self._url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
@@ -3140,7 +3141,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                 for i in range(self._block_index)
             ]
             _azure_finalize_blob(
-                url=self._url, block_ids=block_ids, md5_digest=self._md5.digest()
+                path=self._path, url=self._url, block_ids=block_ids, md5_digest=self._md5.digest()
             )
 
 

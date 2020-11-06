@@ -745,6 +745,10 @@ def _download_chunk(src: str, dst: str, start: int, size: int) -> None:
     # this is a little inefficient because each time we open a file we do
     # a query for file metadata, we could call the StreamingReadFile subclass
     # directly with the known size and avoid this
+    #
+    # in addition, we could provide a fake size (start + size) and change the call
+    # to _request_chunk to always specify the end of the file
+    # this should cause the connection to be put back into the pool by urllib3
     with BlobFile(src, "rb") as src_f:
         src_f.seek(start)
         # open output file such that we can write directly to the correct range
@@ -2400,7 +2404,8 @@ def dirname(path: str) -> str:
     """
     Get the directory name of the path
 
-    If this is a GCS path, the root directory is gs://<bucket name>/
+    On GCS, the root directory is gs://<bucket name>/
+    On Azure Storage, the root directory is https://<account>.blob.core.windows.net/<container>/
     """
     if _is_google_path(path):
         bucket, obj = google.split_url(path)

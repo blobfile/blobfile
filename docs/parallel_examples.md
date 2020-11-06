@@ -47,43 +47,6 @@ if __name__ == "__main__":
     main()
 ```
 
-### Parallel download of a single file
-
-```py
-import blobfile as bf
-import concurrent.futures
-import time
-
-
-def _download_chunk(path, start, size):
-    with bf.BlobFile(path, "rb") as f:
-        f.seek(start)
-        return f.read(size)
-
-
-def parallel_download(path, chunk_size=16 * 2**20):
-    pieces = []
-    stat = bf.stat(path)
-    with concurrent.futures.ProcessPoolExecutor() as executor:
-        start = 0
-        futures = []
-        while start < stat.size:
-            future = executor.submit(_download_chunk, path, start, chunk_size)
-            futures.append(future)
-            start += chunk_size
-        for future in futures:
-            pieces.append(future.result())
-    return b"".join(pieces)
-
-
-def main():
-    contents = parallel_download("<path to file>")
-
-
-if __name__ == "__main__":
-    main()
-```
-
 ### Parallel copytree
 
 ```py

@@ -363,18 +363,21 @@ def _azure_get_storage_account_key(
     result = json.loads(resp.data)
     auth = (azure.OAUTH_TOKEN, result["access_token"])
 
-    # get a list of subscriptions so we can query each one for storage accounts
-    def build_req() -> Request:
-        req = Request(
-            method="GET",
-            url="https://management.azure.com/subscriptions",
-            params={"api-version": "2020-01-01"},
-        )
-        return azure.make_api_request(req, auth=auth)
+    if "subscriptions" in creds:
+        subscription_ids = creds["subscriptions"]
+    else:
+        # get a list of subscriptions so we can query each one for storage accounts
+        def build_req() -> Request:
+            req = Request(
+                method="GET",
+                url="https://management.azure.com/subscriptions",
+                params={"api-version": "2020-01-01"},
+            )
+            return azure.make_api_request(req, auth=auth)
 
-    resp = _execute_request(build_req)
-    result = json.loads(resp.data)
-    subscription_ids = [item["subscriptionId"] for item in result["value"]]
+        resp = _execute_request(build_req)
+        result = json.loads(resp.data)
+        subscription_ids = [item["subscriptionId"] for item in result["value"]]
 
     for subscription_id in subscription_ids:
         # get a list of storage accounts

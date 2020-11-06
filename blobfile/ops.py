@@ -59,6 +59,7 @@ import filelock
 from blobfile import google, azure
 from blobfile.common import (
     Request,
+    FileBody,
     Error,
     RequestFailure,
     RestartableStreamingWriteFailure,
@@ -568,7 +569,7 @@ def _exponential_sleep_generator(
             base = maximum
 
 
-def _execute_azure_api_request(req: Request, data_pos: Optional[int] = None) -> urllib3.HTTPResponse:
+def _execute_azure_api_request(req: Request) -> urllib3.HTTPResponse:
     u = urllib.parse.urlparse(req.url)
     account = u.netloc.split(".")[0]
     path_parts = u.path.split("/")
@@ -577,25 +578,19 @@ def _execute_azure_api_request(req: Request, data_pos: Optional[int] = None) -> 
     container = u.path.split("/")[1]
 
     def build_req() -> Request:
-        r = azure.make_api_request(
+        return azure.make_api_request(
             req,
             auth=global_azure_access_token_manager.get_token(key=(account, container)),
         )
-        if data_pos is not None:
-            r.data.seek(data_pos)
-        return r
 
     return _execute_request(build_req)
 
 
-def _execute_google_api_request(req: Request, data_pos: Optional[int] = None) -> urllib3.HTTPResponse:
+def _execute_google_api_request(req: Request) -> urllib3.HTTPResponse:
     def build_req() -> Request:
-        r = google.make_api_request(
+        return google.make_api_request(
             req, access_token=global_google_access_token_manager.get_token(key="")
         )
-        if data_pos is not None:
-            r.data.seek(data_pos)
-        return r
 
     return _execute_request(build_req)
 
@@ -610,13 +605,20 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
             if len(req.params) > 0:
                 url += "?" + urllib.parse.urlencode(req.params)
 
+        f = None
+        if isinstance(req.data, FileBody):
+            f = open(req.data.path, "rb")
+            body = _WindowedFile(f, start=req.data.start, end=req.data.end)
+        else:
+            body = req.data
+
         err = None
         try:
             resp = _get_http_pool().request(
                 method=req.method,
                 url=url,
                 headers=req.headers,
-                body=req.data,
+                body=body,
                 timeout=urllib3.Timeout(connect=CONNECT_TIMEOUT, read=READ_TIMEOUT),
                 preload_content=req.preload_content,
                 retries=False,
@@ -677,7 +679,10 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
                 request=req,
                 response=urllib3.response.HTTPResponse(status=0, body=io.BytesIO(b"")),
             )
-    
+        finally:
+            if f is not None:
+                f.close()
+
         if _retry_limit is not None and attempt >= _retry_limit:
             raise err
 
@@ -804,20 +809,21 @@ def _parallel_download(
 def _azure_upload_chunk(
     path: str, start: int, size: int, url: str, block_id: str
 ) -> None:
-    with open(path, "rb") as f:
-        req = Request(
-            url=url,
-            method="PUT",
-            params=dict(comp="block", blockid=block_id),
-            # this needs to be specified since we use a file object for the data
-            headers={"Content-Length": str(size)},
-            data=_WindowedFile(f, start=start, end=start + size),
-            success_codes=(201,),
-        )
-        _execute_azure_api_request(req, data_pos=0)
+    req = Request(
+        url=url,
+        method="PUT",
+        params=dict(comp="block", blockid=block_id),
+        # this needs to be specified since we use a file object for the data
+        headers={"Content-Length": str(size)},
+        data=FileBody(path, start=start, end=start + size),
+        success_codes=(201,),
+    )
+    _execute_azure_api_request(req)
 
 
-def _azure_finalize_blob(path: str, url: str, block_ids: List[str], md5_digest: bytes) -> None:
+def _azure_finalize_blob(
+    path: str, url: str, block_ids: List[str], md5_digest: bytes
+) -> None:
     body = {"BlockList": {"Latest": block_ids}}
     req = Request(
         url=url,
@@ -896,7 +902,9 @@ def _azure_parallel_upload(
     for future in futures:
         future.result()
 
-    _azure_finalize_blob(path=dst, url=dst_url, block_ids=block_ids, md5_digest=md5_digest)
+    _azure_finalize_blob(
+        path=dst, url=dst_url, block_ids=block_ids, md5_digest=md5_digest
+    )
     return binascii.hexlify(md5_digest).decode("utf8") if return_md5 else None
 
 
@@ -934,19 +942,18 @@ class _WindowedFile:
         return buf
 
 
-def _google_upload_part(src: str, start: int, size: int, dst: str) -> str:
-    with open(src, "rb") as f:
-        bucket, blob = google.split_url(dst)
-        req = Request(
-            url=google.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
-            method="POST",
-            params=dict(uploadType="media", name=blob),
-            data=_WindowedFile(f, start=start, end=start + size),
-            success_codes=(200,),
-        )
-        resp = _execute_google_api_request(req, data_pos=0)
-        metadata = json.loads(resp.data)
-        return metadata["generation"]
+def _google_upload_part(path: str, start: int, size: int, dst: str) -> str:
+    bucket, blob = google.split_url(dst)
+    req = Request(
+        url=google.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
+        method="POST",
+        params=dict(uploadType="media", name=blob),
+        data=FileBody(path, start=start, end=start + size),
+        success_codes=(200,),
+    )
+    resp = _execute_google_api_request(req)
+    metadata = json.loads(resp.data)
+    return metadata["generation"]
 
 
 def _google_delete_part(bucket: str, name: str) -> None:
@@ -3141,7 +3148,10 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                 for i in range(self._block_index)
             ]
             _azure_finalize_blob(
-                path=self._path, url=self._url, block_ids=block_ids, md5_digest=self._md5.digest()
+                path=self._path,
+                url=self._url,
+                block_ids=block_ids,
+                md5_digest=self._md5.digest(),
             )
 
 

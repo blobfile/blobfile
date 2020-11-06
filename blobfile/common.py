@@ -32,6 +32,16 @@ class Request:
         return f"<Request method={self.method} url={self.url} params={self.params}>"
 
 
+class FileBody:
+    def __init__(self, path: str, start: int, end: int) -> None:
+        self.path = path
+        self.start = start
+        self.end = end
+
+    def __repr__(self):
+        return f"<FileBody path={self.path} start={self.start} end={self.end}>"
+
+
 def build_url(base_url: str, template: str, **data: str) -> str:
     escaped_data = {}
     for k, v in data.items():

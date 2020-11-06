@@ -1356,3 +1356,22 @@ def test_scandir_error():
         with ctx:
             print(path)
             list(bf.scandir(path))
+
+
+def test_windowed_file():
+    with _get_temp_local_path() as path:
+        with open(path, "wb") as f:
+            f.write(b"meow")
+
+        with open(path, "rb") as f:
+            f2 = bf.ops._WindowedFile(f, start=1, end=3)
+            assert f2.read() == b"eo"
+
+            f2.seek(0)
+            assert f2.read(1) + f2.read(1) + f2.read(1) == b"eo"
+
+            with pytest.raises(AssertionError):
+                f2.seek(-1)
+
+            with pytest.raises(AssertionError):
+                f2.seek(2)

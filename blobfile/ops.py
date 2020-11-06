@@ -1094,7 +1094,9 @@ def copy(
         # wait for potentially async copy operation to finish
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob
         # pending, success, aborted, failed
+        sleep = _exponential_sleep_generator(initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX)
         while copy_status == "pending":
+            time.sleep(next(sleep))
             req = Request(
                 url=azure.build_url(
                     dst_account,
@@ -2628,7 +2630,7 @@ class _StreamingReadFile(io.RawIOBase):
         n = 0  # for pyright
         if USE_STREAMING_READ_REQUEST:
             for attempt, backoff in enumerate(
-                _exponential_sleep_generator(0.1, maximum=60.0)
+                _exponential_sleep_generator(initial=BACKOFF_INITIAL, maximum=BACKOFF_MAX)
             ):
                 if self._f is None:
                     resp = self._request_chunk(streaming=True, start=self._offset)

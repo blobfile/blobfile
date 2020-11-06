@@ -7,7 +7,7 @@ import datetime
 import time
 import calendar
 import re
-from typing import Any, Mapping, Dict, Tuple, Sequence, Callable
+from typing import Any, Mapping, Dict, Tuple, Sequence
 
 import xmltodict
 
@@ -68,7 +68,10 @@ def load_credentials() -> Dict[str, Any]:
             # this file has a UTF-8 BOM
             profile = json.loads(f.read().decode("utf-8-sig"))
         subscriptions = profile["subscriptions"]
-        key_fn: Callable[[Mapping[str, Any]], bool] = lambda x: x["isDefault"]
+
+        def key_fn(x: Mapping[str, Any]) -> bool:
+            return x["isDefault"]
+
         subscriptions.sort(key=key_fn, reverse=True)
         subscription_ids = [sub["id"] for sub in subscriptions]
 

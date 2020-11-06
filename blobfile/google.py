@@ -7,7 +7,7 @@ import platform
 import datetime
 import hashlib
 import binascii
-from typing import Mapping, Any, Optional, Tuple, List
+from typing import Mapping, Dict, Any, Optional, Tuple, List
 
 from Cryptodome.Signature import pkcs1_15
 from Cryptodome.Hash import SHA256
@@ -80,7 +80,7 @@ def _refresh_access_token_request(
     )
 
 
-def load_credentials() -> Tuple[Mapping[str, Any], Optional[str]]:
+def load_credentials() -> Tuple[Dict[str, Any], Optional[str]]:
     if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
         creds_path = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
         if not os.path.exists(creds_path):

@@ -7,7 +7,7 @@ import datetime
 import time
 import calendar
 import re
-from typing import Any, Mapping, Tuple, Sequence
+from typing import Any, Mapping, Dict, Tuple, Sequence, Callable
 
 import xmltodict
 
@@ -19,7 +19,7 @@ OAUTH_TOKEN = "oauth_token"
 ANONYMOUS = "anonymous"
 
 
-def load_credentials() -> Mapping[str, Any]:
+def load_credentials() -> Dict[str, Any]:
     # https://github.com/Azure/azure-sdk-for-python/tree/master/sdk/identity/azure-identity#environment-variables
     # AZURE_STORAGE_KEY seems to be the environment variable mentioned by the az cli
     # AZURE_STORAGE_ACCOUNT_KEY is mentioned elsewhere on the internet
@@ -68,8 +68,9 @@ def load_credentials() -> Mapping[str, Any]:
             # this file has a UTF-8 BOM
             profile = json.loads(f.read().decode("utf-8-sig"))
         subscriptions = profile["subscriptions"]
-        subscriptions.sort(key=lambda x: x["isDefault"], reverse=True)
-        subscriptions = [sub["id"] for sub in subscriptions]
+        key_fn: Callable[[Mapping[str, Any]], bool] = lambda x: x["isDefault"]
+        subscriptions.sort(key=key_fn, reverse=True)
+        subscription_ids = [sub["id"] for sub in subscriptions]
 
         with open(default_creds_path) as f:
             tokens = json.load(f)
@@ -82,7 +83,7 @@ def load_credentials() -> Mapping[str, Any]:
                         best_token = token
             if best_token is not None:
                 token = best_token.copy()
-                token["subscriptions"] = subscriptions
+                token["subscription_ids"] = subscription_ids
                 return token
 
     return {}

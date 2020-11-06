@@ -353,7 +353,7 @@ def _azure_can_access_container(
 
 
 def _azure_get_storage_account_key(
-    account: str, container: str, creds: Mapping[str, str]
+    account: str, container: str, creds: Mapping[str, Any]
 ) -> Optional[Tuple[Any, float]]:
     # get an access token for the management service
     def build_req() -> Request:
@@ -365,8 +365,8 @@ def _azure_get_storage_account_key(
     result = json.loads(resp.data)
     auth = (azure.OAUTH_TOKEN, result["access_token"])
 
-    if "subscriptions" in creds:
-        subscription_ids = creds["subscriptions"]
+    if "subscription_ids" in creds:
+        subscription_ids = creds["subscription_ids"]
     else:
         # get a list of subscriptions so we can query each one for storage accounts
         def build_req() -> Request:
@@ -1240,7 +1240,7 @@ def _calc_range(start: Optional[int] = None, end: Optional[int] = None) -> str:
 
 def _create_google_page_iterator(
     url: str, method: str, params: Mapping[str, str]
-) -> Iterator[Mapping[str, Any]]:
+) -> Iterator[Dict[str, Any]]:
     p = dict(params).copy()
 
     while True:
@@ -1260,7 +1260,7 @@ def _create_azure_page_iterator(
     method: str,
     data: Optional[Mapping[str, str]] = None,
     params: Optional[Mapping[str, str]] = None,
-) -> Iterator[Mapping[str, Any]]:
+) -> Iterator[Dict[str, Any]]:
     if params is None:
         p = {}
     else:

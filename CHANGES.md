@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.2
+
+* New version to work around pypi upload failure
+
 ## 1.0.1
 
 * Better error message for bad refresh token, thanks @hauntsaninja for reporting this

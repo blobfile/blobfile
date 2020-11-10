@@ -484,8 +484,18 @@ def test_isdir(ctx):
         assert not bf.isdir(path)
         _write_contents(path, contents)
         assert not bf.isdir(path)
+
         dirpath = path + ".dir"
         bf.makedirs(dirpath)
+        assert bf.isdir(dirpath)
+        assert not bf.isdir(dirpath[:-1])
+
+        filepath = bf.join(path + ".otherdir", "subdir", "file.name")
+        if "://" not in path:
+            # implicit directory
+            bf.makedirs(bf.dirname(filepath))
+        dirpath = bf.dirname(bf.dirname(filepath))
+        _write_contents(filepath, contents)
         assert bf.isdir(dirpath)
         assert not bf.isdir(dirpath[:-1])
 

@@ -2,6 +2,7 @@
 
 ## 1.0.4
 
+* Fix to `bf.isdir()` for from @hauntsaninja, which didn't work on some unusual azure directories.
 * Fewer calls to azure API to reduce change of hitting rate limits, thanks to @hauntsaninja for the PR
 
 ## 1.0.3

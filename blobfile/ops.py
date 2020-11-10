@@ -1714,7 +1714,9 @@ def isdir(path: str) -> bool:
             resp = _execute_azure_api_request(req)
             return resp.status == 200
         else:
-            req = Request(
+            # even though we're only interested in having one result, we still need to make an
+            # iterator. as it happens, azure is perfectly willing to return an empty first page.
+            it = _create_azure_page_iterator(
                 url=azure.build_url(account, "/{container}", container=container),
                 method="GET",
                 params=dict(
@@ -1724,15 +1726,11 @@ def isdir(path: str) -> bool:
                     delimiter="/",
                     maxresults="1",
                 ),
-                success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
             )
-            resp = _execute_azure_api_request(req)
-            if resp.status in (404, INVALID_HOSTNAME_STATUS):
-                return False
-            result = xmltodict.parse(resp.data)["EnumerationResults"]
-            return result["Blobs"] is not None and (
-                "BlobPrefix" in result["Blobs"] or "Blob" in result["Blobs"]
-            )
+            for result in it:
+                if result["Blobs"] is not None:
+                    return "BlobPrefix" in result["Blobs"] or "Blob" in result["Blobs"]
+            return False
     else:
         raise Error(f"Unrecognized path: '{path}'")
 

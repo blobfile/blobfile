@@ -260,10 +260,7 @@ class TokenManager:
         with self._lock:
             now = time.time()
             expiration = self._expirations.get(key)
-            if (
-                expiration is None
-                or (now + EARLY_EXPIRATION_SECONDS) > expiration
-            ):
+            if expiration is None or (now + EARLY_EXPIRATION_SECONDS) > expiration:
                 self._tokens[key], self._expirations[key] = self._get_token_fn(key)
                 assert self._expirations[key] is not None
 

@@ -251,21 +251,21 @@ class TokenManager:
     def __init__(self, get_token_fn: Callable[[Any], Tuple[Any, float]]) -> None:
         self._get_token_fn = get_token_fn
         self._tokens = {}
+        self._expirations = {}
         self._lock = threading.Lock()
-        self._expiration = None
 
     def get_token(self, key: Any) -> Any:
         with self._lock:
             now = time.time()
+            expiration = self._expirations.get(key)
             if (
-                self._expiration is None
-                or (now + EARLY_EXPIRATION_SECONDS) > self._expiration
+                expiration is None
+                or (now + EARLY_EXPIRATION_SECONDS) > expiration
             ):
-                if key in self._tokens:
-                    del self._tokens[key]
+                self._tokens[key], self._expirations[key] = self._get_token_fn(key)
+                assert self._expirations[key] is not None
 
-            if key not in self._tokens:
-                self._tokens[key], self._expiration = self._get_token_fn(key)
+            assert key in self._tokens
             return self._tokens[key]
 
 

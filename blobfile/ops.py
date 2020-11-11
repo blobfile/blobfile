@@ -247,7 +247,7 @@ def configure(
 
 class TokenManager:
     """
-    Automatically refresh a token when it expires
+    Automatically refresh tokens when they expire
     """
 
     def __init__(self, get_token_fn: Callable[[Any], Tuple[Any, float]]) -> None:

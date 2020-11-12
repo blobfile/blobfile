@@ -4,7 +4,7 @@
 
 * Fix to `bf.isdir()` from @hauntsaninja, which didn't work on some unusual azure directories.
 * Fewer calls to azure API to reduce chance of hitting rate limits, thanks to @hauntsaninja for the PR
-* Tokens were being expired too early, thanks to @hauntsaninja for the PR
+* Tokens were being expired at the wrong time, thanks to @hauntsaninja for the PR
 
 ## 1.0.3
 

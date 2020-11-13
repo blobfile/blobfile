@@ -319,6 +319,15 @@ def test_join():
     for input_a, input_b, desired_output in testcases:
         actual_output = bf.join(input_a, input_b)
         assert desired_output == actual_output, f"{input_a} {input_b}"
+        # also make sure az:// urls work
+        if "blob.core.windows.net" in input_a:
+            az_input_a = _convert_https_to_az(input_a)
+            actual_output = bf.join(az_input_a, input_b)
+            assert desired_output == actual_output, f"{az_input_a} {input_b}"
+
+
+def _convert_https_to_az(path):
+    return path.replace("https://", "az://").replace(".blob.core.windows.net", "")
 
 
 @pytest.mark.parametrize(
@@ -353,6 +362,22 @@ def test_read_write(ctx, streaming):
         with bf.BlobFile(path, "rb", streaming=streaming) as r:
             assert r.read() == contents
         with bf.BlobFile(path, "rb", streaming=streaming) as r:
+            lines = list(r)
+            assert b"".join(lines) == contents
+
+
+def test_az_path():
+    contents = b"meow!\npurr\n"
+    with _get_temp_as_path() as path:
+        path = _convert_https_to_az(path)
+        path = bf.join(path, "a folder", "a.file")
+        path = _convert_https_to_az(path)
+        bf.makedirs(_convert_https_to_az(bf.dirname(path)))
+        with bf.BlobFile(path, "wb") as w:
+            w.write(contents)
+        with bf.BlobFile(path, "rb") as r:
+            assert r.read() == contents
+        with bf.BlobFile(path, "rb") as r:
             lines = list(r)
             assert b"".join(lines) == contents
 

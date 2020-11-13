@@ -1,6 +1,6 @@
 # blobfile
 
-This is a standalone clone of TensorFlow's [`gfile`](https://www.tensorflow.org/api_docs/python/tf/io/gfile/GFile), supporting local paths, Google Cloud Storage paths (`gs://<bucket>`), and Azure Blobs paths (`https://<account>.blob.core.windows.net/<container>/`).
+This is a standalone clone of TensorFlow's [`gfile`](https://www.tensorflow.org/api_docs/python/tf/io/gfile/GFile), supporting local paths, Google Cloud Storage paths (`gs://<bucket>`), and Azure Blobs paths (`https://<account>.blob.core.windows.net/<container>/` or `az://<account>/<container>`).
 
 The main function is `BlobFile`, a replacement for `GFile`.  There are also a few additional functions, `basename`, `dirname`, and `join`, which mostly do the same thing as their `os.path` namesakes, only they also support GCS paths and Azure Storage paths.
 
@@ -116,7 +116,7 @@ GCS paths have the format `gs://<bucket>/<blob>`, you cannot perform any operati
 
 ### Azure Blobs
 
-Azure Blobs URLs have the format `https://<account>.blob.core.windows.net/<container>/<blob>`.  The highest you can go up the hierarchy is `https://<account>.blob.core.windows.net/<container>/`, `blobfile` cannot perform any operations on `https://<account>.blob.core.windows.net/`.
+Azure Blobs URLs have the format `https://<account>.blob.core.windows.net/<container>/<blob>` or `az://<account>/<container>`.  The highest you can go up the hierarchy is `https://<account>.blob.core.windows.net/<container>/`, `blobfile` cannot perform any operations on `https://<account>.blob.core.windows.net/`.  The `https://` url is the output format, but the `az://` urls are accepted as inputs.
 
 ## Errors
 

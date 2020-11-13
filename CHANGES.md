@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.5
+
+* Add support for `az://` urls, thanks to @joschu for the PR.  All azure urls output by `blobfile` will still be the `https://` format.
+
 ## 1.0.4
 
 * Fix to `bf.isdir()` from @hauntsaninja, which didn't work on some unusual azure directories.

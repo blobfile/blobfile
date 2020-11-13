@@ -259,8 +259,25 @@ def generate_signed_url(key: Mapping[str, str], url: str) -> Tuple[str, float]:
 
 
 def split_url(path: str) -> Tuple[str, str, str]:
-    if not path.startswith("https://"):
+    if path.startswith("az://"):
+        return split_url_az(path)
+    elif path.startswith("https://"):
+        return split_url_https(path)
+    else:
         raise Error(f"Invalid path: '{path}'")
+
+
+def split_url_az(path: str) -> Tuple[str, str, str]:
+    parts = path[len("az://") :].split("/")
+    if len(parts) < 2:
+        raise Error(f"Invalid path: '{path}'")
+    account = parts[0]
+    container = parts[1]
+    obj = "/".join(parts[2:])
+    return account, container, obj
+
+
+def split_url_https(path: str) -> Tuple[str, str, str]:
     parts = path[len("https://") :].split("/")
     if len(parts) < 2:
         raise Error(f"Invalid path: '{path}'")

@@ -738,7 +738,9 @@ def _is_google_path(path: str) -> bool:
 
 def _is_azure_path(path: str) -> bool:
     url = urllib.parse.urlparse(path)
-    return url.scheme == "https" and url.netloc.endswith(".blob.core.windows.net")
+    return (
+        url.scheme == "https" and url.netloc.endswith(".blob.core.windows.net")
+    ) or url.scheme == "az"
 
 
 def _download_chunk(src: str, dst: str, start: int, size: int) -> None:

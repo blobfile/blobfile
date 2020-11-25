@@ -82,7 +82,7 @@ def load_credentials() -> Dict[str, Any]:
                 if best_token is None:
                     best_token = token
                 else:
-                    if token["expiresOn"] > best_token["expiresOn"]:
+                    if token.get("expiresOn", "") > best_token.get("expiresOn", ""):
                         best_token = token
             if best_token is not None:
                 token = best_token.copy()

@@ -1779,7 +1779,7 @@ def _get_slash_path(entry: DirEntry) -> str:
 
 
 def _normalize_path(path: str) -> str:
-    if path.startswith('az://'):
+    if _is_azure_path(path):
         return azure.normalize_url(path)
     return path
 
@@ -2304,6 +2304,7 @@ def walk(
                 root = root[:-1]
             yield (root, sorted(dirnames), sorted(filenames))
     elif _is_google_path(top) or _is_azure_path(top):
+        top = _normalize_path(top)
         if not top.endswith("/"):
             top += "/"
         if topdown:

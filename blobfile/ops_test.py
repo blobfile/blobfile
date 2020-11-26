@@ -535,6 +535,7 @@ def test_listdir(ctx):
     contents = b"meow!"
     with ctx() as path:
         dirpath = bf.dirname(path)
+        bf.makedirs(dirpath)
         a_path = bf.join(dirpath, "a")
         with bf.BlobFile(a_path, "wb") as w:
             w.write(contents)
@@ -542,7 +543,10 @@ def test_listdir(ctx):
         with bf.BlobFile(b_path, "wb") as w:
             w.write(contents)
         bf.makedirs(bf.join(dirpath, "c"))
-        assert sorted(list(bf.listdir(dirpath))) == ["a", "b", "c"]
+        expected = ["a", "b", "c"]
+        assert sorted(list(bf.listdir(dirpath))) == expected
+        dirpath = _convert_https_to_az(dirpath)
+        assert sorted(list(bf.listdir(dirpath))) == expected
 
 
 @pytest.mark.parametrize(
@@ -621,6 +625,8 @@ def test_walk(ctx, topdown):
         ]
         if not topdown:
             expected = list(reversed(expected))
+        assert list(bf.walk(dirpath, topdown=topdown)) == expected
+        dirpath = _convert_https_to_az(dirpath)
         assert list(bf.walk(dirpath, topdown=topdown)) == expected
 
 

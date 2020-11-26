@@ -296,7 +296,8 @@ def combine_url(account: str, container: str, obj: str) -> str:
 
 
 def normalize_url(path: str) -> str:
-    return combine_url(*split_url_az(path))
+    # this will convert paths (especially az:// ones) to the canonical https:// format
+    return combine_url(*split_url(path))
 
 
 def sign_with_shared_key(req: Request, key: str) -> str:

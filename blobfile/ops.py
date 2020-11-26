@@ -862,7 +862,7 @@ def _azure_parallel_upload(
     with BlobFile(src, "rb") as f:
         md5_digest = _block_md5(f)
 
-    account, container, blob = azure.split_url(dst)
+    account, container, blob = azure.split_path(dst)
     dst_url = azure.build_url(
         account, "/{container}/{blob}", container=container, blob=blob
     )
@@ -936,7 +936,7 @@ class _WindowedFile:
 
 
 def _google_upload_part(path: str, start: int, size: int, dst: str) -> str:
-    bucket, blob = google.split_url(dst)
+    bucket, blob = google.split_path(dst)
     req = Request(
         url=google.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
         method="POST",
@@ -970,7 +970,7 @@ def _google_parallel_upload(
 
     s = stat(src)
 
-    dstbucket, dstname = google.split_url(dst)
+    dstbucket, dstname = google.split_path(dst)
     source_objects = []
     object_names = []
     max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
@@ -1066,8 +1066,8 @@ def copy(
 
     # special case cloud to cloud copy, don't download the file
     if _is_google_path(src) and _is_google_path(dst):
-        srcbucket, srcname = google.split_url(src)
-        dstbucket, dstname = google.split_url(dst)
+        srcbucket, srcname = google.split_path(src)
+        dstbucket, dstname = google.split_path(dst)
         params = {}
         while True:
             req = Request(
@@ -1095,8 +1095,8 @@ def copy(
 
     if _is_azure_path(src) and _is_azure_path(dst):
         # https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob
-        dst_account, dst_container, dst_blob = azure.split_url(dst)
-        src_account, src_container, src_blob = azure.split_url(src)
+        dst_account, dst_container, dst_blob = azure.split_path(dst)
+        src_account, src_container, src_blob = azure.split_path(src)
 
         def build_req() -> Request:
             src_url = azure.build_url(
@@ -1289,11 +1289,11 @@ def _create_azure_page_iterator(
 def _google_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntry]:
     if "prefixes" in result:
         for p in result["prefixes"]:
-            path = google.combine_url(bucket, p)
+            path = google.combine_path(bucket, p)
             yield _entry_from_dirpath(path)
     if "items" in result:
         for item in result["items"]:
-            path = google.combine_url(bucket, item["name"])
+            path = google.combine_path(bucket, item["name"])
             if item["name"].endswith("/"):
                 yield _entry_from_dirpath(path)
             else:
@@ -1310,13 +1310,13 @@ def _azure_get_entries(
         if isinstance(blobs["BlobPrefix"], dict):
             blobs["BlobPrefix"] = [blobs["BlobPrefix"]]
         for bp in blobs["BlobPrefix"]:
-            path = azure.combine_url(account, container, bp["Name"])
+            path = azure.combine_path(account, container, bp["Name"])
             yield _entry_from_dirpath(path)
     if "Blob" in blobs:
         if isinstance(blobs["Blob"], dict):
             blobs["Blob"] = [blobs["Blob"]]
         for b in blobs["Blob"]:
-            path = azure.combine_url(account, container, b["Name"])
+            path = azure.combine_path(account, container, b["Name"])
             if b["Name"].endswith("/"):
                 yield _entry_from_dirpath(path)
             else:
@@ -1325,7 +1325,7 @@ def _azure_get_entries(
 
 
 def _google_isfile(path: str) -> Tuple[bool, Dict[str, Any]]:
-    bucket, blob = google.split_url(path)
+    bucket, blob = google.split_path(path)
     if blob == "":
         return False, {}
     req = Request(
@@ -1340,7 +1340,7 @@ def _google_isfile(path: str) -> Tuple[bool, Dict[str, Any]]:
 
 
 def _azure_isfile(path: str) -> Tuple[bool, Dict[str, Any]]:
-    account, container, blob = azure.split_url(path)
+    account, container, blob = azure.split_path(path)
     if blob == "":
         return False, {}
     req = Request(
@@ -1381,10 +1381,10 @@ def basename(path: str) -> str:
     For GCS, this is the part after the bucket
     """
     if _is_google_path(path):
-        _, obj = google.split_url(path)
+        _, obj = google.split_path(path)
         return obj.split("/")[-1]
     elif _is_azure_path(path):
-        _, _, obj = azure.split_url(path)
+        _, _, obj = azure.split_path(path)
         return obj.split("/")[-1]
     else:
         return os.path.basename(path)
@@ -1608,15 +1608,15 @@ def scanglob(pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
             return
 
         if _is_google_path(pattern):
-            bucket, blob_prefix = google.split_url(pattern)
+            bucket, blob_prefix = google.split_path(pattern)
             if "*" in bucket:
                 raise Error("Wildcards cannot be used in bucket name")
-            root = google.combine_url(bucket, "")
+            root = google.combine_path(bucket, "")
         else:
-            account, container, blob_prefix = azure.split_url(pattern)
+            account, container, blob_prefix = azure.split_path(pattern)
             if "*" in account or "*" in container:
                 raise Error("Wildcards cannot be used in account or container")
-            root = azure.combine_url(account, container, "")
+            root = azure.combine_path(account, container, "")
 
         initial_task = _GlobTask("", _split_path(blob_prefix))
 
@@ -1675,7 +1675,7 @@ def isdir(path: str) -> bool:
     elif _is_google_path(path):
         if not path.endswith("/"):
             path += "/"
-        bucket, blob = google.split_url(path)
+        bucket, blob = google.split_path(path)
         if blob == "":
             req = Request(
                 url=google.build_url("/storage/v1/b/{bucket}", bucket=bucket),
@@ -1700,7 +1700,7 @@ def isdir(path: str) -> bool:
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
-        account, container, blob = azure.split_url(path)
+        account, container, blob = azure.split_path(path)
         if blob == "":
             req = Request(
                 url=azure.build_url(
@@ -1751,7 +1751,7 @@ def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry
         params["delimiter"] = delimiter
 
     if _is_google_path(path):
-        bucket, prefix = google.split_url(path)
+        bucket, prefix = google.split_path(path)
         it = _create_google_page_iterator(
             url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
             method="GET",
@@ -1759,7 +1759,7 @@ def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry
         )
         get_entries = functools.partial(_google_get_entries, bucket)
     elif _is_azure_path(path):
-        account, container, prefix = azure.split_url(path)
+        account, container, prefix = azure.split_path(path)
         it = _create_azure_page_iterator(
             url=azure.build_url(account, "/{container}", container=container),
             method="GET",
@@ -1780,7 +1780,7 @@ def _get_slash_path(entry: DirEntry) -> str:
 
 def _normalize_path(path: str) -> str:
     if _is_azure_path(path):
-        return azure.normalize_url(path)
+        return azure.normalize_path(path)
     return path
 
 
@@ -1932,7 +1932,7 @@ def makedirs(path: str) -> None:
     elif _is_google_path(path):
         if not path.endswith("/"):
             path += "/"
-        bucket, blob = google.split_url(path)
+        bucket, blob = google.split_path(path)
         req = Request(
             url=google.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
             method="POST",
@@ -1945,7 +1945,7 @@ def makedirs(path: str) -> None:
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
-        account, container, blob = azure.split_url(path)
+        account, container, blob = azure.split_path(path)
         req = Request(
             url=azure.build_url(
                 account, "/{container}/{blob}", container=container, blob=blob
@@ -1972,7 +1972,7 @@ def remove(path: str) -> None:
     elif _is_google_path(path):
         if path.endswith("/"):
             raise IsADirectoryError(f"Is a directory: '{path}'")
-        bucket, blob = google.split_url(path)
+        bucket, blob = google.split_path(path)
         if blob == "":
             raise FileNotFoundError(
                 f"The system cannot find the path specified: '{path}'"
@@ -1992,7 +1992,7 @@ def remove(path: str) -> None:
     elif _is_azure_path(path):
         if path.endswith("/"):
             raise IsADirectoryError(f"Is a directory: '{path}'")
-        account, container, blob = azure.split_url(path)
+        account, container, blob = azure.split_path(path)
         if blob == "":
             raise FileNotFoundError(
                 f"The system cannot find the path specified: '{path}'"
@@ -2033,9 +2033,9 @@ def rmdir(path: str) -> None:
         path += "/"
 
     if _is_google_path(path):
-        _, blob = google.split_url(path)
+        _, blob = google.split_path(path)
     elif _is_azure_path(path):
-        _, _, blob = azure.split_url(path)
+        _, _, blob = azure.split_path(path)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -2055,7 +2055,7 @@ def rmdir(path: str) -> None:
         raise OSError(f"The directory is not empty: '{path}'")
 
     if _is_google_path(path):
-        bucket, blob = google.split_url(path)
+        bucket, blob = google.split_path(path)
         req = Request(
             url=google.build_url(
                 "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
@@ -2065,7 +2065,7 @@ def rmdir(path: str) -> None:
         )
         _execute_google_api_request(req)
     elif _is_azure_path(path):
-        account, container, blob = azure.split_url(path)
+        account, container, blob = azure.split_path(path)
         req = Request(
             url=azure.build_url(
                 account, "/{container}/{blob}", container=container, blob=blob
@@ -2155,7 +2155,7 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
         os.utime(path, times=(mtime, mtime))
         return True
     elif _is_google_path(path):
-        bucket, blob = google.split_url(path)
+        bucket, blob = google.split_path(path)
         params = None
         if version is not None:
             params = dict(ifGenerationMatch=version)
@@ -2173,7 +2173,7 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
             raise FileNotFoundError(f"No such file: '{path}'")
         return resp.status == 200
     elif _is_azure_path(path):
-        account, container, blob = azure.split_url(path)
+        account, container, blob = azure.split_path(path)
         headers = {}
         if version is not None:
             headers["If-Match"] = version
@@ -2225,7 +2225,7 @@ def rmtree(path: str) -> None:
     elif _is_google_path(path):
         if not path.endswith("/"):
             path += "/"
-        bucket, blob = google.split_url(path)
+        bucket, blob = google.split_path(path)
         it = _create_google_page_iterator(
             url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
             method="GET",
@@ -2234,7 +2234,7 @@ def rmtree(path: str) -> None:
         for result in it:
             for entry in _google_get_entries(bucket, result):
                 entry_slash_path = _get_slash_path(entry)
-                entry_bucket, entry_blob = google.split_url(entry_slash_path)
+                entry_bucket, entry_blob = google.split_path(entry_slash_path)
                 assert entry_bucket == bucket and entry_blob.startswith(blob)
                 req = Request(
                     url=google.build_url(
@@ -2251,7 +2251,7 @@ def rmtree(path: str) -> None:
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
-        account, container, blob = azure.split_url(path)
+        account, container, blob = azure.split_path(path)
         it = _create_azure_page_iterator(
             url=azure.build_url(account, "/{container}", container=container),
             method="GET",
@@ -2260,7 +2260,7 @@ def rmtree(path: str) -> None:
         for result in it:
             for entry in _azure_get_entries(account, container, result):
                 entry_slash_path = _get_slash_path(entry)
-                entry_account, entry_container, entry_blob = azure.split_url(
+                entry_account, entry_container, entry_blob = azure.split_path(
                     entry_slash_path
                 )
                 assert (
@@ -2314,7 +2314,7 @@ def walk(
                 cur = dq.popleft()
                 assert cur.endswith("/")
                 if _is_google_path(top):
-                    bucket, blob = google.split_url(cur)
+                    bucket, blob = google.split_path(cur)
                     it = _create_google_page_iterator(
                         url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
                         method="GET",
@@ -2322,7 +2322,7 @@ def walk(
                     )
                     get_entries = functools.partial(_google_get_entries, bucket)
                 elif _is_azure_path(top):
-                    account, container, blob = azure.split_url(cur)
+                    account, container, blob = azure.split_path(cur)
                     it = _create_azure_page_iterator(
                         url=azure.build_url(
                             account, "/{container}", container=container
@@ -2352,7 +2352,7 @@ def walk(
                 dq.extend(join(cur, dirname) + "/" for dirname in dirnames)
         else:
             if _is_google_path(top):
-                bucket, blob = google.split_url(top)
+                bucket, blob = google.split_path(top)
                 it = _create_google_page_iterator(
                     url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
                     method="GET",
@@ -2360,7 +2360,7 @@ def walk(
                 )
                 get_entries = functools.partial(_google_get_entries, bucket)
             elif _is_azure_path(top):
-                account, container, blob = azure.split_url(top)
+                account, container, blob = azure.split_path(top)
                 it = _create_azure_page_iterator(
                     url=azure.build_url(account, "/{container}", container=container),
                     method="GET",
@@ -2417,21 +2417,21 @@ def dirname(path: str) -> str:
     On Azure Storage, the root directory is https://<account>.blob.core.windows.net/<container>/
     """
     if _is_google_path(path):
-        bucket, obj = google.split_url(path)
+        bucket, obj = google.split_path(path)
         obj = _strip_slashes(obj)
         if "/" in obj:
             obj = "/".join(obj.split("/")[:-1])
-            return google.combine_url(bucket, obj)
+            return google.combine_path(bucket, obj)
         else:
-            return google.combine_url(bucket, "")[:-1]
+            return google.combine_path(bucket, "")[:-1]
     elif _is_azure_path(path):
-        account, container, obj = azure.split_url(path)
+        account, container, obj = azure.split_path(path)
         obj = _strip_slashes(obj)
         if "/" in obj:
             obj = "/".join(obj.split("/")[:-1])
-            return azure.combine_url(account, container, obj)
+            return azure.combine_path(account, container, obj)
         else:
-            return azure.combine_url(account, container, "")[:-1]
+            return azure.combine_path(account, container, "")[:-1]
     else:
         return os.path.dirname(path)
 
@@ -2465,17 +2465,17 @@ def _join2(a: str, b: str) -> str:
             a += "/"
 
         if _is_google_path(a):
-            bucket, obj = google.split_url(a)
+            bucket, obj = google.split_path(a)
             obj = _safe_urljoin(obj, b)
             if obj.startswith("/"):
                 obj = obj[1:]
-            return google.combine_url(bucket, obj)
+            return google.combine_path(bucket, obj)
         elif _is_azure_path(a):
-            account, container, obj = azure.split_url(a)
+            account, container, obj = azure.split_path(a)
             obj = _safe_urljoin(obj, b)
             if obj.startswith("/"):
                 obj = obj[1:]
-            return azure.combine_url(account, container, obj)
+            return azure.combine_path(account, container, obj)
         else:
             raise Error(f"Unrecognized path: '{a}'")
     else:
@@ -2487,12 +2487,12 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
     Get a URL for the given path that a browser could open
     """
     if _is_google_path(path):
-        bucket, blob = google.split_url(path)
+        bucket, blob = google.split_path(path)
         return google.generate_signed_url(
             bucket, blob, expiration=google.MAX_EXPIRATION
         )
     elif _is_azure_path(path):
-        account, container, blob = azure.split_url(path)
+        account, container, blob = azure.split_path(path)
         url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
         )
@@ -2518,7 +2518,7 @@ def _block_md5(f: BinaryIO) -> bytes:
 
 
 def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> bool:
-    account, container, blob = azure.split_url(path)
+    account, container, blob = azure.split_path(path)
     req = Request(
         url=azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
@@ -2559,7 +2559,7 @@ def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> bool:
 
 
 def _google_maybe_update_md5(path: str, generation: str, hexdigest: str) -> bool:
-    bucket, blob = google.split_url(path)
+    bucket, blob = google.split_path(path)
     req = Request(
         url=google.build_url(
             "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
@@ -2799,7 +2799,7 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
     ) -> urllib3.response.HTTPResponse:
-        bucket, name = google.split_url(self._path)
+        bucket, name = google.split_path(self._path)
         req = Request(
             url=google.build_url(
                 "/storage/v1/b/{bucket}/o/{name}", bucket=bucket, name=name
@@ -2825,7 +2825,7 @@ class _AzureStreamingReadFile(_StreamingReadFile):
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
     ) -> urllib3.response.HTTPResponse:
-        account, container, blob = azure.split_url(self._path)
+        account, container, blob = azure.split_path(self._path)
         req = Request(
             url=azure.build_url(
                 account, "/{container}/{blob}", container=container, blob=blob
@@ -2899,7 +2899,7 @@ class _StreamingWriteFile(io.BufferedIOBase):
 
 class _GoogleStreamingWriteFile(_StreamingWriteFile):
     def __init__(self, path: str) -> None:
-        bucket, name = google.split_url(path)
+        bucket, name = google.split_path(path)
         req = Request(
             url=google.build_url(
                 "/upload/storage/v1/b/{bucket}/o?uploadType=resumable", bucket=bucket
@@ -2999,7 +2999,7 @@ def _clear_uncommitted_blocks(url: str, metadata: Dict[str, str]) -> None:
 class _AzureStreamingWriteFile(_StreamingWriteFile):
     def __init__(self, path: str) -> None:
         self._path = path
-        account, container, blob = azure.split_url(path)
+        account, container, blob = azure.split_path(path)
         self._url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
         )

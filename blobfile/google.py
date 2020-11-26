@@ -259,7 +259,7 @@ def generate_signed_url(
     return signed_url, expiration
 
 
-def split_url(path: str) -> Tuple[str, str]:
+def split_path(path: str) -> Tuple[str, str]:
     if not path.startswith("gs://"):
         raise Error(f"Invalid path: '{path}'")
     path = path[len("gs://") :]
@@ -269,5 +269,5 @@ def split_url(path: str) -> Tuple[str, str]:
     return bucket, obj
 
 
-def combine_url(bucket: str, obj: str) -> str:
+def combine_path(bucket: str, obj: str) -> str:
     return f"gs://{bucket}/{obj}"

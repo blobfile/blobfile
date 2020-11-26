@@ -259,16 +259,16 @@ def generate_signed_url(key: Mapping[str, str], url: str) -> Tuple[str, float]:
     return url + "?" + query, t
 
 
-def split_url(path: str) -> Tuple[str, str, str]:
+def split_path(path: str) -> Tuple[str, str, str]:
     if path.startswith("az://"):
-        return split_url_az(path)
+        return split_az_path(path)
     elif path.startswith("https://"):
-        return split_url_https(path)
+        return split_https_path(path)
     else:
         raise Error(f"Invalid path: '{path}'")
 
 
-def split_url_az(path: str) -> Tuple[str, str, str]:
+def split_az_path(path: str) -> Tuple[str, str, str]:
     parts = path[len("az://") :].split("/")
     if len(parts) < 2:
         raise Error(f"Invalid path: '{path}'")
@@ -278,7 +278,7 @@ def split_url_az(path: str) -> Tuple[str, str, str]:
     return account, container, obj
 
 
-def split_url_https(path: str) -> Tuple[str, str, str]:
+def split_https_path(path: str) -> Tuple[str, str, str]:
     parts = path[len("https://") :].split("/")
     if len(parts) < 2:
         raise Error(f"Invalid path: '{path}'")
@@ -291,13 +291,13 @@ def split_url_https(path: str) -> Tuple[str, str, str]:
     return account, container, obj
 
 
-def combine_url(account: str, container: str, obj: str) -> str:
+def combine_path(account: str, container: str, obj: str) -> str:
     return f"https://{account}.blob.core.windows.net/{container}/{obj}"
 
 
-def normalize_url(path: str) -> str:
+def normalize_path(path: str) -> str:
     # this will convert paths (especially az:// ones) to the canonical https:// format
-    return combine_url(*split_url(path))
+    return combine_path(*split_path(path))
 
 
 def sign_with_shared_key(req: Request, key: str) -> str:

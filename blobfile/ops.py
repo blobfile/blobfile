@@ -1780,7 +1780,7 @@ def _get_slash_path(entry: DirEntry) -> str:
 
 def _normalize_path(path: str) -> str:
     if path.startswith('az://'):
-        return azure.combine_url(*azure.split_url_az(path))
+        return azure.normalize_url(path)
     return path
 
 

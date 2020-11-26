@@ -121,7 +121,7 @@ def _write_contents(path, contents):
     if ".blob.core.windows.net" in path:
         with tempfile.TemporaryDirectory() as tmpdir:
             assert isinstance(tmpdir, str)
-            account, container, blob = azure.split_url(path)
+            account, container, blob = azure.split_path(path)
             filepath = os.path.join(tmpdir, "tmp")
             with open(filepath, "wb") as f:
                 f.write(contents)
@@ -154,7 +154,7 @@ def _read_contents(path):
     if ".blob.core.windows.net" in path:
         with tempfile.TemporaryDirectory() as tmpdir:
             assert isinstance(tmpdir, str)
-            account, container, blob = azure.split_url(path)
+            account, container, blob = azure.split_path(path)
             filepath = os.path.join(tmpdir, "tmp")
             sp.run(
                 [

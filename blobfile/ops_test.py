@@ -34,6 +34,7 @@ AS_TEST_ACCOUNT2 = "cshteststorage3"
 AS_TEST_CONTAINER = "testcontainer2"
 AS_TEST_CONTAINER2 = "testcontainer3"
 AS_INVALID_ACCOUNT = f"{AS_TEST_ACCOUNT}-does-not-exist"
+AS_EXTERNAL_ACCOUNT = "cshteststorage4"
 
 AZURE_VALID_CONTAINER = (
     f"https://{AS_TEST_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}"
@@ -45,7 +46,9 @@ AZURE_INVALID_CONTAINER_NO_ACCOUNT = (
 GCS_VALID_BUCKET = f"gs://{GCS_TEST_BUCKET}"
 GCS_INVALID_BUCKET = f"gs://{GCS_TEST_BUCKET}-does-not-exist"
 
-AZURE_PUBLIC_URL = "https://tartanair.blob.core.windows.net/tartanair-release1/abandonedfactory/Easy/P000/image_left/000000_left.png"
+AZURE_PUBLIC_URL = (
+    f"https://{AS_EXTERNAL_ACCOUNT}.blob.core.windows.net/publiccontainer/test_cat.png"
+)
 AZURE_PUBLIC_URL_HEADER = b"\x89PNG"
 
 
@@ -1358,22 +1361,25 @@ def test_fork():
 
 
 def test_azure_public_container():
-    for error, accountname in [
+    for error, path in [
         (
             None,
-            "tartanair",
-        ),  # https://azure.microsoft.com/en-us/services/open-datasets/catalog/tartanair-airsim-simultaneous-localization-and-mapping/
-        (bf.Error, "accountname"),  # an account that exists but that is not public
-        (FileNotFoundError, AS_INVALID_ACCOUNT),  # account that does not exist
+            f"https://{AS_EXTERNAL_ACCOUNT}.blob.core.windows.net/publiccontainer/test_cat.png",
+        ),
+        (
+            bf.Error,
+            f"https://{AS_EXTERNAL_ACCOUNT}.blob.core.windows.net/private/test_cat.png",
+        ),  # an account that exists but with a non-public container
+        (
+            FileNotFoundError,
+            f"https://{AS_INVALID_ACCOUNT}.blob.core.windows.net/publiccontainer/test_cat.png",
+        ),  # account that does not exist
     ]:
         ctx = contextlib.nullcontext()
         if error is not None:
             ctx = pytest.raises(error)
         with ctx:
-            with bf.BlobFile(
-                f"https://{accountname}.blob.core.windows.net/tartanair-release1/abandonedfactory/Easy/P000/image_left/000000_left.png",
-                "rb",
-            ) as f:
+            with bf.BlobFile(path, "rb") as f:
                 contents = f.read()
                 assert contents.startswith(AZURE_PUBLIC_URL_HEADER)
 
@@ -1383,7 +1389,7 @@ def test_scandir_error():
         (None, AZURE_VALID_CONTAINER),
         (FileNotFoundError, AZURE_INVALID_CONTAINER),
         (FileNotFoundError, AZURE_INVALID_CONTAINER_NO_ACCOUNT),
-        (bf.Error, "https://accountname.blob.core.windows.net/container"),
+        (bf.Error, f"https://{AS_EXTERNAL_ACCOUNT}.blob.core.windows.net/private"),
     ]:
         ctx = contextlib.nullcontext()
         if error is not None:

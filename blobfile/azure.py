@@ -295,6 +295,10 @@ def combine_url(account: str, container: str, obj: str) -> str:
     return f"https://{account}.blob.core.windows.net/{container}/{obj}"
 
 
+def normalize_url(path: str) -> str:
+    return combine_url(*split_url_az(path))
+
+
 def sign_with_shared_key(req: Request, key: str) -> str:
     # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key
     params_to_sign = []

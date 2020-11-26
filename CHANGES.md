@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.6
+
+* Fix for azure credentials when using service principals through azure cli, thanks to @hauntsaninja for the PR
+* Fix for `bf.listdir` on `az://` paths in the presence of explicit directories, thanks to @WuTheFWasThat for the PR
+
 ## 1.0.5
 
 * Add support for `az://` urls, thanks to @joschu for the PR.  All azure urls output by `blobfile` are still the `https://` format.

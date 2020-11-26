@@ -1778,9 +1778,17 @@ def _get_slash_path(entry: DirEntry) -> str:
     return entry.path + "/" if entry.is_dir else entry.path
 
 
+def _normalize_path(path: str) -> str:
+    if path.startswith('az://'):
+        return azure.combine_url(*azure.split_url_az(path))
+    return path
+
+
 def _list_blobs_in_dir(prefix: str, exclude_prefix: bool) -> Iterator[DirEntry]:
-    for entry in _list_blobs(path=prefix, delimiter="/"):
-        if exclude_prefix and _get_slash_path(entry) == prefix:
+    # the prefix check doesn't work without normalization
+    normalized_prefix = _normalize_path(prefix)
+    for entry in _list_blobs(path=normalized_prefix, delimiter="/"):
+        if exclude_prefix and _get_slash_path(entry) == normalized_prefix:
             continue
         yield entry
 

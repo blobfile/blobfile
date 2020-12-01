@@ -7,7 +7,7 @@ import datetime
 import time
 import calendar
 import re
-from typing import Any, Mapping, Dict, Tuple, Sequence
+from typing import Any, Mapping, Dict, Tuple, Sequence, List
 
 import xmltodict
 
@@ -61,20 +61,6 @@ def load_credentials() -> Dict[str, Any]:
     # https://mikhail.io/2019/07/how-azure-cli-manages-access-tokens/
     default_creds_path = os.path.expanduser("~/.azure/accessTokens.json")
     if os.path.exists(default_creds_path):
-        default_profile_path = os.path.expanduser("~/.azure/azureProfile.json")
-        if not os.path.exists(default_profile_path):
-            raise Error(f"Missing default profile path: '{default_profile_path}'")
-        with open(default_profile_path, "rb") as f:
-            # this file has a UTF-8 BOM
-            profile = json.loads(f.read().decode("utf-8-sig"))
-        subscriptions = profile["subscriptions"]
-
-        def key_fn(x: Mapping[str, Any]) -> bool:
-            return x["isDefault"]
-
-        subscriptions.sort(key=key_fn, reverse=True)
-        subscription_ids = [sub["id"] for sub in subscriptions]
-
         with open(default_creds_path) as f:
             tokens = json.load(f)
             best_token = None
@@ -86,11 +72,30 @@ def load_credentials() -> Dict[str, Any]:
                     if token.get("expiresOn", "") > best_token.get("expiresOn", ""):
                         best_token = token
             if best_token is not None:
-                token = best_token.copy()
-                token["subscription_ids"] = subscription_ids
-                return token
+                return best_token
 
     return {}
+
+
+def load_subscription_ids() -> List[str]:
+    """
+    Return a list of subscription ids from the local azure profile
+    the default subscription will appear first in the list
+    """
+    default_profile_path = os.path.expanduser("~/.azure/azureProfile.json")
+    if not os.path.exists(default_profile_path):
+        return []
+
+    with open(default_profile_path, "rb") as f:
+        # this file has a UTF-8 BOM
+        profile = json.loads(f.read().decode("utf-8-sig"))
+    subscriptions = profile["subscriptions"]
+
+    def key_fn(x: Mapping[str, Any]) -> bool:
+        return x["isDefault"]
+
+    subscriptions.sort(key=key_fn, reverse=True)
+    return [sub["id"] for sub in subscriptions]
 
 
 def build_url(account: str, template: str, **data: str) -> str:

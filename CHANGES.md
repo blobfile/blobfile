@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.7
+
+* Attempt to query for subscriptions even less often
+
 ## 1.0.6
 
 * Fix for azure credentials when using service principals through azure cli, thanks to @hauntsaninja for the PR

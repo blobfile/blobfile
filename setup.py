@@ -9,6 +9,9 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 README = open(os.path.join(SCRIPT_DIR, "README.md")).read()
 
+with open(os.path.join(SCRIPT_DIR, "blobfile", "VERSION")) as version_file:
+    version = version_file.read().strip()
+
 
 class BuildPyCommand(setuptools.command.build_py.build_py):
     def run(self):
@@ -34,8 +37,8 @@ class BuildPyCommand(setuptools.command.build_py.build_py):
 
 setup_dict = dict(
     name="blobfile",
-    version="1.0.7",
-    description="Read GCS and local paths with the same interface, clone of tensorflow.io.gfile",
+    version=version,
+    description="Read GCS, ABS and local paths with the same interface, clone of tensorflow.io.gfile",
     long_description=README,
     long_description_content_type="text/markdown",
     url="https://github.com/christopher-hesse/blobfile",
@@ -60,7 +63,7 @@ setup_dict = dict(
     },
     python_requires=">=3.7.0",
     # indicate that we have type information
-    package_data={"blobfile": ["*.pyi", "py.typed"]},
+    package_data={"blobfile": ["*.pyi", "py.typed", "VERSION"]},
     # mypy cannot find type information in zip files
     zip_safe=False,
 )

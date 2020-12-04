@@ -7,6 +7,10 @@ import xmltodict
 
 
 class Request:
+    """
+    A struct representing an HTTP request
+    """
+
     def __init__(
         self,
         method: str,
@@ -33,6 +37,11 @@ class Request:
 
 
 class FileBody:
+    """
+    A struct for referencing a section of a file on disk to be used as the `data` property
+    on a Request
+    """
+
     def __init__(self, path: str, start: int, end: int) -> None:
         self.path = path
         self.start = start

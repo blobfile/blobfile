@@ -1,3 +1,5 @@
+import os
+
 from blobfile.ops import (
     copy,
     exists,
@@ -28,6 +30,11 @@ from blobfile.common import (
     RestartableStreamingWriteFailure,
     ConcurrentWriteFailure,
 )
+
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(SCRIPT_DIR, "VERSION")) as version_file:
+    __version__ = version_file.read().strip()
 
 __all__ = [
     "copy",

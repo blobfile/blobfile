@@ -79,8 +79,8 @@ DEFAULT_MAX_CONNECTION_POOL_COUNT = 10
 DEFAULT_AZURE_WRITE_CHUNK_SIZE = 8 * 2 ** 20
 DEFAULT_GOOGLE_WRITE_CHUNK_SIZE = 8 * 2 ** 20
 DEFAULT_RETRY_LOG_THRESHOLD = 0
-CONNECT_TIMEOUT = 10
-READ_TIMEOUT = 30
+DEFAULT_CONNECT_TIMEOUT = 10
+DEFAULT_READ_TIMEOUT = 30
 CHUNK_SIZE = 2 ** 20
 # it looks like azure signed urls cannot exceed the lifetime of the token used
 # to create them, so don't keep the key around too long
@@ -144,6 +144,8 @@ _azure_write_chunk_size = DEFAULT_AZURE_WRITE_CHUNK_SIZE
 _google_write_chunk_size = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE
 _retry_log_threshold = DEFAULT_RETRY_LOG_THRESHOLD
 _retry_limit = None
+_connect_timeout = DEFAULT_CONNECT_TIMEOUT
+_read_timeout = DEFAULT_READ_TIMEOUT
 
 
 def _default_log_fn(msg: str) -> None:
@@ -223,6 +225,8 @@ def configure(
     google_write_chunk_size: int = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
     retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
     retry_limit: Optional[int] = None,
+    connect_timeout: Optional[int] = DEFAULT_CONNECT_TIMEOUT,
+    read_timeout: Optional[int] = DEFAULT_READ_TIMEOUT,
 ) -> None:
     """
     log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout
@@ -230,10 +234,12 @@ def configure(
     max_connection_pool_count: the maximum count of per-host connection pools
     azure_write_chunk_size: the size of blocks to write to Azure Storage blobs, can be set to a maximum of 100MB
     retry_log_threshold: set a retry count threshold above which to log failures to the log callback function
+    connect_timeout: the maximum amount of time (in seconds) to wait for a connection attempt to a server to succeed, set to None to wait forever
+    read_timeout: the maximum amount of time (in seconds) to wait between consecutive read operations for a response from the server, set to None to wait forever
     """
     global _log_callback
     _log_callback = log_callback
-    global _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size, _retry_log_threshold, _retry_limit, _google_write_chunk_size
+    global _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size, _retry_log_threshold, _retry_limit, _google_write_chunk_size, _connect_timeout, _read_timeout
     with _http_lock:
         _http = None
         _http_pid = None
@@ -243,6 +249,8 @@ def configure(
         _google_write_chunk_size = google_write_chunk_size
         _retry_log_threshold = retry_log_threshold
         _retry_limit = retry_limit
+        _connect_timeout = connect_timeout
+        _read_timeout = read_timeout
 
 
 class TokenManager:
@@ -650,7 +658,7 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
                 url=url,
                 headers=req.headers,
                 body=body,
-                timeout=urllib3.Timeout(connect=CONNECT_TIMEOUT, read=READ_TIMEOUT),
+                timeout=urllib3.Timeout(connect=_connect_timeout, read=_read_timeout),
                 preload_content=req.preload_content,
                 retries=False,
                 redirect=False,

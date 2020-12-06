@@ -3,6 +3,7 @@
 ## 1.0.7
 
 * Attempt to query for subscriptions even less often
+* Allow configuring connect and read timeouts through `bf.configure`
 
 ## 1.0.6
 

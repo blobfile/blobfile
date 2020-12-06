@@ -146,6 +146,7 @@ _retry_log_threshold = DEFAULT_RETRY_LOG_THRESHOLD
 _retry_limit = None
 _connect_timeout = DEFAULT_CONNECT_TIMEOUT
 _read_timeout = DEFAULT_READ_TIMEOUT
+_output_az_paths = False
 
 
 def _default_log_fn(msg: str) -> None:
@@ -227,6 +228,7 @@ def configure(
     retry_limit: Optional[int] = None,
     connect_timeout: Optional[int] = DEFAULT_CONNECT_TIMEOUT,
     read_timeout: Optional[int] = DEFAULT_READ_TIMEOUT,
+    output_az_paths: bool = False,
 ) -> None:
     """
     log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout
@@ -236,10 +238,11 @@ def configure(
     retry_log_threshold: set a retry count threshold above which to log failures to the log callback function
     connect_timeout: the maximum amount of time (in seconds) to wait for a connection attempt to a server to succeed, set to None to wait forever
     read_timeout: the maximum amount of time (in seconds) to wait between consecutive read operations for a response from the server, set to None to wait forever
+    output_az_paths: output `az://` paths instead of using the `https://` for azure
     """
     global _log_callback
     _log_callback = log_callback
-    global _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size, _retry_log_threshold, _retry_limit, _google_write_chunk_size, _connect_timeout, _read_timeout
+    global _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size, _retry_log_threshold, _retry_limit, _google_write_chunk_size, _connect_timeout, _read_timeout, _output_az_paths
     with _http_lock:
         _http = None
         _http_pid = None
@@ -251,6 +254,7 @@ def configure(
         _retry_limit = retry_limit
         _connect_timeout = connect_timeout
         _read_timeout = read_timeout
+        _output_az_paths = output_az_paths
 
 
 class TokenManager:
@@ -1347,13 +1351,13 @@ def _azure_get_entries(
         if isinstance(blobs["BlobPrefix"], dict):
             blobs["BlobPrefix"] = [blobs["BlobPrefix"]]
         for bp in blobs["BlobPrefix"]:
-            path = azure.combine_path(account, container, bp["Name"])
+            path = _azure_combine_path(account, container, bp["Name"])
             yield _entry_from_dirpath(path)
     if "Blob" in blobs:
         if isinstance(blobs["Blob"], dict):
             blobs["Blob"] = [blobs["Blob"]]
         for b in blobs["Blob"]:
-            path = azure.combine_path(account, container, b["Name"])
+            path = _azure_combine_path(account, container, b["Name"])
             if b["Name"].endswith("/"):
                 yield _entry_from_dirpath(path)
             else:
@@ -1653,7 +1657,7 @@ def scanglob(pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
             account, container, blob_prefix = azure.split_path(pattern)
             if "*" in account or "*" in container:
                 raise Error("Wildcards cannot be used in account or container")
-            root = azure.combine_path(account, container, "")
+            root = _azure_combine_path(account, container, "")
 
         initial_task = _GlobTask("", _split_path(blob_prefix))
 
@@ -1815,9 +1819,17 @@ def _get_slash_path(entry: DirEntry) -> str:
     return entry.path + "/" if entry.is_dir else entry.path
 
 
+def _azure_combine_path(account: str, container: str, obj: str) -> str:
+    if _output_az_paths:
+        return azure.combine_az_path(account, container, obj)
+    else:
+        return azure.combine_https_path(account, container, obj)
+
+
 def _normalize_path(path: str) -> str:
+    # convert paths to the canonical format
     if _is_azure_path(path):
-        return azure.normalize_path(path)
+        return _azure_combine_path(*azure.split_path(path))
     return path
 
 
@@ -2466,9 +2478,9 @@ def dirname(path: str) -> str:
         obj = _strip_slashes(obj)
         if "/" in obj:
             obj = "/".join(obj.split("/")[:-1])
-            return azure.combine_path(account, container, obj)
+            return _azure_combine_path(account, container, obj)
         else:
-            return azure.combine_path(account, container, "")[:-1]
+            return _azure_combine_path(account, container, "")[:-1]
     else:
         return os.path.dirname(path)
 
@@ -2512,7 +2524,7 @@ def _join2(a: str, b: str) -> str:
             obj = _safe_urljoin(obj, b)
             if obj.startswith("/"):
                 obj = obj[1:]
-            return azure.combine_path(account, container, obj)
+            return _azure_combine_path(account, container, obj)
         else:
             raise Error(f"Unrecognized path: '{a}'")
     else:

@@ -4,6 +4,7 @@
 
 * Attempt to query for subscriptions even less often
 * Allow configuring connect and read timeouts through `bf.configure`
+* Add configure option `output_az_paths`, set this to `True` to output `az://` paths instead of the `https://` ones
 
 ## 1.0.6
 

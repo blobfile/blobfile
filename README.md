@@ -74,6 +74,7 @@ There are a few bonus functions:
     * `retry_log_threshold=0`: set a retry count threshold above which to log failures to the log callback function
     * `connect_timeout=10`: the maximum amount of time (in seconds) to wait for a connection attempt to a server to succeed, set to None to wait forever
     * `read_timeout=30`: the maximum amount of time (in seconds) to wait between consecutive read operations for a response from the server, set to None to wait forever
+    * `output_az_paths`: output `az://` paths instead of using the `https://` for azure
 
 ## Authentication
 

@@ -296,13 +296,12 @@ def split_https_path(path: str) -> Tuple[str, str, str]:
     return account, container, obj
 
 
-def combine_path(account: str, container: str, obj: str) -> str:
+def combine_https_path(account: str, container: str, obj: str) -> str:
     return f"https://{account}.blob.core.windows.net/{container}/{obj}"
 
 
-def normalize_path(path: str) -> str:
-    # this will convert paths (especially az:// ones) to the canonical https:// format
-    return combine_path(*split_path(path))
+def combine_az_path(account: str, container: str, obj: str) -> str:
+    return f"az://{account}/{container}/{obj}"
 
 
 def sign_with_shared_key(req: Request, key: str) -> str:

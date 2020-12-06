@@ -134,10 +134,26 @@ Azure Blobs URLs have the format `https://<account>.blob.core.windows.net/<conta
 
 To route those log lines, use `configure(log_callback=<fn>)` to set a callback function which will be called whenever a log line should be printed.  The default callback prints to stdout with the prefix `blobfile:`.
 
-While `blobfile` does not use the python `logging` module, it does use other libraries which use that module.  So if you configure the python `logging` module, you may need to change the settings to adjust logging behavior:
+### Using the `logging` module
+
+If you use the python `logging` module, you can have `blobfile` log there:
+
+```py
+bf.configure(log_callback=logging.getLogger("blobfile").warning)
+```
+
+While `blobfile` does not use the python `logging` module by default, it does use other libraries which use that module.  So if you configure the python `logging` module, you may need to change the settings to adjust logging behavior:
 
 * `urllib3`: `logging.getLogger("urllib3").setLevel(logging.ERROR)`
 * `filelock`: `logging.getLogger("filelock").setLevel(logging.ERROR)`
+
+Also, as a tip, make sure to use a format that tells you the name of the logger:
+
+```py
+logging.basicConfig(format="%(asctime)s [%(name)s] %(levelname)s: %(message)s", level=logging.WARNING)
+```
+
+This will let you see which package is producing log messages.
 
 ## Safety
 

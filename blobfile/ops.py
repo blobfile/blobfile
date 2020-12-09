@@ -243,6 +243,7 @@ def configure(
     connection_pool_max_size: the max size for each per-host connection pool
     max_connection_pool_count: the maximum count of per-host connection pools
     azure_write_chunk_size: the size of blocks to write to Azure Storage blobs, can be set to a maximum of 100MB
+    google_write_chunk_size: the size of blocks to write to Google Cloud Storage blobs in bytes, this only determines the unit of request retries
     retry_log_threshold: set a retry count threshold above which to log failures to the log callback function
     connect_timeout: the maximum amount of time (in seconds) to wait for a connection attempt to a server to succeed, set to None to wait forever
     read_timeout: the maximum amount of time (in seconds) to wait between consecutive read operations for a response from the server, set to None to wait forever

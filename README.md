@@ -74,7 +74,8 @@ There are a few bonus functions:
     * `retry_log_threshold=0`: set a retry count threshold above which to log failures to the log callback function
     * `connect_timeout=10`: the maximum amount of time (in seconds) to wait for a connection attempt to a server to succeed, set to None to wait forever
     * `read_timeout=30`: the maximum amount of time (in seconds) to wait between consecutive read operations for a response from the server, set to None to wait forever
-    * `output_az_paths`: output `az://` paths instead of using the `https://` for azure
+    * `output_az_paths=False`: output `az://` paths instead of using the `https://` for azure
+    * `use_azure_storage_account_key_fallback=True`: fallback to storage account keys for azure containers, having this enabled (the default) requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
 
 ## Authentication
 
@@ -158,7 +159,10 @@ This will let you see which package is producing log messages.
 
 ## Safety
 
-The library should be thread safe and fork safe, except that a `BlobFile` instance is not thread safe (only 1 thread should own a `BlobFile` instance at a time).
+The library should be thread safe and fork safe with the following exceptions:
+
+* A `BlobFile` instance is not thread safe (only 1 thread should own a `BlobFile` instance at a time)
+* Calls to `bf.configure()` are not thread-safe and should ideally happen before performing any operations
 
 ### Concurrent Writers
 

@@ -147,6 +147,7 @@ _retry_limit = None
 _connect_timeout = DEFAULT_CONNECT_TIMEOUT
 _read_timeout = DEFAULT_READ_TIMEOUT
 _output_az_paths = False
+_use_azure_storage_account_key_fallback = True
 
 
 def _default_log_fn(msg: str) -> None:
@@ -202,19 +203,25 @@ def _get_http_pool() -> urllib3.PoolManager:
 
 # rather than a global configure object, there should probably be a context
 # object that tracks all the settings
+# this could also avoid issues with configuring while another thread is already calling blobfile functions
+# as long as getting/setting the global context is thread safe and contexts are immutable
 #
 # class Context:
 #   # class with all blobfile functions as methods
 #   # and existing global variables as properties
 # def create_context(**config_options) -> Context:
-#   # create a context
+#   # create a context, can be called by user to have a special context
 # _global_context = create_context()
 # def configure(**config_options) -> None:
 #   global _global_context
-#   _global_context = create_context(**config_options)
+#   with _global_context_lock:
+#       _global_context = create_context(**config_options)
+# def get_global_context() -> Context:
+#   with _global_context_lock:
+#       return _global_context
 # def copy():
 #   # proxy functions for all methods on Context
-#   return _global_context.copy()
+#   return get_global_context().copy()
 
 
 def configure(
@@ -229,6 +236,7 @@ def configure(
     connect_timeout: Optional[int] = DEFAULT_CONNECT_TIMEOUT,
     read_timeout: Optional[int] = DEFAULT_READ_TIMEOUT,
     output_az_paths: bool = False,
+    use_azure_storage_account_key_fallback: bool = True,
 ) -> None:
     """
     log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout
@@ -239,13 +247,14 @@ def configure(
     connect_timeout: the maximum amount of time (in seconds) to wait for a connection attempt to a server to succeed, set to None to wait forever
     read_timeout: the maximum amount of time (in seconds) to wait between consecutive read operations for a response from the server, set to None to wait forever
     output_az_paths: output `az://` paths instead of using the `https://` for azure
+    use_azure_storage_account_key_fallback: fallback to storage account keys for azure containers, having this enabled (the default) requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
     """
-    global _log_callback
-    _log_callback = log_callback
-    global _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size, _retry_log_threshold, _retry_limit, _google_write_chunk_size, _connect_timeout, _read_timeout, _output_az_paths
+    global _log_callback, _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size, _retry_log_threshold, _retry_limit, _google_write_chunk_size, _connect_timeout, _read_timeout, _output_az_paths, _use_azure_storage_account_key_fallback
     with _http_lock:
         _http = None
         _http_pid = None
+
+        _log_callback = log_callback
         _connection_pool_max_size = connection_pool_max_size
         _max_connection_pool_count = max_connection_pool_count
         _azure_write_chunk_size = azure_write_chunk_size
@@ -255,6 +264,7 @@ def configure(
         _connect_timeout = connect_timeout
         _read_timeout = read_timeout
         _output_az_paths = output_az_paths
+        _use_azure_storage_account_key_fallback = use_azure_storage_account_key_fallback
 
 
 class TokenManager:
@@ -528,12 +538,16 @@ def _azure_get_access_token(key: Any) -> Tuple[Any, float]:
         if _azure_can_access_container(account, container, auth):
             return (auth, now + float(result["expires_in"]))
 
-        # fall back to getting the storage keys
-        storage_account_key_auth = _azure_get_storage_account_key(
-            account=account, container=container, creds=creds
-        )
-        if storage_account_key_auth is not None:
-            return (storage_account_key_auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
+        if _use_azure_storage_account_key_fallback:
+            # fall back to getting the storage keys
+            storage_account_key_auth = _azure_get_storage_account_key(
+                account=account, container=container, creds=creds
+            )
+            if storage_account_key_auth is not None:
+                return (
+                    storage_account_key_auth,
+                    now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
+                )
     elif "appId" in creds:
         # we have a service principal, get an oauth token
         def build_req() -> Request:
@@ -547,12 +561,16 @@ def _azure_get_access_token(key: Any) -> Tuple[Any, float]:
         if _azure_can_access_container(account, container, auth):
             return (auth, now + float(result["expires_in"]))
 
-        # fall back to getting the storage keys
-        storage_account_key_auth = _azure_get_storage_account_key(
-            account=account, container=container, creds=creds
-        )
-        if storage_account_key_auth is not None:
-            return (storage_account_key_auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
+        if _use_azure_storage_account_key_fallback:
+            # fall back to getting the storage keys
+            storage_account_key_auth = _azure_get_storage_account_key(
+                account=account, container=container, creds=creds
+            )
+            if storage_account_key_auth is not None:
+                return (
+                    storage_account_key_auth,
+                    now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
+                )
 
     # oddly, it seems that if you request a public container with a valid azure account, you cannot list the bucket
     # but if you list it with no account, that works fine

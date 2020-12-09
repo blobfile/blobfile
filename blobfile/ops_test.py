@@ -409,7 +409,7 @@ def test_stat(ctx):
         _write_contents(path, contents)
         s = bf.stat(path)
         assert s.size == len(contents)
-        assert 0 <= abs(time.time() - s.mtime) <= 5
+        assert 0 <= abs(time.time() - s.mtime) <= 10
 
 
 @pytest.mark.parametrize(
@@ -420,7 +420,7 @@ def test_set_mtime(ctx):
     with ctx() as path:
         _write_contents(path, contents)
         s = bf.stat(path)
-        assert 0 <= abs(time.time() - s.mtime) <= 5
+        assert 0 <= abs(time.time() - s.mtime) <= 10
         new_mtime = 1
         assert bf.set_mtime(path, new_mtime)
         assert bf.stat(path).mtime == new_mtime

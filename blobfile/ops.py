@@ -343,7 +343,7 @@ def _azure_can_access_container(
             method="GET",
             url=azure.build_url(account, "/{container}", container=container),
             params={"restype": "container", "comp": "list", "maxresults": "1"},
-            success_codes=(200, 403, 404, INVALID_HOSTNAME_STATUS),
+            success_codes=(200, 403, 404, 409, INVALID_HOSTNAME_STATUS),
         )
         return azure.make_api_request(req, auth=auth)
 

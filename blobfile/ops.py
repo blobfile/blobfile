@@ -338,12 +338,17 @@ def _azure_can_access_container(
     account: str, container: str, auth: Tuple[str, str]
 ) -> bool:
     # https://myaccount.blob.core.windows.net/mycontainer?restype=container&comp=list
+    success_codes = [200, 403, 404, INVALID_HOSTNAME_STATUS]
+    if auth[0] == azure.ANONYMOUS:
+        # some containers can produce a 409 error "PublicAccessNotPermitted" when accessed with an anonymous account
+        success_codes.append(409)
+
     def build_req() -> Request:
         req = Request(
             method="GET",
             url=azure.build_url(account, "/{container}", container=container),
             params={"restype": "container", "comp": "list", "maxresults": "1"},
-            success_codes=(200, 403, 404, 409, INVALID_HOSTNAME_STATUS),
+            success_codes=success_codes,
         )
         return azure.make_api_request(req, auth=auth)
 

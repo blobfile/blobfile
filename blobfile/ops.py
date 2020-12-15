@@ -598,13 +598,18 @@ def _azure_get_sas_token(key: Any) -> Tuple[Any, float]:
         # and we can tell when we don't have a real SAS token for a container
         return (None, time.time() + AZURE_SAS_TOKEN_EXPIRATION_SECONDS)
 
-    account, _ = key
+    account, container = key
 
     def build_req() -> Request:
         req = azure.create_user_delegation_sas_request(account=account)
         auth = global_azure_access_token_manager.get_token(key=key)
         if auth[0] != azure.OAUTH_TOKEN:
-            raise Error("Only oauth tokens can be used to get SAS tokens")
+            raise Error(
+                "Only OAuth tokens can be used to get SAS tokens. You should set the Storage "
+                "Blob Data Reader or Storage Blob Data Contributor IAM role. You can run "
+                f"`az storage blob list --auth-mode login --account-name {account} --container {container}` "
+                "to confirm that the missing role is the issue."
+            )
         return azure.make_api_request(req, auth=auth)
 
     resp = _execute_request(build_req)

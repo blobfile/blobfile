@@ -5,7 +5,8 @@
 * Attempt to query for subscriptions even less often
 * Allow configuring connect and read timeouts through `bf.configure`
 * Add configure option `output_az_paths`, set this to `True` to output `az://` paths instead of the `https://` ones
-* Add configure option `use_azure_storage_account_key_fallback`, set this to `False` to disable falling back to storage account keys
+* Add configure option `use_azure_storage_account_key_fallback`, set this to `False` to disable falling back to storage account keys.  This is recommended because the storage key fallback confuses users and can result in 429s from the Azure management endpoints.
+* Remove generated `.pyi` files.  These were for use by `pyright`, but confused PyCharm and are no longer necessary for `pyright`.
 
 ## 1.0.6
 

@@ -23,14 +23,14 @@ class Request:
         # https://cloud.google.com/storage/docs/resumable-uploads#practices
         retry_codes: Sequence[int] = (408, 429, 500, 502, 503, 504),
     ) -> None:
-        self.url = url
-        self.method = method
-        self.params = params
-        self.headers = headers
-        self.data = data
-        self.preload_content = preload_content
-        self.success_codes = success_codes
-        self.retry_codes = retry_codes
+        self.method: str = method
+        self.url: str = url
+        self.params: Optional[Mapping[str, str]] = params
+        self.headers: Optional[Mapping[str, str]] = headers
+        self.data: Any = data
+        self.preload_content: bool = preload_content
+        self.success_codes: Sequence[int] = success_codes
+        self.retry_codes: Sequence[int] = retry_codes
 
     def __repr__(self) -> str:
         return f"<Request method={self.method} url={self.url} params={self.params}>"
@@ -43,9 +43,9 @@ class FileBody:
     """
 
     def __init__(self, path: str, start: int, end: int) -> None:
-        self.path = path
-        self.start = start
-        self.end = end
+        self.path: str = path
+        self.start: int = start
+        self.end: int = end
 
     def __repr__(self):
         return f"<FileBody path={self.path} start={self.start} end={self.end}>"
@@ -62,7 +62,7 @@ class Error(Exception):
     """Base class for blobfile exceptions."""
 
     def __init__(self, message: str, *args: Any):
-        self.message = message
+        self.message: str = message
         super().__init__(message, *args)
 
 
@@ -95,10 +95,10 @@ class RequestFailure(Error):
         error: Optional[str],
         error_description: Optional[str],
     ):
-        self.request_string = request_string
-        self.response_status = response_status
-        self.error = error
-        self.error_description = error_description
+        self.request_string: str = request_string
+        self.response_status: int = response_status
+        self.error: Optional[str] = error
+        self.error_description: Optional[str] = error_description
         super().__init__(
             message,
             self.request_string,

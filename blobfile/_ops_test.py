@@ -1410,7 +1410,7 @@ def test_windowed_file():
             f.write(b"meow")
 
         with open(path, "rb") as f:
-            f2 = bf.ops._WindowedFile(f, start=1, end=3)
+            f2 = ops._WindowedFile(f, start=1, end=3)
             assert f2.read() == b"eo"
 
             f2.seek(0)

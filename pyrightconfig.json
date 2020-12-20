@@ -4,7 +4,7 @@
         "blobfile"
     ],
     "exclude": [
-        "blobfile/*_test.py"
+        "blobfile/**/*_test.py"
     ],
     "strict": [
         "blobfile/**/*.py"

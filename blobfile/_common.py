@@ -32,7 +32,7 @@ class Request:
         self.success_codes = success_codes
         self.retry_codes = retry_codes
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<Request method={self.method} url={self.url} params={self.params}>"
 
 
@@ -107,7 +107,7 @@ class RequestFailure(Error):
             self.error_description,
         )
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"message={self.message}, request={self.request_string}, status={self.response_status}, error={self.error} error_description={self.error_description}"
 
     @classmethod

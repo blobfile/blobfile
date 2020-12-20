@@ -56,8 +56,8 @@ import urllib3
 import xmltodict
 import filelock
 
-from blobfile import google, azure
-from blobfile.common import (
+from blobfile import _google as google, _azure as azure
+from blobfile._common import (
     Request,
     FileBody,
     Error,
@@ -2364,7 +2364,7 @@ def rmtree(path: str) -> None:
 
 
 def walk(
-    top: str, topdown: bool = True, onerror: Optional[Callable] = None
+    top: str, topdown: bool = True, onerror: Optional[Callable[[OSError], None]] = None
 ) -> Iterator[Tuple[str, Sequence[str], Sequence[str]]]:
     """
     Walk a directory tree in a similar manner to os.walk

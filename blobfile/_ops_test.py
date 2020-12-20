@@ -17,7 +17,6 @@ import subprocess as sp
 import multiprocessing as mp
 import platform
 import base64
-import gzip
 
 import av
 import pytest
@@ -26,7 +25,7 @@ import imageio
 import numpy as np
 
 import blobfile as bf
-from blobfile import ops, azure
+from blobfile import _ops as ops, _azure as azure
 
 GCS_TEST_BUCKET = "csh-test-3"
 AS_TEST_ACCOUNT = "cshteststorage2"

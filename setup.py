@@ -1,8 +1,5 @@
 import os
-import shutil
 from setuptools import setup, find_packages
-import setuptools.command.build_py
-import subprocess as sp
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -11,28 +8,6 @@ README = open(os.path.join(SCRIPT_DIR, "README.md")).read()
 
 with open(os.path.join(SCRIPT_DIR, "blobfile", "VERSION")) as version_file:
     version = version_file.read().strip()
-
-
-class BuildPyCommand(setuptools.command.build_py.build_py):
-    def run(self):
-        sp.run(
-            ["pyright", "--project", "pyrightconfig.json", "--createstub", "blobfile"],
-            check=True,
-            shell=True,
-        )
-        sp.run(
-            [
-                "python",
-                "scripts/filter-stubs.py",
-                "--stubspath",
-                "typings/blobfile",
-                "--outputpath",
-                "blobfile",
-            ],
-            check=True,
-        )
-        shutil.rmtree("typings/blobfile")
-        setuptools.command.build_py.build_py.run(self)
 
 
 setup_dict = dict(
@@ -63,22 +38,9 @@ setup_dict = dict(
     },
     python_requires=">=3.7.0",
     # indicate that we have type information
-    package_data={"blobfile": ["*.pyi", "py.typed", "VERSION"]},
+    package_data={"blobfile": ["py.typed", "VERSION"]},
     # mypy cannot find type information in zip files
     zip_safe=False,
 )
-
-if os.environ.get("PACKAGE_FOR_RELEASE", "0") == "1":
-    # don't require that users have all the build requirements when doing "pip install"
-    # since these are only used for creating the stub files
-    setup_dict["cmdclass"] = {"build_py": BuildPyCommand}
-
-if os.environ.get("USE_SCM_VERSION", "0") == "1":
-    setup_dict["use_scm_version"] = {
-        "root": "..",
-        "relative_to": __file__,
-        "local_scheme": "node-and-timestamp",
-    }
-    setup_dict["setup_requires"] = ["setuptools_scm"]
 
 setup(**setup_dict)

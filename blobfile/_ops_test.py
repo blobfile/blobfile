@@ -27,6 +27,7 @@ import numpy as np
 import blobfile as bf
 from blobfile import _ops as ops, _azure as azure
 
+# TODO(8enmann): Make these configurable.
 GCS_TEST_BUCKET = "csh-test-3"
 AS_TEST_ACCOUNT = "cshteststorage2"
 AS_TEST_ACCOUNT2 = "cshteststorage3"

@@ -174,3 +174,14 @@ Azure Blobs doesn't support multiple writers for the same blob.  With the way `B
 ## Changes
 
 See [CHANGES](CHANGES.md)
+
+## Contributing
+
+Get your account added to the appropriate [testing buckets](https://github.com/christopher-hesse/blobfile/blob/bb885e72e97ddade675d4493db235b43888a2191/blobfile/_ops_test.py#L30-L36)
+
+```sh
+conda env create -f env.yaml -n blobfile
+conda activate blobfile
+# run tests
+python testing/run-tests.py -vs
+```

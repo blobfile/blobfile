@@ -28,6 +28,7 @@ setup_dict = dict(
     ],
     extras_require={
         "dev": [
+            "av",
             "pytest",
             "tensorflow",
             "imageio",

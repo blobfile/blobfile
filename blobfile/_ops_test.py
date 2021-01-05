@@ -25,7 +25,7 @@ import imageio
 import numpy as np
 
 import blobfile as bf
-from blobfile import _ops as ops, _azure as azure
+from blobfile import _ops as ops, _azure as azure, _common as common
 
 # TODO(8enmann): Make these configurable.
 GCS_TEST_BUCKET = "csh-test-3"
@@ -437,16 +437,10 @@ def test_azure_metadata(ctx):
             f.write(contents)
 
         bf.set_mtime(path, 1)
-        _isfile, orig_metadata = ops._azure_isfile(path)
         time.sleep(5)
         with bf.BlobFile(path, "wb", streaming=True) as f:
-            _isfile, new_metadata = ops._azure_isfile(path)
-        keys = set(orig_metadata.keys()).union(new_metadata.keys())
-        for key in sorted(keys):
-            orig_val = orig_metadata.get(key)
-            new_val = new_metadata.get(key)
-            if key not in ["Date", "ETag", "Last-Modified", "x-ms-request-id"]:
-                assert orig_val == new_val
+            st = bf.stat(path)
+        assert st.mtime == 1
 
 
 @pytest.mark.parametrize(
@@ -867,37 +861,6 @@ def environ_context():
     env = os.environ.copy()
     yield
     os.environ = env
-
-
-@pytest.mark.parametrize(
-    "backend_ctx",
-    [
-        ("local", _get_temp_local_path),
-        ("google", _get_temp_gcs_path),
-        ("azure", _get_temp_as_path),
-    ],
-)
-def test_backends_env_var(backend_ctx):
-    backend, ctx = backend_ctx
-    contents = b"meow!"
-
-    with environ_context():
-        with ctx() as path:
-            _write_contents(path, contents)
-
-            with bf.BlobFile(path, "rb") as f:
-                f.read()
-
-            os.environ["BLOBFILE_BACKENDS"] = ""
-
-            with pytest.raises(bf.Error):
-                with bf.BlobFile(path, "rb") as f:
-                    f.read()
-
-            os.environ["BLOBFILE_BACKENDS"] = backend
-
-            with bf.BlobFile(path, "rb") as f:
-                f.read()
 
 
 def test_more_exists():
@@ -1335,30 +1298,30 @@ def test_azure_maybe_update_md5(ctx):
 
     with ctx() as path:
         _write_contents(path, contents)
-        _isfile, metadata = ops._azure_isfile(path)
-        assert ops._azure_maybe_update_md5(path, metadata["ETag"], meow_hash)
+        st = ops.azure.maybe_stat(ops._context, path)
+        assert ops.azure.maybe_update_md5(ops._context, path, st.version, meow_hash)
         _write_contents(path, alternative_contents)
-        assert not ops._azure_maybe_update_md5(path, metadata["ETag"], meow_hash)
-        _isfile, metadata = ops._azure_isfile(path)
-        assert base64.b64decode(metadata["Content-MD5"]).hex() == purr_hash
+        assert not ops.azure.maybe_update_md5(ops._context, path, st.version, meow_hash)
+        st = ops.azure.maybe_stat(ops._context, path)
+        assert st.md5 == purr_hash
         bf.remove(path)
-        assert not ops._azure_maybe_update_md5(path, metadata["ETag"], meow_hash)
+        assert not ops.azure.maybe_update_md5(ops._context, path, st.version, meow_hash)
 
 
 def _get_http_pool_id(q):
-    q.put(id(ops._get_http_pool()))
+    q.put(id(ops._context.get_http_pool()))
 
 
 def test_fork():
     q = mp.Queue()
     # this reference should keep the old http client alive in the child process
     # to ensure that a new one does not recycle the memory address
-    http1 = ops._get_http_pool()
+    http1 = ops._context.get_http_pool()
     parent1 = id(http1)
     p = mp.Process(target=_get_http_pool_id, args=(q,))
     p.start()
     p.join()
-    http2 = ops._get_http_pool()
+    http2 = ops._context.get_http_pool()
     parent2 = id(http2)
 
     child = q.get()
@@ -1411,7 +1374,7 @@ def test_windowed_file():
             f.write(b"meow")
 
         with open(path, "rb") as f:
-            f2 = ops._WindowedFile(f, start=1, end=3)
+            f2 = common.WindowedFile(f, start=1, end=3)
             assert f2.read() == b"eo"
 
             f2.seek(0)

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0
+
+* Remove `BLOBFILE_BACKENDS` environment variable
+* Various internal refactorings
+
 ## 1.0.7
 
 * Attempt to query for subscriptions even less often

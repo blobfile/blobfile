@@ -121,7 +121,7 @@ GCS paths have the format `gs://<bucket>/<blob>`, you cannot perform any operati
 
 ### Azure Blobs
 
-Azure Blobs URLs have the format `https://<account>.blob.core.windows.net/<container>/<blob>` or `az://<account>/<container>`.  The highest you can go up the hierarchy is `https://<account>.blob.core.windows.net/<container>/`, `blobfile` cannot perform any operations on `https://<account>.blob.core.windows.net/`.  The `https://` url is the output format, but the `az://` urls are accepted as inputs.
+Azure Blobs URLs have the format `az://<account>/<container>` or `https://<account>.blob.core.windows.net/<container>/<blob>`.  The highest you can go up the hierarchy is `az://<account>/<container>/`, `blobfile` cannot perform any operations on `az://<account>/`.  The `https://` url is the output format by default, but the `az://` urls are accepted as inputs and you can set `output_az_paths=True` to get `az://` urls as output.
 
 ## Errors
 

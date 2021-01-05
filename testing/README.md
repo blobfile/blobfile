@@ -12,4 +12,4 @@ Run a single test:
 python run.py -v -s -k test_windowed_file
 ```
 
-Modify `run.py` if you only want to do some of these things.  The tests are rather slow (even though large file tests are disabled) and require accounts with every cloud provider.
+Modify `run.py` if you only want to do some of these things.  The tests are rather slow, ~7 minutes to run (even though large file tests are disabled) and require accounts with every cloud provider.

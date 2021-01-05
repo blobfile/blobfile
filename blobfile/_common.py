@@ -22,6 +22,11 @@ from typing import (
 import urllib3
 import xmltodict
 
+# feature flags
+USE_STREAMING_READ_REQUEST = True
+
+CHUNK_SIZE = 2 ** 20
+
 EARLY_EXPIRATION_SECONDS = 5 * 60
 
 INVALID_HOSTNAME_STATUS = 600  # fake status for invalid hostname
@@ -493,3 +498,215 @@ class TokenManager:
 
             assert key in self._tokens
             return self._tokens[key]
+
+
+class StreamingWriteFile(io.BufferedIOBase):
+    def __init__(self, ctx: Context, chunk_size: int) -> None:
+        # current writing byte offset in the file
+        self._offset = 0
+        # contents waiting to be uploaded
+        self._buf = b""
+        self._chunk_size = chunk_size
+
+    def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
+        raise NotImplementedError
+
+    def _upload_buf(self, finalize: bool = False):
+        if finalize:
+            size = len(self._buf)
+        else:
+            size = (len(self._buf) // self._chunk_size) * self._chunk_size
+            assert size > 0
+        chunk = self._buf[:size]
+        self._buf = self._buf[size:]
+
+        self._upload_chunk(chunk, finalize)
+        self._offset += len(chunk)
+
+    def close(self) -> None:
+        if self.closed:
+            return
+
+        # we will have a partial remaining buffer at this point
+        self._upload_buf(finalize=True)
+        super().close()
+
+    def tell(self) -> int:
+        return self._offset
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, b: bytes) -> int:
+        self._buf += b
+        while len(self._buf) > self._chunk_size:
+            self._upload_buf()
+        return len(b)
+
+    def readinto(self, b: Any) -> int:
+        raise io.UnsupportedOperation("not readable")
+
+    def detach(self) -> io.RawIOBase:
+        raise io.UnsupportedOperation("no underlying raw stream")
+
+    def read1(self, size: int = -1) -> bytes:
+        raise io.UnsupportedOperation("not readable")
+
+    def readinto1(self, b: Any) -> int:
+        raise io.UnsupportedOperation("not readable")
+
+
+class StreamingReadFile(io.RawIOBase):
+    def __init__(self, ctx: Context, path: str, size: int) -> None:
+        super().__init__()
+        self._ctx = ctx
+        self._size = size
+        self._path = path
+        # current reading byte offset in the file
+        self._offset = 0
+        self._f = None
+        self.requests = 0
+        self.failures = 0
+        self.bytes_read = 0
+
+    def _request_chunk(
+        self, streaming: bool, start: int, end: Optional[int] = None
+    ) -> urllib3.response.HTTPResponse:
+        raise NotImplementedError
+
+    def readall(self) -> bytes:
+        # https://github.com/christopher-hesse/blobfile/issues/46
+        # due to a limitation of the ssl module, we cannot read more than 2**31 bytes at a time
+        # reading a huge file in a single request is probably a bad idea anyway since the request
+        # cannot be retried without re-reading the entire requested amount
+        # instead, read into a buffer and return the buffer
+        pieces = []
+        while True:
+            bytes_remaining = self._size - self._offset
+            assert bytes_remaining >= 0, "read more bytes than expected"
+            # if a user doesn't like this value, it is easy to use .read(size) directly
+            opt_piece = self.read(min(CHUNK_SIZE, bytes_remaining))
+            assert opt_piece is not None, "file is in non-blocking mode"
+            piece = opt_piece
+            if len(piece) == 0:
+                break
+            pieces.append(piece)
+        return b"".join(pieces)
+
+    # https://bugs.python.org/issue27501
+    def readinto(self, b: Any) -> Optional[int]:
+        bytes_remaining = self._size - self._offset
+        if bytes_remaining <= 0:
+            return 0
+
+        if len(b) > bytes_remaining:
+            # if we get a file that was larger than we expected, don't read the extra data
+            b = b[:bytes_remaining]
+
+        n = 0  # for pyright
+        if USE_STREAMING_READ_REQUEST:
+            for attempt, backoff in enumerate(exponential_sleep_generator()):
+                if self._f is None:
+                    resp = self._request_chunk(streaming=True, start=self._offset)
+                    if resp.status == 416:
+                        # likely the file was truncated while we were reading it
+                        # return an empty string
+                        return 0
+                    self._f = resp
+                    self.requests += 1
+
+                err = None
+                try:
+                    opt_n = self._f.readinto(b)
+                    assert opt_n is not None, "file is in non-blocking mode"
+                    n = opt_n
+                    if n == 0:
+                        # assume that the connection has died
+                        # if the file was truncated, we'll try to open it again and end up
+                        # returning out of this loop
+                        err = Error(
+                            f"failed to read from connection while reading file at {self._path}"
+                        )
+                    else:
+                        # only break out if we successfully read at least one byte
+                        break
+                except (
+                    urllib3.exceptions.ReadTimeoutError,  # haven't seen this error here, but seems possible
+                    urllib3.exceptions.ProtocolError,
+                    urllib3.exceptions.SSLError,
+                    ssl.SSLError,
+                ) as e:
+                    err = Error(f"exception {e} while reading file at {self._path}")
+                # assume that the connection has died or is in an unusable state
+                # we don't want to put a broken connection back in the pool
+                # so don't call self._f.release_conn()
+                self._f.close()
+                self._f = None
+                self.failures += 1
+
+                if (
+                    self._ctx.retry_limit is not None
+                    and attempt >= self._ctx.retry_limit
+                ):
+                    raise err
+
+                if attempt >= self._ctx.retry_log_threshold:
+                    self._ctx.log_callback(
+                        f"error {err} when executing readinto({len(b)}) at offset {self._offset} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
+                    )
+                time.sleep(backoff)
+        else:
+            resp = self._request_chunk(
+                streaming=False, start=self._offset, end=self._offset + len(b)
+            )
+            if resp.status == 416:
+                # likely the file was truncated while we were reading it
+                # return an empty string
+                return 0
+            self.requests += 1
+            n = len(resp.data)
+            b[:n] = resp.data
+        self.bytes_read += n
+        self._offset += n
+        return n
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        if whence == io.SEEK_SET:
+            new_offset = offset
+        elif whence == io.SEEK_CUR:
+            new_offset = self._offset + offset
+        elif whence == io.SEEK_END:
+            new_offset = self._size + offset
+        else:
+            raise ValueError(
+                f"Invalid whence ({whence}, should be {io.SEEK_SET}, {io.SEEK_CUR}, or {io.SEEK_END})"
+            )
+        if new_offset != self._offset:
+            self._offset = new_offset
+            if self._f is not None:
+                self._f.close()
+            self._f = None
+        return self._offset
+
+    def tell(self) -> int:
+        return self._offset
+
+    def close(self) -> None:
+        if self.closed:
+            return
+
+        if hasattr(self, "_f") and self._f is not None:
+            # normally we would return the connection to the pool at this point, but in rare
+            # circumstances this can cause an invalid socket to be in the connection pool and
+            # crash urllib3
+            # https://github.com/urllib3/urllib3/issues/1878
+            self._f.close()
+            self._f = None
+
+        super().close()
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True

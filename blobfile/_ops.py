@@ -1229,9 +1229,9 @@ def copy(
             raise Error(f"Invalid copy status: '{copy_status}'")
         if return_md5:
             # if the file is the same one that we just copied, return the stored MD5
-            isfile, metadata = _azure_isfile(dst)
-            if isfile and metadata["etag"] == etag:
-                return _azure_get_md5(metadata)
+            exist, st = _azure_maybe_stat(dst)
+            if exist and st.version == etag:
+                return st.md5
         return
 
     if parallel:
@@ -1388,10 +1388,11 @@ def _azure_get_entries(
                 yield _entry_from_path_stat(path, _azure_make_stat(props))
 
 
-def _gcp_isfile(path: str) -> Tuple[bool, Dict[str, Any]]:
+def _gcp_maybe_stat(path: str) -> Tuple[bool, Stat]:
     bucket, blob = gcp.split_path(path)
     if blob == "":
-        return False, {}
+        # return placeholder Stat value since otherwise we have to deal with an optional everywhere
+        return False, Stat(size=-1, mtime=-1, ctime=-1, md5=None, version=None)
     req = Request(
         url=gcp.build_url(
             "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
@@ -1400,13 +1401,14 @@ def _gcp_isfile(path: str) -> Tuple[bool, Dict[str, Any]]:
         success_codes=(200, 404),
     )
     resp = _execute_gcp_api_request(req)
-    return resp.status == 200, json.loads(resp.data)
+    return resp.status == 200, _gcp_make_stat(json.loads(resp.data))
 
 
-def _azure_isfile(path: str) -> Tuple[bool, Dict[str, Any]]:
+def _azure_maybe_stat(path: str) -> Tuple[bool, Stat]:
     account, container, blob = azure.split_path(path)
     if blob == "":
-        return False, {}
+        # return placeholder Stat value since otherwise we have to deal with an optional everywhere
+        return False, Stat(size=-1, mtime=-1, ctime=-1, md5=None, version=None)
     req = Request(
         url=azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
@@ -1415,7 +1417,7 @@ def _azure_isfile(path: str) -> Tuple[bool, Dict[str, Any]]:
         success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
     )
     resp = _execute_azure_api_request(req)
-    return resp.status == 200, resp.headers
+    return resp.status == 200, _azure_make_stat(resp.headers)
 
 
 def exists(path: str) -> bool:
@@ -1425,13 +1427,13 @@ def exists(path: str) -> bool:
     if _is_local_path(path):
         return os.path.exists(path)
     elif _is_gcp_path(path):
-        isfile, _ = _gcp_isfile(path)
-        if isfile:
+        exist, _ = _gcp_maybe_stat(path)
+        if exist:
             return True
         return isdir(path)
     elif _is_azure_path(path):
-        isfile, _ = _azure_isfile(path)
-        if isfile:
+        exist, _ = _azure_maybe_stat(path)
+        if exist:
             return True
         return isdir(path)
     else:
@@ -1973,19 +1975,19 @@ def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
 
 def _get_entry(path: str) -> Optional[DirEntry]:
     if _is_gcp_path(path):
-        isfile, metadata = _gcp_isfile(path)
-        if isfile:
+        exist, st = _gcp_maybe_stat(path)
+        if exist:
             if path.endswith("/"):
                 return _entry_from_dirpath(path)
             else:
-                return _entry_from_path_stat(path, _gcp_make_stat(metadata))
+                return _entry_from_path_stat(path, st)
     elif _is_azure_path(path):
-        isfile, metadata = _azure_isfile(path)
-        if isfile:
+        exist, st = _azure_maybe_stat(path)
+        if exist:
             if path.endswith("/"):
                 return _entry_from_dirpath(path)
             else:
-                return _entry_from_path_stat(path, _azure_make_stat(metadata))
+                return _entry_from_path_stat(path, st)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -2218,15 +2220,15 @@ def stat(path: str) -> Stat:
             size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None, version=None
         )
     elif _is_gcp_path(path):
-        isfile, metadata = _gcp_isfile(path)
-        if not isfile:
+        exist, st = _gcp_maybe_stat(path)
+        if not exist:
             raise FileNotFoundError(f"No such file: '{path}'")
-        return _gcp_make_stat(metadata)
+        return st
     elif _is_azure_path(path):
-        isfile, metadata = _azure_isfile(path)
-        if not isfile:
+        exist, st = _azure_maybe_stat(path)
+        if not exist:
             raise FileNotFoundError(f"No such file: '{path}'")
-        return _azure_make_stat(metadata)
+        return st
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -2645,11 +2647,11 @@ def md5(path: str) -> str:
     For local paths, this must always calculate the MD5.
     """
     if _is_gcp_path(path):
-        isfile, metadata = _gcp_isfile(path)
-        if not isfile:
+        exist, st = _gcp_maybe_stat(path)
+        if not exist:
             raise FileNotFoundError(f"No such file: '{path}'")
 
-        h = _gcp_get_md5(metadata)
+        h = st.md5
         if h is not None:
             return h
 
@@ -2657,19 +2659,21 @@ def md5(path: str) -> str:
         with BlobFile(path, "rb") as f:
             result = _block_md5(f).hex()
 
-        _gcp_maybe_update_md5(path, metadata["generation"], result)
+        assert st.version is not None
+        _gcp_maybe_update_md5(path, st.version, result)
         return result
     elif _is_azure_path(path):
-        isfile, metadata = _azure_isfile(path)
-        if not isfile:
+        exist, st = _azure_maybe_stat(path)
+        if not exist:
             raise FileNotFoundError(f"No such file: '{path}'")
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
-        h = _azure_get_md5(metadata)
+        h = st.md5
         if h is None:
             # md5 is missing, calculate it and store it on file if the file has not changed
             with BlobFile(path, "rb") as f:
                 h = _block_md5(f).hex()
-            _azure_maybe_update_md5(path, metadata["Etag"], h)
+            assert st.version is not None
+            _azure_maybe_update_md5(path, st.version, h)
         return h
     else:
         with BlobFile(path, "rb") as f:
@@ -2830,10 +2834,10 @@ class _StreamingReadFile(io.RawIOBase):
 
 class _GoogleStreamingReadFile(_StreamingReadFile):
     def __init__(self, path: str) -> None:
-        isfile, metadata = _gcp_isfile(path)
-        if not isfile:
+        exist, st = _gcp_maybe_stat(path)
+        if not exist:
             raise FileNotFoundError(f"No such file or bucket: '{path}'")
-        super().__init__(path, int(metadata["size"]))
+        super().__init__(path, st.size)
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
@@ -2856,10 +2860,10 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
 
 class _AzureStreamingReadFile(_StreamingReadFile):
     def __init__(self, path: str) -> None:
-        isfile, metadata = _azure_isfile(path)
-        if not isfile:
+        exist, st = _azure_maybe_stat(path)
+        if not exist:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
-        super().__init__(path, int(metadata["Content-Length"]))
+        super().__init__(path, st.size)
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
@@ -3339,19 +3343,21 @@ def BlobFile(
                         remote_version = ""
                         # get some sort of consistent remote hash so we can check for a local file
                         if _is_gcp_path(path):
-                            isfile, metadata = _gcp_isfile(path)
-                            if not isfile:
+                            exist, st = _gcp_maybe_stat(path)
+                            if not exist:
                                 raise FileNotFoundError(f"No such file: '{path}'")
-                            remote_version = metadata["generation"]
-                            remote_hash = _gcp_get_md5(metadata)
+                            assert st.version is not None
+                            remote_version = st.version
+                            remote_hash = st.md5
                         elif _is_azure_path(path):
                             # in the azure case the remote md5 may not exist
                             # this duplicates some of md5() because we want more control
-                            isfile, metadata = _azure_isfile(path)
-                            if not isfile:
+                            exist, st = _azure_maybe_stat(path)
+                            if not exist:
                                 raise FileNotFoundError(f"No such file: '{path}'")
-                            remote_version = metadata["Etag"]
-                            remote_hash = _azure_get_md5(metadata)
+                            assert st.version is not None
+                            remote_version = st.version
+                            remote_hash = st.md5
                         else:
                             raise Error(f"Unrecognized path: '{path}'")
 

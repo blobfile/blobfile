@@ -581,7 +581,8 @@ def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
         if "account" in creds:
             if creds["account"] != account:
                 raise Error(
-                    f"Found credentials for account '{creds['account']}' but needed credentials for account '{account}'"
+                    f"Provided storage account key for account '{creds['account']}' via environment variables, "
+                    f"but needed credentials for account '{account}'"
                 )
         auth = (SHARED_KEY, creds["storageAccountKey"])
         if _can_access_container(ctx, account, container, auth):

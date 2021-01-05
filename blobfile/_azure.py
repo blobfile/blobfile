@@ -143,7 +143,7 @@ def build_url(account: str, template: str, **data: str) -> str:
     )
 
 
-def create_access_token_request(
+def _create_access_token_request(
     creds: Mapping[str, str], scope: str, success_codes: Sequence[int] = (200,)
 ) -> Request:
     if "refreshToken" in creds:
@@ -179,7 +179,7 @@ def create_access_token_request(
     )
 
 
-def create_user_delegation_sas_request(account: str) -> Request:
+def _create_user_delegation_sas_request(account: str) -> Request:
     # https://docs.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas
     now = datetime.datetime.utcnow()
     start = (now + datetime.timedelta(hours=-1)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -502,7 +502,7 @@ def _get_storage_account_key(
 
     # get an access token for the management service
     def build_req() -> Request:
-        return create_access_token_request(
+        return _create_access_token_request(
             creds=creds, scope="https://management.azure.com/"
         )
 
@@ -589,7 +589,7 @@ def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
     elif "refreshToken" in creds:
         # we have a refresh token, convert it into an access token for this account
         def build_req() -> Request:
-            return create_access_token_request(
+            return _create_access_token_request(
                 creds=creds,
                 scope=f"https://{account}.blob.core.windows.net/",
                 success_codes=(200, 400),
@@ -636,7 +636,7 @@ def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
     elif "appId" in creds:
         # we have a service principal, get an oauth token
         def build_req() -> Request:
-            return create_access_token_request(
+            return _create_access_token_request(
                 creds=creds, scope="https://storage.azure.com/"
             )
 
@@ -682,7 +682,7 @@ def _get_sas_token(ctx: Context, key: Any) -> Tuple[Any, float]:
     account, container = key
 
     def build_req() -> Request:
-        req = create_user_delegation_sas_request(account=account)
+        req = _create_user_delegation_sas_request(account=account)
         auth = access_token_manager.get_token(ctx, key=key)
         if auth[0] != OAUTH_TOKEN:
             raise Error(

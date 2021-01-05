@@ -1297,14 +1297,14 @@ def test_azure_maybe_update_md5(ctx):
 
     with ctx() as path:
         _write_contents(path, contents)
-        st = ops._azure_maybe_stat(path)
-        assert ops._azure_maybe_update_md5(path, st.version, meow_hash)
+        st = ops.azure.maybe_stat(ops._context, path)
+        assert ops.azure.maybe_update_md5(ops._context, path, st.version, meow_hash)
         _write_contents(path, alternative_contents)
-        assert not ops._azure_maybe_update_md5(path, st.version, meow_hash)
-        st = ops._azure_maybe_stat(path)
+        assert not ops.azure.maybe_update_md5(ops._context, path, st.version, meow_hash)
+        st = ops.azure.maybe_stat(ops._context, path)
         assert st.md5 == purr_hash
         bf.remove(path)
-        assert not ops._azure_maybe_update_md5(path, st.version, meow_hash)
+        assert not ops.azure.maybe_update_md5(ops._context, path, st.version, meow_hash)
 
 
 def _get_http_pool_id(q):

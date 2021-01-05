@@ -132,7 +132,7 @@ def _load_credentials() -> Tuple[Dict[str, Any], Optional[str]]:
     )
 
 
-def create_access_token_request(scopes: List[str]) -> Request:
+def _create_access_token_request(scopes: List[str]) -> Request:
     creds, err = _load_credentials()
     if err is not None:
         raise Error(err)
@@ -333,7 +333,7 @@ def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
     if err is None:
 
         def build_req() -> Request:
-            req = create_access_token_request(
+            req = _create_access_token_request(
                 scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
             )
             req.success_codes = (200, 400)

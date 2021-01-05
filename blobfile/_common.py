@@ -1,6 +1,6 @@
 import json
 import urllib
-from typing import Mapping, Optional, Any, Sequence, Tuple
+from typing import Mapping, NamedTuple, Optional, Any, Sequence, Tuple
 
 import urllib3
 import xmltodict
@@ -146,3 +146,19 @@ class ConcurrentWriteFailure(RequestFailure):
     """
 
     pass
+
+
+class Stat(NamedTuple):
+    size: int
+    mtime: float
+    ctime: float
+    md5: Optional[str]
+    version: Optional[str]
+
+
+class DirEntry(NamedTuple):
+    path: str
+    name: str
+    is_dir: bool
+    is_file: bool
+    stat: Optional[Stat]

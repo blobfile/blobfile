@@ -3,16 +3,16 @@ import os
 import json
 import hmac
 import base64
-import datetime
 import time
 import calendar
+import datetime
 import re
-from typing import Any, Mapping, Dict, Tuple, Sequence, List
+from typing import Any, Mapping, Dict, Optional, Tuple, Sequence, List
 
 import xmltodict
 
 from blobfile import _common as common
-from blobfile._common import Request, Error
+from blobfile._common import Request, Error, Stat
 
 SHARED_KEY = "shared_key"
 OAUTH_TOKEN = "oauth_token"
@@ -357,3 +357,37 @@ def sign_with_shared_key(req: Request, key: str) -> str:
     ).decode("utf8")
 
     return f"SharedKey {storage_account}:{signature}"
+
+
+def _get_md5(metadata: Mapping[str, Any]) -> Optional[str]:
+    if "Content-MD5" in metadata:
+        b64_encoded = metadata["Content-MD5"]
+        if b64_encoded is None:
+            return None
+        return base64.b64decode(b64_encoded).hex()
+    else:
+        return None
+
+
+def _parse_timestamp(text: str) -> float:
+    return datetime.datetime.strptime(
+        text.replace("GMT", "Z"), "%a, %d %b %Y %H:%M:%S %z"
+    ).timestamp()
+
+
+def make_stat(item: Mapping[str, str]) -> Stat:
+    if "Creation-Time" in item:
+        raw_ctime = item["Creation-Time"]
+    else:
+        raw_ctime = item["x-ms-creation-time"]
+    if "x-ms-meta-blobfilemtime" in item:
+        mtime = float(item["x-ms-meta-blobfilemtime"])
+    else:
+        mtime = _parse_timestamp(item["Last-Modified"])
+    return Stat(
+        size=int(item["Content-Length"]),
+        mtime=mtime,
+        ctime=_parse_timestamp(raw_ctime),
+        md5=_get_md5(item),
+        version=item["Etag"],
+    )

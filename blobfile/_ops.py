@@ -1,7 +1,6 @@
 # https://mypy.readthedocs.io/en/stable/common_issues.html#using-classes-that-are-generic-in-stubs-but-not-at-runtime
 from __future__ import annotations
 
-import datetime
 import os
 import tempfile
 import hashlib
@@ -63,6 +62,8 @@ from blobfile._common import (
     RequestFailure,
     RestartableStreamingWriteFailure,
     ConcurrentWriteFailure,
+    Stat,
+    DirEntry,
 )
 
 # feature flags
@@ -113,22 +114,6 @@ AZURE_RESPONSE_HEADER_TO_REQUEST_HEADER = {
 }
 
 ESCAPED_COLON = "___COLON___"
-
-
-class Stat(NamedTuple):
-    size: int
-    mtime: float
-    ctime: float
-    md5: Optional[str]
-    version: Optional[str]
-
-
-class DirEntry(NamedTuple):
-    path: str
-    name: str
-    is_dir: bool
-    is_file: bool
-    stat: Optional[Stat]
 
 
 _http = None
@@ -1152,7 +1137,7 @@ def copy(
             result = json.loads(resp.data)
             if result["done"]:
                 if return_md5:
-                    return _gcp_get_md5(result["resource"])
+                    return gcp.get_md5(result["resource"])
                 else:
                     return
             params["rewriteToken"] = result["rewriteToken"]
@@ -1361,7 +1346,7 @@ def _gcp_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntr
             if item["name"].endswith("/"):
                 yield _entry_from_dirpath(path)
             else:
-                yield _entry_from_path_stat(path, _gcp_make_stat(item))
+                yield _entry_from_path_stat(path, gcp.make_stat(item))
 
 
 def _azure_get_entries(
@@ -1385,7 +1370,7 @@ def _azure_get_entries(
                 yield _entry_from_dirpath(path)
             else:
                 props = b["Properties"]
-                yield _entry_from_path_stat(path, _azure_make_stat(props))
+                yield _entry_from_path_stat(path, azure.make_stat(props))
 
 
 def _gcp_maybe_stat(path: str) -> Optional[Stat]:
@@ -1402,7 +1387,7 @@ def _gcp_maybe_stat(path: str) -> Optional[Stat]:
     resp = _execute_gcp_api_request(req)
     if resp.status != 200:
         return None
-    return _gcp_make_stat(json.loads(resp.data))
+    return gcp.make_stat(json.loads(resp.data))
 
 
 def _azure_maybe_stat(path: str) -> Optional[Stat]:
@@ -1419,7 +1404,7 @@ def _azure_maybe_stat(path: str) -> Optional[Stat]:
     resp = _execute_azure_api_request(req)
     if resp.status != 200:
         return None
-    return _azure_make_stat(resp.headers)
+    return azure.make_stat(resp.headers)
 
 
 def exists(path: str) -> bool:
@@ -2170,48 +2155,6 @@ def rmdir(path: str) -> None:
         raise Error(f"Unrecognized path: '{path}'")
 
 
-def _gcp_parse_timestamp(text: str) -> float:
-    return datetime.datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp()
-
-
-def _gcp_make_stat(item: Mapping[str, Any]) -> Stat:
-    if "metadata" in item and "blobfile-mtime" in item["metadata"]:
-        mtime = float(item["metadata"]["blobfile-mtime"])
-    else:
-        mtime = _gcp_parse_timestamp(item["updated"])
-    return Stat(
-        size=int(item["size"]),
-        mtime=mtime,
-        ctime=_gcp_parse_timestamp(item["timeCreated"]),
-        md5=_gcp_get_md5(item),
-        version=item["generation"],
-    )
-
-
-def _azure_parse_timestamp(text: str) -> float:
-    return datetime.datetime.strptime(
-        text.replace("GMT", "Z"), "%a, %d %b %Y %H:%M:%S %z"
-    ).timestamp()
-
-
-def _azure_make_stat(item: Mapping[str, str]) -> Stat:
-    if "Creation-Time" in item:
-        raw_ctime = item["Creation-Time"]
-    else:
-        raw_ctime = item["x-ms-creation-time"]
-    if "x-ms-meta-blobfilemtime" in item:
-        mtime = float(item["x-ms-meta-blobfilemtime"])
-    else:
-        mtime = _azure_parse_timestamp(item["Last-Modified"])
-    return Stat(
-        size=int(item["Content-Length"]),
-        mtime=mtime,
-        ctime=_azure_parse_timestamp(raw_ctime),
-        md5=_azure_get_md5(item),
-        version=item["Etag"],
-    )
-
-
 def stat(path: str) -> Stat:
     """
     Stat a file or object representing a directory, returns a Stat object
@@ -2616,27 +2559,6 @@ def _gcp_maybe_update_md5(path: str, generation: str, hexdigest: str) -> bool:
 
     resp = _execute_gcp_api_request(req)
     return resp.status == 200
-
-
-def _gcp_get_md5(metadata: Mapping[str, Any]) -> Optional[str]:
-    if "md5Hash" in metadata:
-        return base64.b64decode(metadata["md5Hash"]).hex()
-
-    if "metadata" in metadata and "md5" in metadata["metadata"]:
-        # fallback to our custom hash if this is a composite object that is lacking the md5Hash field
-        return metadata["metadata"]["md5"]
-
-    return None
-
-
-def _azure_get_md5(metadata: Mapping[str, Any]) -> Optional[str]:
-    if "Content-MD5" in metadata:
-        b64_encoded = metadata["Content-MD5"]
-        if b64_encoded is None:
-            return None
-        return base64.b64decode(b64_encoded).hex()
-    else:
-        return None
 
 
 def md5(path: str) -> str:

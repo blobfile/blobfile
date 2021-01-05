@@ -32,6 +32,8 @@ from blobfile._common import (
     RequestFailure as RequestFailure,
     RestartableStreamingWriteFailure as RestartableStreamingWriteFailure,
     ConcurrentWriteFailure as ConcurrentWriteFailure,
+    Stat as Stat,
+    DirEntry as DirEntry,
 )
 
 
@@ -66,4 +68,6 @@ __all__ = [
     "RequestFailure",
     "RestartableStreamingWriteFailure",
     "ConcurrentWriteFailure",
+    "Stat",
+    "DirEntry",
 ]

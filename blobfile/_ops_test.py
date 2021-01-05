@@ -436,16 +436,10 @@ def test_azure_metadata(ctx):
             f.write(contents)
 
         bf.set_mtime(path, 1)
-        _isfile, orig_metadata = ops._azure_isfile(path)
         time.sleep(5)
         with bf.BlobFile(path, "wb", streaming=True) as f:
-            _isfile, new_metadata = ops._azure_isfile(path)
-        keys = set(orig_metadata.keys()).union(new_metadata.keys())
-        for key in sorted(keys):
-            orig_val = orig_metadata.get(key)
-            new_val = new_metadata.get(key)
-            if key not in ["Date", "ETag", "Last-Modified", "x-ms-request-id"]:
-                assert orig_val == new_val
+            st = bf.stat(path)
+        assert st.mtime == 1
 
 
 @pytest.mark.parametrize(
@@ -1303,14 +1297,14 @@ def test_azure_maybe_update_md5(ctx):
 
     with ctx() as path:
         _write_contents(path, contents)
-        _isfile, metadata = ops._azure_isfile(path)
-        assert ops._azure_maybe_update_md5(path, metadata["ETag"], meow_hash)
+        st = ops._azure_maybe_stat(path)
+        assert ops._azure_maybe_update_md5(path, st.version, meow_hash)
         _write_contents(path, alternative_contents)
-        assert not ops._azure_maybe_update_md5(path, metadata["ETag"], meow_hash)
-        _isfile, metadata = ops._azure_isfile(path)
-        assert base64.b64decode(metadata["Content-MD5"]).hex() == purr_hash
+        assert not ops._azure_maybe_update_md5(path, st.version, meow_hash)
+        st = ops._azure_maybe_stat(path)
+        assert st.md5 == purr_hash
         bf.remove(path)
-        assert not ops._azure_maybe_update_md5(path, metadata["ETag"], meow_hash)
+        assert not ops._azure_maybe_update_md5(path, st.version, meow_hash)
 
 
 def _get_http_pool_id(q):

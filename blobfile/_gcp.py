@@ -14,7 +14,7 @@ from Cryptodome.Hash import SHA256
 from Cryptodome.PublicKey import RSA
 
 from blobfile import _common as common
-from blobfile._common import Request, Error
+from blobfile._common import Request, Error, Stat
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
 BASE_URL = "https://storage.googleapis.com"
@@ -271,3 +271,32 @@ def split_path(path: str) -> Tuple[str, str]:
 
 def combine_path(bucket: str, obj: str) -> str:
     return f"gs://{bucket}/{obj}"
+
+
+def get_md5(metadata: Mapping[str, Any]) -> Optional[str]:
+    if "md5Hash" in metadata:
+        return base64.b64decode(metadata["md5Hash"]).hex()
+
+    if "metadata" in metadata and "md5" in metadata["metadata"]:
+        # fallback to our custom hash if this is a composite object that is lacking the md5Hash field
+        return metadata["metadata"]["md5"]
+
+    return None
+
+
+def _parse_timestamp(text: str) -> float:
+    return datetime.datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp()
+
+
+def make_stat(item: Mapping[str, Any]) -> Stat:
+    if "metadata" in item and "blobfile-mtime" in item["metadata"]:
+        mtime = float(item["metadata"]["blobfile-mtime"])
+    else:
+        mtime = _parse_timestamp(item["updated"])
+    return Stat(
+        size=int(item["size"]),
+        mtime=mtime,
+        ctime=_parse_timestamp(item["timeCreated"]),
+        md5=get_md5(item),
+        version=item["generation"],
+    )

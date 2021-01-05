@@ -56,7 +56,7 @@ import urllib3
 import xmltodict
 import filelock
 
-from blobfile import _google as google, _azure as azure
+from blobfile import _gcp as gcp, _azure as azure
 from blobfile._common import (
     Request,
     FileBody,
@@ -141,7 +141,7 @@ _max_connection_pool_count = DEFAULT_MAX_CONNECTION_POOL_COUNT
 # https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-block-blobs
 # the chunk size determines the maximum size of an individual blob
 _azure_write_chunk_size = DEFAULT_AZURE_WRITE_CHUNK_SIZE
-_google_write_chunk_size = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE
+_gcp_write_chunk_size = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE
 _retry_log_threshold = DEFAULT_RETRY_LOG_THRESHOLD
 _retry_limit = None
 _connect_timeout = DEFAULT_CONNECT_TIMEOUT
@@ -250,7 +250,7 @@ def configure(
     output_az_paths: output `az://` paths instead of using the `https://` for azure
     use_azure_storage_account_key_fallback: fallback to storage account keys for azure containers, having this enabled (the default) requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
     """
-    global _log_callback, _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size, _retry_log_threshold, _retry_limit, _google_write_chunk_size, _connect_timeout, _read_timeout, _output_az_paths, _use_azure_storage_account_key_fallback
+    global _log_callback, _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size, _retry_log_threshold, _retry_limit, _gcp_write_chunk_size, _connect_timeout, _read_timeout, _output_az_paths, _use_azure_storage_account_key_fallback
     with _http_lock:
         _http = None
         _http_pid = None
@@ -259,7 +259,7 @@ def configure(
         _connection_pool_max_size = connection_pool_max_size
         _max_connection_pool_count = max_connection_pool_count
         _azure_write_chunk_size = azure_write_chunk_size
-        _google_write_chunk_size = google_write_chunk_size
+        _gcp_write_chunk_size = google_write_chunk_size
         _retry_log_threshold = retry_log_threshold
         _retry_limit = retry_limit
         _connect_timeout = connect_timeout
@@ -299,15 +299,15 @@ def _is_gce_instance() -> bool:
     return True
 
 
-def _google_get_access_token(key: Any) -> Tuple[Any, float]:
+def _gcp_get_access_token(key: Any) -> Tuple[Any, float]:
     now = time.time()
 
     # https://github.com/googleapis/google-auth-library-java/blob/master/README.md#application-default-credentials
-    _, err = google.load_credentials()
+    _, err = gcp.load_credentials()
     if err is None:
 
         def build_req() -> Request:
-            req = google.create_access_token_request(
+            req = gcp.create_access_token_request(
                 scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
             )
             req.success_codes = (200, 400)
@@ -618,7 +618,7 @@ def _azure_get_sas_token(key: Any) -> Tuple[Any, float]:
     return out["UserDelegationKey"], t
 
 
-global_google_access_token_manager = TokenManager(_google_get_access_token)
+global_gcp_access_token_manager = TokenManager(_gcp_get_access_token)
 
 global_azure_access_token_manager = TokenManager(_azure_get_access_token)
 
@@ -660,10 +660,10 @@ def _execute_azure_api_request(req: Request) -> urllib3.HTTPResponse:
     return _execute_request(build_req)
 
 
-def _execute_google_api_request(req: Request) -> urllib3.HTTPResponse:
+def _execute_gcp_api_request(req: Request) -> urllib3.HTTPResponse:
     def build_req() -> Request:
-        return google.make_api_request(
-            req, access_token=global_google_access_token_manager.get_token(key="")
+        return gcp.make_api_request(
+            req, access_token=global_gcp_access_token_manager.get_token(key="")
         )
 
     return _execute_request(build_req)
@@ -700,7 +700,7 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
                 return resp
             else:
                 message = f"unexpected status {resp.status}"
-                if url.startswith(google.BASE_URL) and resp.status in (429, 503):
+                if url.startswith(gcp.BASE_URL) and resp.status in (429, 503):
                     message += ": if you are writing a blob this error may be due to multiple concurrent writers - make sure you are not writing to the same blob from multiple processes simultaneously"
                 err = RequestFailure.create_from_request_response(
                     message=message, request=req, response=resp
@@ -798,10 +798,10 @@ def _check_hostname(hostname: str) -> int:
 
 
 def _is_local_path(path: str) -> bool:
-    return not _is_google_path(path) and not _is_azure_path(path)
+    return not _is_gcp_path(path) and not _is_azure_path(path)
 
 
-def _is_google_path(path: str) -> bool:
+def _is_gcp_path(path: str) -> bool:
     url = urllib.parse.urlparse(path)
     return url.scheme == "gs"
 
@@ -1005,42 +1005,42 @@ class _WindowedFile:
         return buf
 
 
-def _google_upload_part(path: str, start: int, size: int, dst: str) -> str:
-    bucket, blob = google.split_path(dst)
+def _gcp_upload_part(path: str, start: int, size: int, dst: str) -> str:
+    bucket, blob = gcp.split_path(dst)
     req = Request(
-        url=google.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
+        url=gcp.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
         method="POST",
         params=dict(uploadType="media", name=blob),
         data=FileBody(path, start=start, end=start + size),
         success_codes=(200,),
     )
-    resp = _execute_google_api_request(req)
+    resp = _execute_gcp_api_request(req)
     metadata = json.loads(resp.data)
     return metadata["generation"]
 
 
-def _google_delete_part(bucket: str, name: str) -> None:
+def _gcp_delete_part(bucket: str, name: str) -> None:
     req = Request(
-        url=google.build_url(
+        url=gcp.build_url(
             "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=name
         ),
         method="DELETE",
         success_codes=(204, 404),
     )
-    _execute_google_api_request(req)
+    _execute_gcp_api_request(req)
 
 
-def _google_parallel_upload(
+def _gcp_parallel_upload(
     executor: concurrent.futures.Executor, src: str, dst: str, return_md5: bool
 ) -> Optional[str]:
-    assert _is_local_path(src) and _is_google_path(dst)
+    assert _is_local_path(src) and _is_gcp_path(dst)
 
     with BlobFile(src, "rb") as f:
         md5_digest = _block_md5(f)
 
     s = stat(src)
 
-    dstbucket, dstname = google.split_path(dst)
+    dstbucket, dstname = gcp.split_path(dst)
     source_objects = []
     object_names = []
     max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
@@ -1051,11 +1051,7 @@ def _google_parallel_upload(
     while start < s.size:
         suffix = f".part.{i}"
         future = executor.submit(
-            _google_upload_part,
-            src,
-            start,
-            min(part_size, s.size - start),
-            dst + suffix,
+            _gcp_upload_part, src, start, min(part_size, s.size - start), dst + suffix
         )
         futures.append(future)
         object_names.append(dstname + suffix)
@@ -1072,7 +1068,7 @@ def _google_parallel_upload(
         )
 
     req = Request(
-        url=google.build_url(
+        url=gcp.build_url(
             "/storage/v1/b/{destinationBucket}/o/{destinationObject}/compose",
             destinationBucket=dstbucket,
             destinationObject=dstname,
@@ -1081,15 +1077,15 @@ def _google_parallel_upload(
         data={"sourceObjects": source_objects},
         success_codes=(200,),
     )
-    resp = _execute_google_api_request(req)
+    resp = _execute_gcp_api_request(req)
     metadata = json.loads(resp.data)
     hexdigest = binascii.hexlify(md5_digest).decode("utf8")
-    _google_maybe_update_md5(dst, metadata["generation"], hexdigest)
+    _gcp_maybe_update_md5(dst, metadata["generation"], hexdigest)
 
     # delete parts in parallel
     delete_futures = []
     for name in object_names:
-        future = executor.submit(_google_delete_part, dstbucket, name)
+        future = executor.submit(_gcp_delete_part, dstbucket, name)
         delete_futures.append(future)
     for future in delete_futures:
         future.result()
@@ -1135,13 +1131,13 @@ def copy(
             )
 
     # special case cloud to cloud copy, don't download the file
-    if _is_google_path(src) and _is_google_path(dst):
-        srcbucket, srcname = google.split_path(src)
-        dstbucket, dstname = google.split_path(dst)
+    if _is_gcp_path(src) and _is_gcp_path(dst):
+        srcbucket, srcname = gcp.split_path(src)
+        dstbucket, dstname = gcp.split_path(dst)
         params = {}
         while True:
             req = Request(
-                url=google.build_url(
+                url=gcp.build_url(
                     "/storage/v1/b/{sourceBucket}/o/{sourceObject}/rewriteTo/b/{destinationBucket}/o/{destinationObject}",
                     sourceBucket=srcbucket,
                     sourceObject=srcname,
@@ -1152,13 +1148,13 @@ def copy(
                 params=params,
                 success_codes=(200, 404),
             )
-            resp = _execute_google_api_request(req)
+            resp = _execute_gcp_api_request(req)
             if resp.status == 404:
                 raise FileNotFoundError(f"Source file not found: '{src}'")
             result = json.loads(resp.data)
             if result["done"]:
                 if return_md5:
-                    return _google_get_md5(result["resource"])
+                    return _gcp_get_md5(result["resource"])
                 else:
                     return
             params["rewriteToken"] = result["rewriteToken"]
@@ -1242,14 +1238,14 @@ def copy(
 
     if parallel:
         copy_fn = None
-        if (_is_azure_path(src) or _is_google_path(src)) and _is_local_path(dst):
+        if (_is_azure_path(src) or _is_gcp_path(src)) and _is_local_path(dst):
             copy_fn = _parallel_download
 
         if _is_local_path(src) and _is_azure_path(dst):
             copy_fn = _azure_parallel_upload
 
-        if _is_local_path(src) and _is_google_path(dst):
-            copy_fn = _google_parallel_upload
+        if _is_local_path(src) and _is_gcp_path(dst):
+            copy_fn = _gcp_parallel_upload
 
         if copy_fn is not None:
             if parallel_executor is None:
@@ -1307,14 +1303,14 @@ def _calc_range(start: Optional[int] = None, end: Optional[int] = None) -> str:
         raise Error("Invalid range")
 
 
-def _create_google_page_iterator(
+def _create_gcp_page_iterator(
     url: str, method: str, params: Mapping[str, str]
 ) -> Iterator[Dict[str, Any]]:
     p = dict(params).copy()
 
     while True:
         req = Request(url=url, method=method, params=p, success_codes=(200, 404))
-        resp = _execute_google_api_request(req)
+        resp = _execute_gcp_api_request(req)
         if resp.status == 404:
             return
         result = json.loads(resp.data)
@@ -1356,18 +1352,18 @@ def _create_azure_page_iterator(
         p["marker"] = result["NextMarker"]
 
 
-def _google_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntry]:
+def _gcp_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntry]:
     if "prefixes" in result:
         for p in result["prefixes"]:
-            path = google.combine_path(bucket, p)
+            path = gcp.combine_path(bucket, p)
             yield _entry_from_dirpath(path)
     if "items" in result:
         for item in result["items"]:
-            path = google.combine_path(bucket, item["name"])
+            path = gcp.combine_path(bucket, item["name"])
             if item["name"].endswith("/"):
                 yield _entry_from_dirpath(path)
             else:
-                yield _entry_from_path_stat(path, _google_make_stat(item))
+                yield _entry_from_path_stat(path, _gcp_make_stat(item))
 
 
 def _azure_get_entries(
@@ -1394,18 +1390,18 @@ def _azure_get_entries(
                 yield _entry_from_path_stat(path, _azure_make_stat(props))
 
 
-def _google_isfile(path: str) -> Tuple[bool, Dict[str, Any]]:
-    bucket, blob = google.split_path(path)
+def _gcp_isfile(path: str) -> Tuple[bool, Dict[str, Any]]:
+    bucket, blob = gcp.split_path(path)
     if blob == "":
         return False, {}
     req = Request(
-        url=google.build_url(
+        url=gcp.build_url(
             "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
         ),
         method="GET",
         success_codes=(200, 404),
     )
-    resp = _execute_google_api_request(req)
+    resp = _execute_gcp_api_request(req)
     return resp.status == 200, json.loads(resp.data)
 
 
@@ -1430,8 +1426,8 @@ def exists(path: str) -> bool:
     """
     if _is_local_path(path):
         return os.path.exists(path)
-    elif _is_google_path(path):
-        isfile, _ = _google_isfile(path)
+    elif _is_gcp_path(path):
+        isfile, _ = _gcp_isfile(path)
         if isfile:
             return True
         return isdir(path)
@@ -1450,8 +1446,8 @@ def basename(path: str) -> str:
 
     For GCS, this is the part after the bucket
     """
-    if _is_google_path(path):
-        _, obj = google.split_path(path)
+    if _is_gcp_path(path):
+        _, obj = gcp.split_path(path)
         return obj.split("/")[-1]
     elif _is_azure_path(path):
         _, _, obj = azure.split_path(path)
@@ -1670,18 +1666,18 @@ def scanglob(pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
                     version=None,
                 ),
             )
-    elif _is_google_path(pattern) or _is_azure_path(pattern):
+    elif _is_gcp_path(pattern) or _is_azure_path(pattern):
         if "*" not in pattern:
             entry = _get_entry(pattern)
             if entry is not None:
                 yield entry
             return
 
-        if _is_google_path(pattern):
-            bucket, blob_prefix = google.split_path(pattern)
+        if _is_gcp_path(pattern):
+            bucket, blob_prefix = gcp.split_path(pattern)
             if "*" in bucket:
                 raise Error("Wildcards cannot be used in bucket name")
-            root = google.combine_path(bucket, "")
+            root = gcp.combine_path(bucket, "")
         else:
             account, container, blob_prefix = azure.split_path(pattern)
             if "*" in account or "*" in container:
@@ -1742,27 +1738,27 @@ def isdir(path: str) -> bool:
     """
     if _is_local_path(path):
         return os.path.isdir(path)
-    elif _is_google_path(path):
+    elif _is_gcp_path(path):
         if not path.endswith("/"):
             path += "/"
-        bucket, blob = google.split_path(path)
+        bucket, blob = gcp.split_path(path)
         if blob == "":
             req = Request(
-                url=google.build_url("/storage/v1/b/{bucket}", bucket=bucket),
+                url=gcp.build_url("/storage/v1/b/{bucket}", bucket=bucket),
                 method="GET",
                 success_codes=(200, 404),
             )
-            resp = _execute_google_api_request(req)
+            resp = _execute_gcp_api_request(req)
             return resp.status == 200
         else:
             params = dict(prefix=blob, delimiter="/", maxResults="1")
             req = Request(
-                url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+                url=gcp.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
                 method="GET",
                 params=params,
                 success_codes=(200, 404),
             )
-            resp = _execute_google_api_request(req)
+            resp = _execute_gcp_api_request(req)
             if resp.status == 404:
                 return False
             result = json.loads(resp.data)
@@ -1810,7 +1806,7 @@ def _guess_isdir(path: str) -> bool:
     """
     if _is_local_path(path) and os.path.isdir(path):
         return True
-    elif (_is_google_path(path) or _is_azure_path(path)) and path.endswith("/"):
+    elif (_is_gcp_path(path) or _is_azure_path(path)) and path.endswith("/"):
         return True
     return False
 
@@ -1820,14 +1816,14 @@ def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry
     if delimiter is not None:
         params["delimiter"] = delimiter
 
-    if _is_google_path(path):
-        bucket, prefix = google.split_path(path)
-        it = _create_google_page_iterator(
-            url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+    if _is_gcp_path(path):
+        bucket, prefix = gcp.split_path(path)
+        it = _create_gcp_page_iterator(
+            url=gcp.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
             method="GET",
             params=dict(prefix=prefix, **params),
         )
-        get_entries = functools.partial(_google_get_entries, bucket)
+        get_entries = functools.partial(_gcp_get_entries, bucket)
     elif _is_azure_path(path):
         account, container, prefix = azure.split_path(path)
         it = _create_azure_page_iterator(
@@ -1890,7 +1886,7 @@ def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
     """
     Same as `listdir`, but returns `DirEntry` objects instead of strings
     """
-    if (_is_google_path(path) or _is_azure_path(path)) and not path.endswith("/"):
+    if (_is_gcp_path(path) or _is_azure_path(path)) and not path.endswith("/"):
         path += "/"
     if not exists(path):
         raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
@@ -1921,7 +1917,7 @@ def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
                         version=None,
                     ),
                 )
-    elif _is_google_path(path) or _is_azure_path(path):
+    elif _is_gcp_path(path) or _is_azure_path(path):
         if shard_prefix_length == 0:
             yield from _list_blobs_in_dir(path, exclude_prefix=True)
         else:
@@ -1962,13 +1958,13 @@ def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
 
 
 def _get_entry(path: str) -> Optional[DirEntry]:
-    if _is_google_path(path):
-        isfile, metadata = _google_isfile(path)
+    if _is_gcp_path(path):
+        isfile, metadata = _gcp_isfile(path)
         if isfile:
             if path.endswith("/"):
                 return _entry_from_dirpath(path)
             else:
-                return _entry_from_path_stat(path, _google_make_stat(metadata))
+                return _entry_from_path_stat(path, _gcp_make_stat(metadata))
     elif _is_azure_path(path):
         isfile, metadata = _azure_isfile(path)
         if isfile:
@@ -2007,17 +2003,17 @@ def makedirs(path: str) -> None:
     """
     if _is_local_path(path):
         os.makedirs(path, exist_ok=True)
-    elif _is_google_path(path):
+    elif _is_gcp_path(path):
         if not path.endswith("/"):
             path += "/"
-        bucket, blob = google.split_path(path)
+        bucket, blob = gcp.split_path(path)
         req = Request(
-            url=google.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
+            url=gcp.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
             method="POST",
             params=dict(uploadType="media", name=blob),
             success_codes=(200, 400),
         )
-        resp = _execute_google_api_request(req)
+        resp = _execute_gcp_api_request(req)
         if resp.status == 400:
             raise Error(f"Unable to create directory, bucket does not exist: '{path}'")
     elif _is_azure_path(path):
@@ -2047,22 +2043,22 @@ def remove(path: str) -> None:
     """
     if _is_local_path(path):
         os.remove(path)
-    elif _is_google_path(path):
+    elif _is_gcp_path(path):
         if path.endswith("/"):
             raise IsADirectoryError(f"Is a directory: '{path}'")
-        bucket, blob = google.split_path(path)
+        bucket, blob = gcp.split_path(path)
         if blob == "":
             raise FileNotFoundError(
                 f"The system cannot find the path specified: '{path}'"
             )
         req = Request(
-            url=google.build_url(
+            url=gcp.build_url(
                 "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
             ),
             method="DELETE",
             success_codes=(204, 404),
         )
-        resp = _execute_google_api_request(req)
+        resp = _execute_gcp_api_request(req)
         if resp.status == 404:
             raise FileNotFoundError(
                 f"The system cannot find the path specified: '{path}'"
@@ -2110,8 +2106,8 @@ def rmdir(path: str) -> None:
     if not path.endswith("/"):
         path += "/"
 
-    if _is_google_path(path):
-        _, blob = google.split_path(path)
+    if _is_gcp_path(path):
+        _, blob = gcp.split_path(path)
     elif _is_azure_path(path):
         _, _, blob = azure.split_path(path)
     else:
@@ -2132,16 +2128,16 @@ def rmdir(path: str) -> None:
         # this directory exists but is not empty
         raise OSError(f"The directory is not empty: '{path}'")
 
-    if _is_google_path(path):
-        bucket, blob = google.split_path(path)
+    if _is_gcp_path(path):
+        bucket, blob = gcp.split_path(path)
         req = Request(
-            url=google.build_url(
+            url=gcp.build_url(
                 "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
             ),
             method="DELETE",
             success_codes=(204,),
         )
-        _execute_google_api_request(req)
+        _execute_gcp_api_request(req)
     elif _is_azure_path(path):
         account, container, blob = azure.split_path(path)
         req = Request(
@@ -2156,20 +2152,20 @@ def rmdir(path: str) -> None:
         raise Error(f"Unrecognized path: '{path}'")
 
 
-def _google_parse_timestamp(text: str) -> float:
+def _gcp_parse_timestamp(text: str) -> float:
     return datetime.datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp()
 
 
-def _google_make_stat(item: Mapping[str, Any]) -> Stat:
+def _gcp_make_stat(item: Mapping[str, Any]) -> Stat:
     if "metadata" in item and "blobfile-mtime" in item["metadata"]:
         mtime = float(item["metadata"]["blobfile-mtime"])
     else:
-        mtime = _google_parse_timestamp(item["updated"])
+        mtime = _gcp_parse_timestamp(item["updated"])
     return Stat(
         size=int(item["size"]),
         mtime=mtime,
-        ctime=_google_parse_timestamp(item["timeCreated"]),
-        md5=_google_get_md5(item),
+        ctime=_gcp_parse_timestamp(item["timeCreated"]),
+        md5=_gcp_get_md5(item),
         version=item["generation"],
     )
 
@@ -2207,11 +2203,11 @@ def stat(path: str) -> Stat:
         return Stat(
             size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None, version=None
         )
-    elif _is_google_path(path):
-        isfile, metadata = _google_isfile(path)
+    elif _is_gcp_path(path):
+        isfile, metadata = _gcp_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file: '{path}'")
-        return _google_make_stat(metadata)
+        return _gcp_make_stat(metadata)
     elif _is_azure_path(path):
         isfile, metadata = _azure_isfile(path)
         if not isfile:
@@ -2232,13 +2228,13 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
         assert version is None
         os.utime(path, times=(mtime, mtime))
         return True
-    elif _is_google_path(path):
-        bucket, blob = google.split_path(path)
+    elif _is_gcp_path(path):
+        bucket, blob = gcp.split_path(path)
         params = None
         if version is not None:
             params = dict(ifGenerationMatch=version)
         req = Request(
-            url=google.build_url(
+            url=gcp.build_url(
                 "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
             ),
             method="PATCH",
@@ -2246,7 +2242,7 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
             data=dict(metadata={"blobfile-mtime": str(mtime)}),
             success_codes=(200, 404, 412),
         )
-        resp = _execute_google_api_request(req)
+        resp = _execute_gcp_api_request(req)
         if resp.status == 404:
             raise FileNotFoundError(f"No such file: '{path}'")
         return resp.status == 200
@@ -2300,22 +2296,22 @@ def rmtree(path: str) -> None:
 
     if _is_local_path(path):
         shutil.rmtree(path)
-    elif _is_google_path(path):
+    elif _is_gcp_path(path):
         if not path.endswith("/"):
             path += "/"
-        bucket, blob = google.split_path(path)
-        it = _create_google_page_iterator(
-            url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+        bucket, blob = gcp.split_path(path)
+        it = _create_gcp_page_iterator(
+            url=gcp.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
             method="GET",
             params=dict(prefix=blob),
         )
         for result in it:
-            for entry in _google_get_entries(bucket, result):
+            for entry in _gcp_get_entries(bucket, result):
                 entry_slash_path = _get_slash_path(entry)
-                entry_bucket, entry_blob = google.split_path(entry_slash_path)
+                entry_bucket, entry_blob = gcp.split_path(entry_slash_path)
                 assert entry_bucket == bucket and entry_blob.startswith(blob)
                 req = Request(
-                    url=google.build_url(
+                    url=gcp.build_url(
                         "/storage/v1/b/{bucket}/o/{object}",
                         bucket=bucket,
                         object=entry_blob,
@@ -2325,7 +2321,7 @@ def rmtree(path: str) -> None:
                     # before erroring out
                     success_codes=(204, 404),
                 )
-                _execute_google_api_request(req)
+                _execute_gcp_api_request(req)
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
@@ -2381,7 +2377,7 @@ def walk(
             if root.endswith(os.sep):
                 root = root[:-1]
             yield (root, sorted(dirnames), sorted(filenames))
-    elif _is_google_path(top) or _is_azure_path(top):
+    elif _is_gcp_path(top) or _is_azure_path(top):
         top = _normalize_path(top)
         if not top.endswith("/"):
             top += "/"
@@ -2391,14 +2387,14 @@ def walk(
             while len(dq) > 0:
                 cur = dq.popleft()
                 assert cur.endswith("/")
-                if _is_google_path(top):
-                    bucket, blob = google.split_path(cur)
-                    it = _create_google_page_iterator(
-                        url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+                if _is_gcp_path(top):
+                    bucket, blob = gcp.split_path(cur)
+                    it = _create_gcp_page_iterator(
+                        url=gcp.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
                         method="GET",
                         params=dict(delimiter="/", prefix=blob),
                     )
-                    get_entries = functools.partial(_google_get_entries, bucket)
+                    get_entries = functools.partial(_gcp_get_entries, bucket)
                 elif _is_azure_path(top):
                     account, container, blob = azure.split_path(cur)
                     it = _create_azure_page_iterator(
@@ -2429,14 +2425,14 @@ def walk(
                 yield (_strip_slash(cur), dirnames, filenames)
                 dq.extend(join(cur, dirname) + "/" for dirname in dirnames)
         else:
-            if _is_google_path(top):
-                bucket, blob = google.split_path(top)
-                it = _create_google_page_iterator(
-                    url=google.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+            if _is_gcp_path(top):
+                bucket, blob = gcp.split_path(top)
+                it = _create_gcp_page_iterator(
+                    url=gcp.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
                     method="GET",
                     params=dict(prefix=blob),
                 )
-                get_entries = functools.partial(_google_get_entries, bucket)
+                get_entries = functools.partial(_gcp_get_entries, bucket)
             elif _is_azure_path(top):
                 account, container, blob = azure.split_path(top)
                 it = _create_azure_page_iterator(
@@ -2494,14 +2490,14 @@ def dirname(path: str) -> str:
     On GCS, the root directory is gs://<bucket name>/
     On Azure Storage, the root directory is https://<account>.blob.core.windows.net/<container>/
     """
-    if _is_google_path(path):
-        bucket, obj = google.split_path(path)
+    if _is_gcp_path(path):
+        bucket, obj = gcp.split_path(path)
         obj = _strip_slashes(obj)
         if "/" in obj:
             obj = "/".join(obj.split("/")[:-1])
-            return google.combine_path(bucket, obj)
+            return gcp.combine_path(bucket, obj)
         else:
-            return google.combine_path(bucket, "")[:-1]
+            return gcp.combine_path(bucket, "")[:-1]
     elif _is_azure_path(path):
         account, container, obj = azure.split_path(path)
         obj = _strip_slashes(obj)
@@ -2538,16 +2534,16 @@ def _safe_urljoin(a: str, b: str) -> str:
 def _join2(a: str, b: str) -> str:
     if _is_local_path(a):
         return os.path.join(a, b)
-    elif _is_google_path(a) or _is_azure_path(a):
+    elif _is_gcp_path(a) or _is_azure_path(a):
         if not a.endswith("/"):
             a += "/"
 
-        if _is_google_path(a):
-            bucket, obj = google.split_path(a)
+        if _is_gcp_path(a):
+            bucket, obj = gcp.split_path(a)
             obj = _safe_urljoin(obj, b)
             if obj.startswith("/"):
                 obj = obj[1:]
-            return google.combine_path(bucket, obj)
+            return gcp.combine_path(bucket, obj)
         elif _is_azure_path(a):
             account, container, obj = azure.split_path(a)
             obj = _safe_urljoin(obj, b)
@@ -2564,11 +2560,9 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
     """
     Get a URL for the given path that a browser could open
     """
-    if _is_google_path(path):
-        bucket, blob = google.split_path(path)
-        return google.generate_signed_url(
-            bucket, blob, expiration=google.MAX_EXPIRATION
-        )
+    if _is_gcp_path(path):
+        bucket, blob = gcp.split_path(path)
+        return gcp.generate_signed_url(bucket, blob, expiration=gcp.MAX_EXPIRATION)
     elif _is_azure_path(path):
         account, container, blob = azure.split_path(path)
         url = azure.build_url(
@@ -2636,10 +2630,10 @@ def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> bool:
     return resp.status == 200
 
 
-def _google_maybe_update_md5(path: str, generation: str, hexdigest: str) -> bool:
-    bucket, blob = google.split_path(path)
+def _gcp_maybe_update_md5(path: str, generation: str, hexdigest: str) -> bool:
+    bucket, blob = gcp.split_path(path)
     req = Request(
-        url=google.build_url(
+        url=gcp.build_url(
             "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
         ),
         method="PATCH",
@@ -2649,11 +2643,11 @@ def _google_maybe_update_md5(path: str, generation: str, hexdigest: str) -> bool
         success_codes=(200, 404, 412),
     )
 
-    resp = _execute_google_api_request(req)
+    resp = _execute_gcp_api_request(req)
     return resp.status == 200
 
 
-def _google_get_md5(metadata: Mapping[str, Any]) -> Optional[str]:
+def _gcp_get_md5(metadata: Mapping[str, Any]) -> Optional[str]:
     if "md5Hash" in metadata:
         return base64.b64decode(metadata["md5Hash"]).hex()
 
@@ -2683,12 +2677,12 @@ def md5(path: str) -> str:
     For Azure this can look up the MD5 if it's available, otherwise it must calculate it.
     For local paths, this must always calculate the MD5.
     """
-    if _is_google_path(path):
-        isfile, metadata = _google_isfile(path)
+    if _is_gcp_path(path):
+        isfile, metadata = _gcp_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file: '{path}'")
 
-        h = _google_get_md5(metadata)
+        h = _gcp_get_md5(metadata)
         if h is not None:
             return h
 
@@ -2696,7 +2690,7 @@ def md5(path: str) -> str:
         with BlobFile(path, "rb") as f:
             result = _block_md5(f).hex()
 
-        _google_maybe_update_md5(path, metadata["generation"], result)
+        _gcp_maybe_update_md5(path, metadata["generation"], result)
         return result
     elif _is_azure_path(path):
         isfile, metadata = _azure_isfile(path)
@@ -2869,7 +2863,7 @@ class _StreamingReadFile(io.RawIOBase):
 
 class _GoogleStreamingReadFile(_StreamingReadFile):
     def __init__(self, path: str) -> None:
-        isfile, metadata = _google_isfile(path)
+        isfile, metadata = _gcp_isfile(path)
         if not isfile:
             raise FileNotFoundError(f"No such file or bucket: '{path}'")
         super().__init__(path, int(metadata["size"]))
@@ -2877,9 +2871,9 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
     ) -> urllib3.response.HTTPResponse:
-        bucket, name = google.split_path(self._path)
+        bucket, name = gcp.split_path(self._path)
         req = Request(
-            url=google.build_url(
+            url=gcp.build_url(
                 "/storage/v1/b/{bucket}/o/{name}", bucket=bucket, name=name
             ),
             method="GET",
@@ -2890,7 +2884,7 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
             # sure we don't preload it
             preload_content=not streaming,
         )
-        return _execute_google_api_request(req)
+        return _execute_gcp_api_request(req)
 
 
 class _AzureStreamingReadFile(_StreamingReadFile):
@@ -2977,22 +2971,22 @@ class _StreamingWriteFile(io.BufferedIOBase):
 
 class _GoogleStreamingWriteFile(_StreamingWriteFile):
     def __init__(self, path: str) -> None:
-        bucket, name = google.split_path(path)
+        bucket, name = gcp.split_path(path)
         req = Request(
-            url=google.build_url(
+            url=gcp.build_url(
                 "/upload/storage/v1/b/{bucket}/o?uploadType=resumable", bucket=bucket
             ),
             method="POST",
             data=dict(name=name),
             success_codes=(200, 400, 404),
         )
-        resp = _execute_google_api_request(req)
+        resp = _execute_gcp_api_request(req)
         if resp.status in (400, 404):
             raise FileNotFoundError(f"No such file or bucket: '{path}'")
         self._upload_url = resp.headers["Location"]
         # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
-        assert _google_write_chunk_size % (256 * 1024) == 0
-        super().__init__(chunk_size=_google_write_chunk_size)
+        assert _gcp_write_chunk_size % (256 * 1024) == 0
+        super().__init__(chunk_size=_gcp_write_chunk_size)
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         start = self._offset
@@ -3021,7 +3015,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
         )
 
         try:
-            _execute_google_api_request(req)
+            _execute_gcp_api_request(req)
         except RequestFailure as e:
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
             if e.response_status in (404, 410):
@@ -3289,7 +3283,7 @@ def BlobFile(
         path_backend = None
         if _is_local_path(path):
             path_backend = "local"
-        elif _is_google_path(path):
+        elif _is_gcp_path(path):
             path_backend = "google"
         elif _is_azure_path(path):
             path_backend = "azure"
@@ -3321,7 +3315,7 @@ def BlobFile(
                 f = io.BufferedReader(f, buffer_size=buffer_size)
             else:
                 f = io.BufferedWriter(f, buffer_size=buffer_size)
-        elif _is_google_path(path):
+        elif _is_gcp_path(path):
             if mode in ("w", "wb"):
                 f = _GoogleStreamingWriteFile(path)
             elif mode in ("r", "rb"):
@@ -3371,7 +3365,7 @@ def BlobFile(
         local_filename = basename(path)
         if local_filename == "":
             local_filename = "local.tmp"
-        if _is_google_path(path) or _is_azure_path(path):
+        if _is_gcp_path(path) or _is_azure_path(path):
             remote_path = path
             if mode in ("a", "ab"):
                 tmp_dir = tempfile.mkdtemp()
@@ -3393,12 +3387,12 @@ def BlobFile(
                     with filelock.FileLock(lock_path):
                         remote_version = ""
                         # get some sort of consistent remote hash so we can check for a local file
-                        if _is_google_path(path):
-                            isfile, metadata = _google_isfile(path)
+                        if _is_gcp_path(path):
+                            isfile, metadata = _gcp_isfile(path)
                             if not isfile:
                                 raise FileNotFoundError(f"No such file: '{path}'")
                             remote_version = metadata["generation"]
-                            remote_hash = _google_get_md5(metadata)
+                            remote_hash = _gcp_get_md5(metadata)
                         elif _is_azure_path(path):
                             # in the azure case the remote md5 may not exist
                             # this duplicates some of md5() because we want more control
@@ -3444,8 +3438,8 @@ def BlobFile(
                                     _azure_maybe_update_md5(
                                         path, remote_version, local_hexdigest
                                     )
-                                elif _is_google_path(path):
-                                    _google_maybe_update_md5(
+                                elif _is_gcp_path(path):
+                                    _gcp_maybe_update_md5(
                                         path, remote_version, local_hexdigest
                                     )
                         else:

@@ -22,6 +22,7 @@ from typing import (
 import urllib3
 import xmltodict
 
+EARLY_EXPIRATION_SECONDS = 5 * 60
 
 INVALID_HOSTNAME_STATUS = 600  # fake status for invalid hostname
 
@@ -467,3 +468,28 @@ def execute_request(
             )
         time.sleep(backoff)
     assert False, "unreachable"
+
+
+class TokenManager:
+    """
+    Automatically refresh tokens when they expire
+    """
+
+    def __init__(
+        self, get_token_fn: Callable[[Context, Any], Tuple[Any, float]]
+    ) -> None:
+        self._get_token_fn = get_token_fn
+        self._tokens = {}
+        self._expirations = {}
+        self._lock = threading.Lock()
+
+    def get_token(self, ctx: Context, key: Any) -> Any:
+        with self._lock:
+            now = time.time()
+            expiration = self._expirations.get(key)
+            if expiration is None or (now + EARLY_EXPIRATION_SECONDS) > expiration:
+                self._tokens[key], self._expirations[key] = self._get_token_fn(ctx, key)
+                assert self._expirations[key] is not None
+
+            assert key in self._tokens
+            return self._tokens[key]

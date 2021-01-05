@@ -19,8 +19,6 @@ import itertools
 import random
 import math
 import ssl
-import socket
-import threading
 import concurrent.futures
 import multiprocessing as mp
 from typing import (
@@ -70,14 +68,7 @@ from blobfile._common import (
 # feature flags
 USE_STREAMING_READ_REQUEST = True
 
-EARLY_EXPIRATION_SECONDS = 5 * 60
-
 CHUNK_SIZE = 2 ** 20
-# it looks like azure signed urls cannot exceed the lifetime of the token used
-# to create them, so don't keep the key around too long
-AZURE_SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
-# these seem to be expired manually, but we don't currently detect that
-AZURE_SHARED_KEY_EXPIRATION_SECONDS = 24 * 60 * 60
 # max 100MB https://docs.microsoft.com/en-us/rest/api/storageservices/put-block#remarks
 # there is a preview version of the API that allows this to be 4000MiB
 AZURE_MAX_BLOCK_SIZE = 100_000_000
@@ -147,389 +138,6 @@ def configure(
         output_az_paths=output_az_paths,
         use_azure_storage_account_key_fallback=use_azure_storage_account_key_fallback,
     )
-
-
-class TokenManager:
-    """
-    Automatically refresh tokens when they expire
-    """
-
-    def __init__(self, get_token_fn: Callable[[Any], Tuple[Any, float]]) -> None:
-        self._get_token_fn = get_token_fn
-        self._tokens = {}
-        self._expirations = {}
-        self._lock = threading.Lock()
-
-    def get_token(self, key: Any) -> Any:
-        with self._lock:
-            now = time.time()
-            expiration = self._expirations.get(key)
-            if expiration is None or (now + EARLY_EXPIRATION_SECONDS) > expiration:
-                self._tokens[key], self._expirations[key] = self._get_token_fn(key)
-                assert self._expirations[key] is not None
-
-            assert key in self._tokens
-            return self._tokens[key]
-
-
-def _is_gce_instance() -> bool:
-    try:
-        socket.getaddrinfo("metadata.google.internal", 80)
-    except socket.gaierror:
-        return False
-    return True
-
-
-def _gcp_get_access_token(key: Any) -> Tuple[Any, float]:
-    now = time.time()
-
-    # https://github.com/googleapis/google-auth-library-java/blob/master/README.md#application-default-credentials
-    _, err = gcp.load_credentials()
-    if err is None:
-
-        def build_req() -> Request:
-            req = gcp.create_access_token_request(
-                scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
-            )
-            req.success_codes = (200, 400)
-            return req
-
-        resp = common.execute_request(_context, build_req)
-        result = json.loads(resp.data)
-        if resp.status == 400:
-            error = result["error"]
-            description = result.get("error_description", "<missing description>")
-            msg = f"Error with google credentials: [{error}] {description}"
-            if error == "invalid_grant":
-                if description.startswith("Invalid JWT:"):
-                    msg += "\nPlease verify that your system clock is correct."
-                elif description == "Bad Request":
-                    msg += "\nYour credentials may be expired, please run the following commands: `gcloud auth application-default revoke` (this may fail but ignore the error) then `gcloud auth application-default login`"
-            raise Error(msg)
-        assert resp.status == 200
-        return result["access_token"], now + float(result["expires_in"])
-    elif (
-        os.environ.get("NO_GCE_CHECK", "false").lower() != "true" and _is_gce_instance()
-    ):
-        # see if the metadata server has a token for us
-        def build_req() -> Request:
-            return Request(
-                method="GET",
-                url="http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
-                headers={"Metadata-Flavor": "Google"},
-            )
-
-        resp = common.execute_request(_context, build_req)
-        result = json.loads(resp.data)
-        return result["access_token"], now + float(result["expires_in"])
-    else:
-        raise Error(err)
-
-
-def _azure_can_access_container(
-    account: str, container: str, auth: Tuple[str, str]
-) -> bool:
-    # https://myaccount.blob.core.windows.net/mycontainer?restype=container&comp=list
-    success_codes = [200, 403, 404, INVALID_HOSTNAME_STATUS]
-    if auth[0] == azure.ANONYMOUS:
-        # some containers can produce a 409 error "PublicAccessNotPermitted" when accessed with an anonymous account
-        success_codes.append(409)
-
-    def build_req() -> Request:
-        req = Request(
-            method="GET",
-            url=azure.build_url(account, "/{container}", container=container),
-            params={"restype": "container", "comp": "list", "maxresults": "1"},
-            success_codes=success_codes,
-        )
-        return azure.make_api_request(req, auth=auth)
-
-    resp = common.execute_request(_context, build_req)
-    # technically INVALID_HOSTNAME_STATUS means we can't access the account because it
-    # doesn't exist, but to be consistent with how we treat this error elsewhere we
-    # ignore it here
-    if resp.status == INVALID_HOSTNAME_STATUS:
-        return True
-    # anonymous requests will for some reason get a 404 when they should get a 403
-    # so treat a 404 from anon requests as a 403
-    if resp.status == 404 and auth[0] == azure.ANONYMOUS:
-        return False
-    # if the container list succeeds or the container doesn't exist, return success
-    return resp.status in (200, 404)
-
-
-def _azure_get_storage_account_id(
-    subscription_id: str, account: str, auth: Tuple[str, str]
-) -> Optional[str]:
-    # get a list of storage accounts
-    def build_req() -> Request:
-        req = Request(
-            method="GET",
-            url=f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.Storage/storageAccounts",
-            params={"api-version": "2019-04-01"},
-            success_codes=(200, 401, 403),
-        )
-        return azure.make_api_request(req, auth=auth)
-
-    resp = common.execute_request(_context, build_req)
-    if resp.status in (401, 403):
-        # we aren't allowed to query this for this subscription, skip it
-        return None
-
-    out = json.loads(resp.data)
-    # check if we found the storage account we are looking for
-    for obj in out["value"]:
-        if obj["name"] == account:
-            return obj["id"]
-    return None
-
-
-def _azure_get_storage_account_key(
-    account: str, container: str, creds: Mapping[str, Any]
-) -> Optional[Tuple[Any, float]]:
-    # azure resource manager has very low limits on number of requests, so we have
-    # to be careful to avoid extra requests here
-    # https://docs.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits#storage-resource-provider-limits
-
-    # in general, this code path should be avoided by using a service principal and
-    # giving it access to the bucket
-
-    # get an access token for the management service
-    def build_req() -> Request:
-        return azure.create_access_token_request(
-            creds=creds, scope="https://management.azure.com/"
-        )
-
-    resp = common.execute_request(_context, build_req)
-    result = json.loads(resp.data)
-    auth = (azure.OAUTH_TOKEN, result["access_token"])
-
-    # attempt to use list of subscriptions from the azure cli tool
-    stored_subscription_ids = azure.load_subscription_ids()
-
-    storage_account_id = None
-    for subscription_id in stored_subscription_ids:
-        storage_account_id = _azure_get_storage_account_id(
-            subscription_id, account, auth
-        )
-        if storage_account_id is not None:
-            break
-    else:
-        # if we didn't find the storage account we are looking for, check to see if there
-        # are any subscriptions that we did not query
-        def build_req() -> Request:
-            req = Request(
-                method="GET",
-                url="https://management.azure.com/subscriptions",
-                params={"api-version": "2020-01-01"},
-            )
-            return azure.make_api_request(req, auth=auth)
-
-        resp = common.execute_request(_context, build_req)
-        result = json.loads(resp.data)
-        unchecked_subscription_ids = [
-            item["subscriptionId"]
-            for item in result["value"]
-            if item["subscriptionId"] not in stored_subscription_ids
-        ]
-
-        for subscription_id in unchecked_subscription_ids:
-            storage_account_id = _azure_get_storage_account_id(
-                subscription_id, account, auth
-            )
-            if storage_account_id is not None:
-                break
-        else:
-            # we failed to find the storage account, give up
-            return None
-
-    def build_req() -> Request:
-        req = Request(
-            method="POST",
-            url=f"https://management.azure.com{storage_account_id}/listKeys",
-            params={"api-version": "2019-04-01"},
-        )
-        return azure.make_api_request(req, auth=auth)
-
-    resp = common.execute_request(_context, build_req)
-    result = json.loads(resp.data)
-    for key in result["keys"]:
-        if key["permissions"] == "FULL":
-            storage_key_auth = (azure.SHARED_KEY, key["value"])
-            if _azure_can_access_container(account, container, storage_key_auth):
-                return storage_key_auth
-            else:
-                raise Error(
-                    f"Found storage account key, but it was unable to access storage account: '{account}' and container: '{container}'"
-                )
-    raise Error(
-        f"Storage account was found, but storage account keys were missing: '{account}'"
-    )
-
-
-def _azure_get_access_token(key: Any) -> Tuple[Any, float]:
-    account, container = key
-    now = time.time()
-    creds = azure.load_credentials()
-    if "storageAccountKey" in creds:
-        if "account" in creds:
-            if creds["account"] != account:
-                raise Error(
-                    f"Found credentials for account '{creds['account']}' but needed credentials for account '{account}'"
-                )
-        auth = (azure.SHARED_KEY, creds["storageAccountKey"])
-        if _azure_can_access_container(account, container, auth):
-            return (auth, now + AZURE_SHARED_KEY_EXPIRATION_SECONDS)
-    elif "refreshToken" in creds:
-        # we have a refresh token, convert it into an access token for this account
-        def build_req() -> Request:
-            return azure.create_access_token_request(
-                creds=creds,
-                scope=f"https://{account}.blob.core.windows.net/",
-                success_codes=(200, 400),
-            )
-
-        resp = common.execute_request(_context, build_req)
-        result = json.loads(resp.data)
-        if resp.status == 400:
-            if (
-                (
-                    result["error"] == "invalid_grant"
-                    and "AADSTS700082" in result["error_description"]
-                )
-                or (
-                    result["error"] == "interaction_required"
-                    and "AADSTS50078" in result["error_description"]
-                )
-                or (
-                    result["error"] == "interaction_required"
-                    and "AADSTS50076" in result["error_description"]
-                )
-            ):
-                raise Error(
-                    "Your refresh token is no longer valid, please run `az login` to get a new one"
-                )
-            else:
-                raise Error(
-                    f"Encountered an error when requesting an access token: `{result['error']}: {result['error_description']}`.  You can attempt to fix this by re-running `az login`."
-                )
-
-        auth = (azure.OAUTH_TOKEN, result["access_token"])
-
-        # for some azure accounts this access token does not work, check if it works
-        if _azure_can_access_container(account, container, auth):
-            return (auth, now + float(result["expires_in"]))
-
-        if _context.use_azure_storage_account_key_fallback:
-            # fall back to getting the storage keys
-            storage_account_key_auth = _azure_get_storage_account_key(
-                account=account, container=container, creds=creds
-            )
-            if storage_account_key_auth is not None:
-                return (
-                    storage_account_key_auth,
-                    now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
-                )
-    elif "appId" in creds:
-        # we have a service principal, get an oauth token
-        def build_req() -> Request:
-            return azure.create_access_token_request(
-                creds=creds, scope="https://storage.azure.com/"
-            )
-
-        resp = common.execute_request(_context, build_req)
-        result = json.loads(resp.data)
-        auth = (azure.OAUTH_TOKEN, result["access_token"])
-        if _azure_can_access_container(account, container, auth):
-            return (auth, now + float(result["expires_in"]))
-
-        if _context.use_azure_storage_account_key_fallback:
-            # fall back to getting the storage keys
-            storage_account_key_auth = _azure_get_storage_account_key(
-                account=account, container=container, creds=creds
-            )
-            if storage_account_key_auth is not None:
-                return (
-                    storage_account_key_auth,
-                    now + AZURE_SHARED_KEY_EXPIRATION_SECONDS,
-                )
-
-    # oddly, it seems that if you request a public container with a valid azure account, you cannot list the bucket
-    # but if you list it with no account, that works fine
-    anonymous_auth = (azure.ANONYMOUS, "")
-    if _azure_can_access_container(account, container, anonymous_auth):
-        return (anonymous_auth, float("inf"))
-
-    msg = f"Could not find any credentials that grant access to storage account: '{account}' and container: '{container}'"
-    if len(creds) == 0:
-        msg += """
-
-No Azure credentials were found.  If the container is not marked as public, please do one of the following:
-
-* Log in with 'az login', blobfile will use your default credentials to lookup your storage account key
-* Set the environment variable 'AZURE_STORAGE_KEY' to your storage account key which you can find by following this guide: https://docs.microsoft.com/en-us/azure/storage/common/storage-account-keys-manage
-* Create an account with 'az ad sp create-for-rbac --name <name>' and set the 'AZURE_APPLICATION_CREDENTIALS' environment variable to the path of the output from that command or individually set the 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', and 'AZURE_TENANT_ID' environment variables"""
-    raise Error(msg)
-
-
-def _azure_get_sas_token(key: Any) -> Tuple[Any, float]:
-    auth = global_azure_access_token_manager.get_token(key=key)
-    if auth[0] == azure.ANONYMOUS:
-        # for public containers, use None as the token so that this will be cached
-        # and we can tell when we don't have a real SAS token for a container
-        return (None, time.time() + AZURE_SAS_TOKEN_EXPIRATION_SECONDS)
-
-    account, container = key
-
-    def build_req() -> Request:
-        req = azure.create_user_delegation_sas_request(account=account)
-        auth = global_azure_access_token_manager.get_token(key=key)
-        if auth[0] != azure.OAUTH_TOKEN:
-            raise Error(
-                "Only OAuth tokens can be used to get SAS tokens. You should set the Storage "
-                "Blob Data Reader or Storage Blob Data Contributor IAM role. You can run "
-                f"`az storage blob list --auth-mode login --account-name {account} --container {container}` "
-                "to confirm that the missing role is the issue."
-            )
-        return azure.make_api_request(req, auth=auth)
-
-    resp = common.execute_request(_context, build_req)
-    out = xmltodict.parse(resp.data)
-    t = time.time() + AZURE_SAS_TOKEN_EXPIRATION_SECONDS
-    return out["UserDelegationKey"], t
-
-
-global_gcp_access_token_manager = TokenManager(_gcp_get_access_token)
-
-global_azure_access_token_manager = TokenManager(_azure_get_access_token)
-
-global_azure_sas_token_manager = TokenManager(_azure_get_sas_token)
-
-
-def _execute_azure_api_request(req: Request) -> urllib3.HTTPResponse:
-    u = urllib.parse.urlparse(req.url)
-    account = u.netloc.split(".")[0]
-    path_parts = u.path.split("/")
-    if len(path_parts) < 2:
-        raise Error("missing container from path")
-    container = u.path.split("/")[1]
-
-    def build_req() -> Request:
-        return azure.make_api_request(
-            req,
-            auth=global_azure_access_token_manager.get_token(key=(account, container)),
-        )
-
-    return common.execute_request(_context, build_req)
-
-
-def _execute_gcp_api_request(req: Request) -> urllib3.HTTPResponse:
-    def build_req() -> Request:
-        return gcp.make_api_request(
-            req, access_token=global_gcp_access_token_manager.get_token(key="")
-        )
-
-    return common.execute_request(_context, build_req)
 
 
 def _is_local_path(path: str) -> bool:
@@ -616,7 +224,7 @@ def _azure_upload_chunk(
         data=FileBody(path, start=start, end=start + size),
         success_codes=(201,),
     )
-    _execute_azure_api_request(req)
+    azure.execute_api_request(_context, req)
 
 
 def _azure_finalize_blob(
@@ -633,7 +241,7 @@ def _azure_finalize_blob(
         data=body,
         success_codes=(201, 400),
     )
-    resp = _execute_azure_api_request(req)
+    resp = azure.execute_api_request(_context, req)
     if resp.status == 400:
         result = xmltodict.parse(resp.data)
         if result["Error"]["Code"] == "InvalidBlockList":
@@ -715,7 +323,7 @@ def _gcp_upload_part(path: str, start: int, size: int, dst: str) -> str:
         data=FileBody(path, start=start, end=start + size),
         success_codes=(200,),
     )
-    resp = _execute_gcp_api_request(req)
+    resp = gcp.execute_api_request(_context, req)
     metadata = json.loads(resp.data)
     return metadata["generation"]
 
@@ -728,7 +336,7 @@ def _gcp_delete_part(bucket: str, name: str) -> None:
         method="DELETE",
         success_codes=(204, 404),
     )
-    _execute_gcp_api_request(req)
+    gcp.execute_api_request(_context, req)
 
 
 def _gcp_parallel_upload(
@@ -778,7 +386,7 @@ def _gcp_parallel_upload(
         data={"sourceObjects": source_objects},
         success_codes=(200,),
     )
-    resp = _execute_gcp_api_request(req)
+    resp = gcp.execute_api_request(_context, req)
     metadata = json.loads(resp.data)
     hexdigest = binascii.hexlify(md5_digest).decode("utf8")
     _gcp_maybe_update_md5(dst, metadata["generation"], hexdigest)
@@ -849,7 +457,7 @@ def copy(
                 params=params,
                 success_codes=(200, 404),
             )
-            resp = _execute_gcp_api_request(req)
+            resp = gcp.execute_api_request(_context, req)
             if resp.status == 404:
                 raise FileNotFoundError(f"Source file not found: '{src}'")
             result = json.loads(resp.data)
@@ -875,8 +483,8 @@ def copy(
             if src_account != dst_account:
                 # the signed url can expire, so technically we should get the sas_token and build the signed url
                 # each time we build a new request
-                sas_token = global_azure_sas_token_manager.get_token(
-                    key=(src_account, src_container)
+                sas_token = azure.sas_token_manager.get_token(
+                    ctx=_context, key=(src_account, src_container)
                 )
                 # if we don't get a token, it's likely we have anonymous access to the container
                 # if we do get a token, the container is likely private and we need to use
@@ -894,10 +502,10 @@ def copy(
                 headers={"x-ms-copy-source": src_url},
                 success_codes=(202, 404),
             )
-            return azure.make_api_request(
+            return azure.create_api_request(
                 req,
-                auth=global_azure_access_token_manager.get_token(
-                    key=(dst_account, dst_container)
+                auth=azure.access_token_manager.get_token(
+                    ctx=_context, key=(dst_account, dst_container)
                 ),
             )
 
@@ -923,7 +531,7 @@ def copy(
                 ),
                 method="GET",
             )
-            resp = _execute_azure_api_request(req)
+            resp = azure.execute_api_request(_context, req)
             if resp.headers["x-ms-copy-id"] != copy_id:
                 raise Error("Copy id mismatch")
             etag = resp.headers["etag"]
@@ -1011,7 +619,7 @@ def _create_gcp_page_iterator(
 
     while True:
         req = Request(url=url, method=method, params=p, success_codes=(200, 404))
-        resp = _execute_gcp_api_request(req)
+        resp = gcp.execute_api_request(_context, req)
         if resp.status == 404:
             return
         result = json.loads(resp.data)
@@ -1043,7 +651,7 @@ def _create_azure_page_iterator(
             data=d,
             success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
         )
-        resp = _execute_azure_api_request(req)
+        resp = azure.execute_api_request(_context, req)
         if resp.status in (404, INVALID_HOSTNAME_STATUS):
             return
         result = xmltodict.parse(resp.data)["EnumerationResults"]
@@ -1102,7 +710,7 @@ def _gcp_maybe_stat(path: str) -> Optional[Stat]:
         method="GET",
         success_codes=(200, 404),
     )
-    resp = _execute_gcp_api_request(req)
+    resp = gcp.execute_api_request(_context, req)
     if resp.status != 200:
         return None
     return gcp.make_stat(json.loads(resp.data))
@@ -1119,7 +727,7 @@ def _azure_maybe_stat(path: str) -> Optional[Stat]:
         method="HEAD",
         success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
     )
-    resp = _execute_azure_api_request(req)
+    resp = azure.execute_api_request(_context, req)
     if resp.status != 200:
         return None
     return azure.make_stat(resp.headers)
@@ -1453,7 +1061,7 @@ def isdir(path: str) -> bool:
                 method="GET",
                 success_codes=(200, 404),
             )
-            resp = _execute_gcp_api_request(req)
+            resp = gcp.execute_api_request(_context, req)
             return resp.status == 200
         else:
             params = dict(prefix=blob, delimiter="/", maxResults="1")
@@ -1463,7 +1071,7 @@ def isdir(path: str) -> bool:
                 params=params,
                 success_codes=(200, 404),
             )
-            resp = _execute_gcp_api_request(req)
+            resp = gcp.execute_api_request(_context, req)
             if resp.status == 404:
                 return False
             result = json.loads(resp.data)
@@ -1481,7 +1089,7 @@ def isdir(path: str) -> bool:
                 params=dict(restype="container"),
                 success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
             )
-            resp = _execute_azure_api_request(req)
+            resp = azure.execute_api_request(_context, req)
             return resp.status == 200
         else:
             # even though we're only interested in having one result, we still need to make an
@@ -1734,7 +1342,7 @@ def makedirs(path: str) -> None:
             params=dict(uploadType="media", name=blob),
             success_codes=(200, 400),
         )
-        resp = _execute_gcp_api_request(req)
+        resp = gcp.execute_api_request(_context, req)
         if resp.status == 400:
             raise Error(f"Unable to create directory, bucket does not exist: '{path}'")
     elif _is_azure_path(path):
@@ -1749,7 +1357,7 @@ def makedirs(path: str) -> None:
             headers={"x-ms-blob-type": "BlockBlob"},
             success_codes=(201, 400),
         )
-        resp = _execute_azure_api_request(req)
+        resp = azure.execute_api_request(_context, req)
         if resp.status == 400:
             raise Error(
                 f"Unable to create directory, account/container does not exist: '{path}'"
@@ -1779,7 +1387,7 @@ def remove(path: str) -> None:
             method="DELETE",
             success_codes=(204, 404),
         )
-        resp = _execute_gcp_api_request(req)
+        resp = gcp.execute_api_request(_context, req)
         if resp.status == 404:
             raise FileNotFoundError(
                 f"The system cannot find the path specified: '{path}'"
@@ -1799,7 +1407,7 @@ def remove(path: str) -> None:
             method="DELETE",
             success_codes=(202, 404, INVALID_HOSTNAME_STATUS),
         )
-        resp = _execute_azure_api_request(req)
+        resp = azure.execute_api_request(_context, req)
         if resp.status in (404, INVALID_HOSTNAME_STATUS):
             raise FileNotFoundError(
                 f"The system cannot find the path specified: '{path}'"
@@ -1858,7 +1466,7 @@ def rmdir(path: str) -> None:
             method="DELETE",
             success_codes=(204,),
         )
-        _execute_gcp_api_request(req)
+        gcp.execute_api_request(_context, req)
     elif _is_azure_path(path):
         account, container, blob = azure.split_path(path)
         req = Request(
@@ -1868,7 +1476,7 @@ def rmdir(path: str) -> None:
             method="DELETE",
             success_codes=(202,),
         )
-        _execute_azure_api_request(req)
+        azure.execute_api_request(_context, req)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -1921,7 +1529,7 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
             data=dict(metadata={"blobfile-mtime": str(mtime)}),
             success_codes=(200, 404, 412),
         )
-        resp = _execute_gcp_api_request(req)
+        resp = gcp.execute_api_request(_context, req)
         if resp.status == 404:
             raise FileNotFoundError(f"No such file: '{path}'")
         return resp.status == 200
@@ -1939,7 +1547,7 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
             headers=headers,
             success_codes=(200, 404, 412),
         )
-        resp = _execute_azure_api_request(req)
+        resp = azure.execute_api_request(_context, req)
         if resp.status == 404:
             raise FileNotFoundError(f"No such file: '{path}'")
         if resp.status == 412:
@@ -1958,7 +1566,7 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
             headers=headers,
             success_codes=(200, 404, 412),
         )
-        resp = _execute_azure_api_request(req)
+        resp = azure.execute_api_request(_context, req)
         if resp.status == 404:
             raise FileNotFoundError(f"No such file: '{path}'")
         return resp.status == 200
@@ -1994,7 +1602,7 @@ def rmtree(path: str) -> None:
                 # before erroring out
                 success_codes=(204, 404),
             )
-            _execute_gcp_api_request(req)
+            gcp.execute_api_request(_context, req)
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
@@ -2018,7 +1626,7 @@ def rmtree(path: str) -> None:
                 # before erroring out
                 success_codes=(202, 404),
             )
-            _execute_azure_api_request(req)
+            azure.execute_api_request(_context, req)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -2200,7 +1808,9 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
         url = azure.build_url(
             account, "/{container}/{blob}", container=container, blob=blob
         )
-        token = global_azure_sas_token_manager.get_token(key=(account, container))
+        token = azure.sas_token_manager.get_token(
+            ctx=_context, key=(account, container)
+        )
         if token is None:
             # the container has public access
             return url, float("inf")
@@ -2231,7 +1841,7 @@ def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> bool:
         headers={"If-Match": etag},
         success_codes=(200, 404, 412),
     )
-    resp = _execute_azure_api_request(req)
+    resp = azure.execute_api_request(_context, req)
     if resp.status in (404, 412):
         return False
 
@@ -2258,7 +1868,7 @@ def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> bool:
         },
         success_codes=(200, 404, 412),
     )
-    resp = _execute_azure_api_request(req)
+    resp = azure.execute_api_request(_context, req)
     return resp.status == 200
 
 
@@ -2275,7 +1885,7 @@ def _gcp_maybe_update_md5(path: str, generation: str, hexdigest: str) -> bool:
         success_codes=(200, 404, 412),
     )
 
-    resp = _execute_gcp_api_request(req)
+    resp = gcp.execute_api_request(_context, req)
     return resp.status == 200
 
 
@@ -2497,7 +2107,7 @@ class _GoogleStreamingReadFile(_StreamingReadFile):
             # sure we don't preload it
             preload_content=not streaming,
         )
-        return _execute_gcp_api_request(req)
+        return gcp.execute_api_request(_context, req)
 
 
 class _AzureStreamingReadFile(_StreamingReadFile):
@@ -2522,7 +2132,7 @@ class _AzureStreamingReadFile(_StreamingReadFile):
             # sure we don't preload it
             preload_content=not streaming,
         )
-        resp = _execute_azure_api_request(req)
+        resp = azure.execute_api_request(_context, req)
         return resp
 
 
@@ -2593,7 +2203,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
             data=dict(name=name),
             success_codes=(200, 400, 404),
         )
-        resp = _execute_gcp_api_request(req)
+        resp = gcp.execute_api_request(_context, req)
         if resp.status in (400, 404):
             raise FileNotFoundError(f"No such file or bucket: '{path}'")
         self._upload_url = resp.headers["Location"]
@@ -2628,7 +2238,7 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
         )
 
         try:
-            _execute_gcp_api_request(req)
+            gcp.execute_api_request(_context, req)
         except RequestFailure as e:
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
             if e.response_status in (404, 410):
@@ -2650,7 +2260,7 @@ def _clear_uncommitted_blocks(url: str, metadata: Dict[str, str]) -> None:
     req = Request(
         url=url, params=dict(comp="blocklist"), method="GET", success_codes=(200, 404)
     )
-    resp = _execute_azure_api_request(req)
+    resp = azure.execute_api_request(_context, req)
     if resp.status != 200:
         return
 
@@ -2678,7 +2288,7 @@ def _clear_uncommitted_blocks(url: str, metadata: Dict[str, str]) -> None:
         data=body,
         success_codes=(201, 404, 412),
     )
-    _execute_azure_api_request(req)
+    azure.execute_api_request(_context, req)
 
 
 class _AzureStreamingWriteFile(_StreamingWriteFile):
@@ -2770,7 +2380,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             method="HEAD",
             success_codes=(200, 400, 404, INVALID_HOSTNAME_STATUS),
         )
-        resp = _execute_azure_api_request(req)
+        resp = azure.execute_api_request(_context, req)
         if resp.status == 200:
             if resp.headers["x-ms-blob-type"] == "BlockBlob":
                 # because we delete all the uncommitted blocks, any concurrent writers will fail
@@ -2816,7 +2426,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                 data=data,
                 success_codes=(201,),
             )
-            _execute_azure_api_request(req)
+            azure.execute_api_request(_context, req)
             self._block_index += 1
             if self._block_index >= AZURE_BLOCK_COUNT_LIMIT:
                 raise Error(

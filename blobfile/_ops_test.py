@@ -25,7 +25,7 @@ import imageio
 import numpy as np
 
 import blobfile as bf
-from blobfile import _ops as ops, _azure as azure
+from blobfile import _ops as ops, _azure as azure, _common as common
 
 GCS_TEST_BUCKET = "csh-test-3"
 AS_TEST_ACCOUNT = "cshteststorage2"
@@ -1308,19 +1308,19 @@ def test_azure_maybe_update_md5(ctx):
 
 
 def _get_http_pool_id(q):
-    q.put(id(ops._get_http_pool()))
+    q.put(id(ops._context.get_http_pool()))
 
 
 def test_fork():
     q = mp.Queue()
     # this reference should keep the old http client alive in the child process
     # to ensure that a new one does not recycle the memory address
-    http1 = ops._get_http_pool()
+    http1 = ops._context.get_http_pool()
     parent1 = id(http1)
     p = mp.Process(target=_get_http_pool_id, args=(q,))
     p.start()
     p.join()
-    http2 = ops._get_http_pool()
+    http2 = ops._context.get_http_pool()
     parent2 = id(http2)
 
     child = q.get()
@@ -1373,7 +1373,7 @@ def test_windowed_file():
             f.write(b"meow")
 
         with open(path, "rb") as f:
-            f2 = ops._WindowedFile(f, start=1, end=3)
+            f2 = common.WindowedFile(f, start=1, end=3)
             assert f2.read() == b"eo"
 
             f2.seek(0)

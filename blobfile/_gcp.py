@@ -6,17 +6,27 @@ import time
 import platform
 import datetime
 import hashlib
+import socket
 import binascii
 from typing import Mapping, Dict, Any, Optional, Tuple, List
 
 from Cryptodome.Signature import pkcs1_15
 from Cryptodome.Hash import SHA256
 from Cryptodome.PublicKey import RSA
+import urllib3
 
 from blobfile import _common as common
-from blobfile._common import Request, Error, Stat, GCP_BASE_URL
+from blobfile._common import Request, Error, Stat, GCP_BASE_URL, Context, TokenManager
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
+
+
+def _is_gce_instance() -> bool:
+    try:
+        socket.getaddrinfo("metadata.google.internal", 80)
+    except socket.gaierror:
+        return False
+    return True
 
 
 def _b64encode(s: bytes) -> bytes:
@@ -79,7 +89,7 @@ def _refresh_access_token_request(
     )
 
 
-def load_credentials() -> Tuple[Dict[str, Any], Optional[str]]:
+def _load_credentials() -> Tuple[Dict[str, Any], Optional[str]]:
     if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
         creds_path = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
         if not os.path.exists(creds_path):
@@ -109,7 +119,7 @@ def load_credentials() -> Tuple[Dict[str, Any], Optional[str]]:
 
 
 def create_access_token_request(scopes: List[str]) -> Request:
-    creds, err = load_credentials()
+    creds, err = _load_credentials()
     if err is not None:
         raise Error(err)
     if "private_key" in creds:
@@ -131,7 +141,7 @@ def build_url(template: str, **data: str) -> str:
     return common.build_url(GCP_BASE_URL, template, **data)
 
 
-def make_api_request(req: Request, access_token: str) -> Request:
+def create_api_request(req: Request, access_token: str) -> Request:
     if req.headers is None:
         headers = {}
     else:
@@ -179,7 +189,7 @@ def generate_signed_url(
         h = dict(headers).copy()
 
     # https://cloud.google.com/storage/docs/access-control/signing-urls-manually
-    creds, err = load_credentials()
+    creds, err = _load_credentials()
     if err is not None:
         raise Error(err)
     if "private_key" not in creds:
@@ -299,3 +309,61 @@ def make_stat(item: Mapping[str, Any]) -> Stat:
         md5=get_md5(item),
         version=item["generation"],
     )
+
+
+def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
+    now = time.time()
+
+    # https://github.com/googleapis/google-auth-library-java/blob/master/README.md#application-default-credentials
+    _, err = _load_credentials()
+    if err is None:
+
+        def build_req() -> Request:
+            req = create_access_token_request(
+                scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
+            )
+            req.success_codes = (200, 400)
+            return req
+
+        resp = common.execute_request(ctx, build_req)
+        result = json.loads(resp.data)
+        if resp.status == 400:
+            error = result["error"]
+            description = result.get("error_description", "<missing description>")
+            msg = f"Error with google credentials: [{error}] {description}"
+            if error == "invalid_grant":
+                if description.startswith("Invalid JWT:"):
+                    msg += "\nPlease verify that your system clock is correct."
+                elif description == "Bad Request":
+                    msg += "\nYour credentials may be expired, please run the following commands: `gcloud auth application-default revoke` (this may fail but ignore the error) then `gcloud auth application-default login`"
+            raise Error(msg)
+        assert resp.status == 200
+        return result["access_token"], now + float(result["expires_in"])
+    elif (
+        os.environ.get("NO_GCE_CHECK", "false").lower() != "true" and _is_gce_instance()
+    ):
+        # see if the metadata server has a token for us
+        def build_req() -> Request:
+            return Request(
+                method="GET",
+                url="http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+                headers={"Metadata-Flavor": "Google"},
+            )
+
+        resp = common.execute_request(ctx, build_req)
+        result = json.loads(resp.data)
+        return result["access_token"], now + float(result["expires_in"])
+    else:
+        raise Error(err)
+
+
+access_token_manager = TokenManager(_get_access_token)
+
+
+def execute_api_request(ctx: Context, req: Request) -> urllib3.HTTPResponse:
+    def build_req() -> Request:
+        return create_api_request(
+            req, access_token=access_token_manager.get_token(ctx, key="")
+        )
+
+    return common.execute_request(ctx, build_req)

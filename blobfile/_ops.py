@@ -10,7 +10,6 @@ import io
 import urllib.parse
 import time
 import json
-import functools
 import binascii
 import stat as stat_module
 import glob as local_glob
@@ -1810,33 +1809,49 @@ def _guess_isdir(path: str) -> bool:
     return False
 
 
+def _gcp_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
+    params = {}
+    if delimiter is not None:
+        params["delimiter"] = delimiter
+
+    bucket, prefix = gcp.split_path(path)
+    it = _create_gcp_page_iterator(
+        url=gcp.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+        method="GET",
+        params=dict(prefix=prefix, **params),
+    )
+    for result in it:
+        for entry in _gcp_get_entries(bucket, result):
+            yield entry
+
+
+def _azure_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
+    params = {}
+    if delimiter is not None:
+        params["delimiter"] = delimiter
+
+    account, container, prefix = azure.split_path(path)
+    it = _create_azure_page_iterator(
+        url=azure.build_url(account, "/{container}", container=container),
+        method="GET",
+        params=dict(comp="list", restype="container", prefix=prefix, **params),
+    )
+    for result in it:
+        for entry in _azure_get_entries(account, container, result):
+            yield entry
+
+
 def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
     params = {}
     if delimiter is not None:
         params["delimiter"] = delimiter
 
     if _is_gcp_path(path):
-        bucket, prefix = gcp.split_path(path)
-        it = _create_gcp_page_iterator(
-            url=gcp.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
-            method="GET",
-            params=dict(prefix=prefix, **params),
-        )
-        get_entries = functools.partial(_gcp_get_entries, bucket)
+        yield from _gcp_list_blobs(path, delimiter=delimiter)
     elif _is_azure_path(path):
-        account, container, prefix = azure.split_path(path)
-        it = _create_azure_page_iterator(
-            url=azure.build_url(account, "/{container}", container=container),
-            method="GET",
-            params=dict(comp="list", restype="container", prefix=prefix, **params),
-        )
-        get_entries = functools.partial(_azure_get_entries, account, container)
+        yield from _azure_list_blobs(path, delimiter=delimiter)
     else:
         raise Error(f"Unrecognized path: '{path}'")
-
-    for result in it:
-        for entry in get_entries(result):
-            yield entry
 
 
 def _get_slash_path(entry: DirEntry) -> str:
@@ -2299,61 +2314,46 @@ def rmtree(path: str) -> None:
         if not path.endswith("/"):
             path += "/"
         bucket, blob = gcp.split_path(path)
-        it = _create_gcp_page_iterator(
-            url=gcp.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
-            method="GET",
-            params=dict(prefix=blob),
-        )
-        for result in it:
-            for entry in _gcp_get_entries(bucket, result):
-                entry_slash_path = _get_slash_path(entry)
-                entry_bucket, entry_blob = gcp.split_path(entry_slash_path)
-                assert entry_bucket == bucket and entry_blob.startswith(blob)
-                req = Request(
-                    url=gcp.build_url(
-                        "/storage/v1/b/{bucket}/o/{object}",
-                        bucket=bucket,
-                        object=entry_blob,
-                    ),
-                    method="DELETE",
-                    # 404 is allowed in case a failed request successfully deleted the file
-                    # before erroring out
-                    success_codes=(204, 404),
-                )
-                _execute_gcp_api_request(req)
+        for entry in _gcp_list_blobs(path):
+            entry_slash_path = _get_slash_path(entry)
+            entry_bucket, entry_blob = gcp.split_path(entry_slash_path)
+            assert entry_bucket == bucket and entry_blob.startswith(blob)
+            req = Request(
+                url=gcp.build_url(
+                    "/storage/v1/b/{bucket}/o/{object}",
+                    bucket=bucket,
+                    object=entry_blob,
+                ),
+                method="DELETE",
+                # 404 is allowed in case a failed request successfully deleted the file
+                # before erroring out
+                success_codes=(204, 404),
+            )
+            _execute_gcp_api_request(req)
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
         account, container, blob = azure.split_path(path)
-        it = _create_azure_page_iterator(
-            url=azure.build_url(account, "/{container}", container=container),
-            method="GET",
-            params=dict(comp="list", restype="container", prefix=blob),
-        )
-        for result in it:
-            for entry in _azure_get_entries(account, container, result):
-                entry_slash_path = _get_slash_path(entry)
-                entry_account, entry_container, entry_blob = azure.split_path(
-                    entry_slash_path
-                )
-                assert (
-                    entry_account == account
-                    and entry_container == container
-                    and entry_blob.startswith(blob)
-                )
-                req = Request(
-                    url=azure.build_url(
-                        account,
-                        "/{container}/{blob}",
-                        container=container,
-                        blob=entry_blob,
-                    ),
-                    method="DELETE",
-                    # 404 is allowed in case a failed request successfully deleted the file
-                    # before erroring out
-                    success_codes=(202, 404),
-                )
-                _execute_azure_api_request(req)
+        for entry in _azure_list_blobs(path):
+            entry_slash_path = _get_slash_path(entry)
+            entry_account, entry_container, entry_blob = azure.split_path(
+                entry_slash_path
+            )
+            assert (
+                entry_account == account
+                and entry_container == container
+                and entry_blob.startswith(blob)
+            )
+            req = Request(
+                url=azure.build_url(
+                    account, "/{container}/{blob}", container=container, blob=entry_blob
+                ),
+                method="DELETE",
+                # 404 is allowed in case a failed request successfully deleted the file
+                # before erroring out
+                success_codes=(202, 404),
+            )
+            _execute_azure_api_request(req)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -2387,92 +2387,60 @@ def walk(
                 cur = dq.popleft()
                 assert cur.endswith("/")
                 if _is_gcp_path(top):
-                    bucket, blob = gcp.split_path(cur)
-                    it = _create_gcp_page_iterator(
-                        url=gcp.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
-                        method="GET",
-                        params=dict(delimiter="/", prefix=blob),
-                    )
-                    get_entries = functools.partial(_gcp_get_entries, bucket)
+                    it = _gcp_list_blobs(cur, delimiter="/")
                 elif _is_azure_path(top):
-                    account, container, blob = azure.split_path(cur)
-                    it = _create_azure_page_iterator(
-                        url=azure.build_url(
-                            account, "/{container}", container=container
-                        ),
-                        method="GET",
-                        params=dict(
-                            comp="list", restype="container", delimiter="/", prefix=blob
-                        ),
-                    )
-                    get_entries = functools.partial(
-                        _azure_get_entries, account, container
-                    )
+                    it = _azure_list_blobs(cur, delimiter="/")
                 else:
                     raise Error(f"Unrecognized path: '{top}'")
                 dirnames = []
                 filenames = []
-                for result in it:
-                    for entry in get_entries(result):
-                        entry_path = _get_slash_path(entry)
-                        if entry_path == cur:
-                            continue
-                        if entry.is_dir:
-                            dirnames.append(entry.name)
-                        else:
-                            filenames.append(entry.name)
+                for entry in it:
+                    entry_path = _get_slash_path(entry)
+                    if entry_path == cur:
+                        continue
+                    if entry.is_dir:
+                        dirnames.append(entry.name)
+                    else:
+                        filenames.append(entry.name)
                 yield (_strip_slash(cur), dirnames, filenames)
                 dq.extend(join(cur, dirname) + "/" for dirname in dirnames)
         else:
             if _is_gcp_path(top):
-                bucket, blob = gcp.split_path(top)
-                it = _create_gcp_page_iterator(
-                    url=gcp.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
-                    method="GET",
-                    params=dict(prefix=blob),
-                )
-                get_entries = functools.partial(_gcp_get_entries, bucket)
+                it = _gcp_list_blobs(top)
             elif _is_azure_path(top):
-                account, container, blob = azure.split_path(top)
-                it = _create_azure_page_iterator(
-                    url=azure.build_url(account, "/{container}", container=container),
-                    method="GET",
-                    params=dict(comp="list", restype="container", prefix=blob),
-                )
-                get_entries = functools.partial(_azure_get_entries, account, container)
+                it = _azure_list_blobs(top)
             else:
                 raise Error(f"Unrecognized path: '{top}'")
 
             cur = []
             dirnames_stack = [[]]
             filenames_stack = [[]]
-            for result in it:
-                for entry in get_entries(result):
-                    entry_slash_path = _get_slash_path(entry)
-                    if entry_slash_path == top:
-                        continue
-                    relpath = entry_slash_path[len(top) :]
-                    parts = relpath.split("/")
-                    dirpath = parts[:-1]
-                    if dirpath != cur:
-                        # pop directories from the current path until we match the prefix of this new path
-                        while cur != dirpath[: len(cur)]:
-                            yield (
-                                top + "/".join(cur),
-                                dirnames_stack.pop(),
-                                filenames_stack.pop(),
-                            )
-                            cur.pop()
-                        # push directories from the new path until the current path matches it
-                        while cur != dirpath:
-                            dirname = dirpath[len(cur)]
-                            cur.append(dirname)
-                            filenames_stack.append([])
-                            # add this to child dir to the list of dirs for the parent
-                            dirnames_stack[-1].append(dirname)
-                            dirnames_stack.append([])
-                    if entry.is_file:
-                        filenames_stack[-1].append(entry.name)
+            for entry in it:
+                entry_slash_path = _get_slash_path(entry)
+                if entry_slash_path == top:
+                    continue
+                relpath = entry_slash_path[len(top) :]
+                parts = relpath.split("/")
+                dirpath = parts[:-1]
+                if dirpath != cur:
+                    # pop directories from the current path until we match the prefix of this new path
+                    while cur != dirpath[: len(cur)]:
+                        yield (
+                            top + "/".join(cur),
+                            dirnames_stack.pop(),
+                            filenames_stack.pop(),
+                        )
+                        cur.pop()
+                    # push directories from the new path until the current path matches it
+                    while cur != dirpath:
+                        dirname = dirpath[len(cur)]
+                        cur.append(dirname)
+                        filenames_stack.append([])
+                        # add this to child dir to the list of dirs for the parent
+                        dirnames_stack[-1].append(dirname)
+                        dirnames_stack.append([])
+                if entry.is_file:
+                    filenames_stack[-1].append(entry.name)
             while len(cur) > 0:
                 yield (top + "/".join(cur), dirnames_stack.pop(), filenames_stack.pop())
                 cur.pop()

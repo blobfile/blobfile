@@ -8,6 +8,8 @@ import datetime
 import hashlib
 import socket
 import binascii
+import math
+import concurrent.futures
 from typing import Mapping, Dict, Any, Optional, Tuple, List
 
 from Cryptodome.Signature import pkcs1_15
@@ -16,7 +18,19 @@ from Cryptodome.PublicKey import RSA
 import urllib3
 
 from blobfile import _common as common
-from blobfile._common import Request, Error, Stat, GCP_BASE_URL, Context, TokenManager
+from blobfile._common import (
+    Request,
+    Error,
+    Stat,
+    GCP_BASE_URL,
+    Context,
+    TokenManager,
+    RequestFailure,
+    RestartableStreamingWriteFailure,
+    BaseStreamingReadFile,
+    BaseStreamingWriteFile,
+    FileBody,
+)
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
 
@@ -357,9 +371,6 @@ def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
         raise Error(err)
 
 
-access_token_manager = TokenManager(_get_access_token)
-
-
 def execute_api_request(ctx: Context, req: Request) -> urllib3.HTTPResponse:
     def build_req() -> Request:
         return create_api_request(
@@ -367,3 +378,229 @@ def execute_api_request(ctx: Context, req: Request) -> urllib3.HTTPResponse:
         )
 
     return common.execute_request(ctx, build_req)
+
+
+class StreamingReadFile(BaseStreamingReadFile):
+    def __init__(self, ctx: Context, path: str) -> None:
+        st = maybe_stat(ctx, path)
+        if st is None:
+            raise FileNotFoundError(f"No such file or bucket: '{path}'")
+        super().__init__(ctx=ctx, path=path, size=st.size)
+
+    def _request_chunk(
+        self, streaming: bool, start: int, end: Optional[int] = None
+    ) -> urllib3.response.HTTPResponse:
+        bucket, name = split_path(self._path)
+        req = Request(
+            url=build_url("/storage/v1/b/{bucket}/o/{name}", bucket=bucket, name=name),
+            method="GET",
+            params=dict(alt="media"),
+            headers={"Range": common.calc_range(start=start, end=end)},
+            success_codes=(206, 416),
+            # if we are streaming the data, make
+            # sure we don't preload it
+            preload_content=not streaming,
+        )
+        return execute_api_request(self._ctx, req)
+
+
+class StreamingWriteFile(BaseStreamingWriteFile):
+    def __init__(self, ctx: Context, path: str) -> None:
+        bucket, name = split_path(path)
+        req = Request(
+            url=build_url(
+                "/upload/storage/v1/b/{bucket}/o?uploadType=resumable", bucket=bucket
+            ),
+            method="POST",
+            data=dict(name=name),
+            success_codes=(200, 400, 404),
+        )
+        resp = execute_api_request(ctx, req)
+        if resp.status in (400, 404):
+            raise FileNotFoundError(f"No such file or bucket: '{path}'")
+        self._upload_url = resp.headers["Location"]
+        # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
+        assert ctx.google_write_chunk_size % (256 * 1024) == 0
+        super().__init__(ctx=ctx, chunk_size=ctx.google_write_chunk_size)
+
+    def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
+        start = self._offset
+        end = self._offset + len(chunk) - 1
+
+        total_size = "*"
+        if finalize:
+            total_size = self._offset + len(chunk)
+            assert len(self._buf) == 0
+
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "Content-Range": f"bytes {start}-{end}/{total_size}",
+        }
+        if len(chunk) == 0 and finalize:
+            # this is not mentioned in the docs but appears to be allowed
+            # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
+            headers["Content-Range"] = f"bytes */{total_size}"
+
+        req = Request(
+            url=self._upload_url,
+            data=chunk,
+            headers=headers,
+            method="PUT",
+            success_codes=(200, 201) if finalize else (308,),
+        )
+
+        try:
+            execute_api_request(self._ctx, req)
+        except RequestFailure as e:
+            # https://cloud.google.com/storage/docs/resumable-uploads#practices
+            if e.response_status in (404, 410):
+                raise RestartableStreamingWriteFailure(
+                    message=e.message,
+                    request_string=e.request_string,
+                    response_status=e.response_status,
+                    error=e.error,
+                    error_description=e.error_description,
+                )
+            else:
+                raise
+
+
+def maybe_stat(ctx: Context, path: str) -> Optional[Stat]:
+    bucket, blob = split_path(path)
+    if blob == "":
+        return None
+    req = Request(
+        url=build_url("/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob),
+        method="GET",
+        success_codes=(200, 404),
+    )
+    resp = execute_api_request(ctx, req)
+    if resp.status != 200:
+        return None
+    return make_stat(json.loads(resp.data))
+
+
+def remove(ctx: Context, path: str) -> bool:
+    bucket, blob = split_path(path)
+    if blob == "":
+        raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
+    req = Request(
+        url=build_url("/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob),
+        method="DELETE",
+        success_codes=(204, 404),
+    )
+    resp = execute_api_request(ctx, req)
+    return resp.status == 204
+
+
+def maybe_update_md5(ctx: Context, path: str, generation: str, hexdigest: str) -> bool:
+    bucket, blob = split_path(path)
+    req = Request(
+        url=build_url("/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob),
+        method="PATCH",
+        params=dict(ifGenerationMatch=generation),
+        # it looks like we can't set the underlying md5Hash, only the metadata fields
+        data=dict(metadata={"md5": hexdigest}),
+        success_codes=(200, 404, 412),
+    )
+
+    resp = execute_api_request(ctx, req)
+    return resp.status == 200
+
+
+def _upload_part(ctx: Context, path: str, start: int, size: int, dst: str) -> str:
+    bucket, blob = split_path(dst)
+    req = Request(
+        url=build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
+        method="POST",
+        params=dict(uploadType="media", name=blob),
+        data=FileBody(path, start=start, end=start + size),
+        success_codes=(200,),
+    )
+    resp = execute_api_request(ctx, req)
+    metadata = json.loads(resp.data)
+    return metadata["generation"]
+
+
+def _delete_part(ctx: Context, bucket: str, name: str) -> None:
+    req = Request(
+        url=build_url("/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=name),
+        method="DELETE",
+        success_codes=(204, 404),
+    )
+    execute_api_request(ctx, req)
+
+
+def parallel_upload(
+    ctx: Context,
+    executor: concurrent.futures.Executor,
+    src: str,
+    dst: str,
+    return_md5: bool,
+) -> Optional[str]:
+    with open(src, "rb") as f:
+        md5_digest = common.block_md5(f)
+
+    s = os.stat(src)
+
+    dstbucket, dstname = split_path(dst)
+    source_objects = []
+    object_names = []
+    max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
+    part_size = max(
+        math.ceil(s.st_size / max_workers), common.PARALLEL_COPY_MINIMUM_PART_SIZE
+    )
+    i = 0
+    start = 0
+    futures = []
+    while start < s.st_size:
+        suffix = f".part.{i}"
+        future = executor.submit(
+            _upload_part,
+            ctx,
+            src,
+            start,
+            min(part_size, s.st_size - start),
+            dst + suffix,
+        )
+        futures.append(future)
+        object_names.append(dstname + suffix)
+        i += 1
+        start += part_size
+    for name, future in zip(object_names, futures):
+        generation = future.result()
+        source_objects.append(
+            {
+                "name": name,
+                "generation": generation,
+                "objectPreconditions": {"ifGenerationMatch": generation},
+            }
+        )
+
+    req = Request(
+        url=build_url(
+            "/storage/v1/b/{destinationBucket}/o/{destinationObject}/compose",
+            destinationBucket=dstbucket,
+            destinationObject=dstname,
+        ),
+        method="POST",
+        data={"sourceObjects": source_objects},
+        success_codes=(200,),
+    )
+    resp = execute_api_request(ctx, req)
+    metadata = json.loads(resp.data)
+    hexdigest = binascii.hexlify(md5_digest).decode("utf8")
+    maybe_update_md5(ctx, dst, metadata["generation"], hexdigest)
+
+    # delete parts in parallel
+    delete_futures = []
+    for name in object_names:
+        future = executor.submit(_delete_part, ctx, dstbucket, name)
+        delete_futures.append(future)
+    for future in delete_futures:
+        future.result()
+
+    return hexdigest if return_md5 else None
+
+
+access_token_manager = TokenManager(_get_access_token)

@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import random
@@ -10,6 +11,7 @@ import socket
 import platform
 from typing import (
     Callable,
+    Dict,
     Iterator,
     Mapping,
     NamedTuple,
@@ -26,6 +28,8 @@ import xmltodict
 USE_STREAMING_READ_REQUEST = True
 
 CHUNK_SIZE = 2 ** 20
+
+PARALLEL_COPY_MINIMUM_PART_SIZE = 32 * 2 ** 20
 
 EARLY_EXPIRATION_SECONDS = 5 * 60
 
@@ -308,6 +312,15 @@ class Context:
                 # self.http = urllib3.ProxyManager('http://localhost:8080/', ssl_context=context)
         return self.http
 
+    # we don't want to serialize locks or other unpicklable objects
+    # when this object is passed to concurrent.futures executors
+    def __getstate__(self) -> Dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items() if not k.startswith("http")}
+
+    def __setstate__(self, state: Any) -> None:
+        self.__init__()
+        self.__dict__.update(state)
+
 
 class WindowedFile:
     """
@@ -500,13 +513,14 @@ class TokenManager:
             return self._tokens[key]
 
 
-class StreamingWriteFile(io.BufferedIOBase):
+class BaseStreamingWriteFile(io.BufferedIOBase):
     def __init__(self, ctx: Context, chunk_size: int) -> None:
         # current writing byte offset in the file
         self._offset = 0
         # contents waiting to be uploaded
         self._buf = b""
         self._chunk_size = chunk_size
+        self._ctx = ctx
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         raise NotImplementedError
@@ -556,7 +570,7 @@ class StreamingWriteFile(io.BufferedIOBase):
         raise io.UnsupportedOperation("not readable")
 
 
-class StreamingReadFile(io.RawIOBase):
+class BaseStreamingReadFile(io.RawIOBase):
     def __init__(self, ctx: Context, path: str, size: int) -> None:
         super().__init__()
         self._ctx = ctx
@@ -710,3 +724,30 @@ class StreamingReadFile(io.RawIOBase):
 
     def seekable(self) -> bool:
         return True
+
+
+# this should by BinaryIO, but that produces an error error: Argument of type 'IO[Any]' cannot be assigned to parameter 'f' of type 'BinaryIO' when used with open()
+def block_md5(f: Any) -> bytes:
+    m = hashlib.md5()
+    while True:
+        block = f.read(CHUNK_SIZE)
+        if block == b"":
+            break
+        m.update(block)
+    return m.digest()
+
+
+def calc_range(start: Optional[int] = None, end: Optional[int] = None) -> str:
+    # https://cloud.google.com/storage/docs/xml-api/get-object-download
+    # oddly range requests are not mentioned in the JSON API, only in the XML api
+    if start is not None and end is not None:
+        return f"bytes={start}-{end-1}"
+    elif start is not None:
+        return f"bytes={start}-"
+    elif end is not None:
+        if end > 0:
+            return f"bytes=0-{end-1}"
+        else:
+            return f"bytes=-{-int(end)}"
+    else:
+        raise Error("Invalid range")

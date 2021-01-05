@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 import tempfile
 import hashlib
-import base64
 import io
 import urllib.parse
 import time
@@ -16,7 +15,6 @@ import re
 import shutil
 import collections
 import itertools
-import random
 import math
 import concurrent.futures
 import multiprocessing as mp
@@ -46,47 +44,26 @@ if TYPE_CHECKING:
     from typing import Literal
 
 
-import urllib3
 import xmltodict
 import filelock
 
 from blobfile import _gcp as gcp, _azure as azure, _common as common
 from blobfile._common import (
     Request,
-    FileBody,
     Error,
-    RequestFailure,
     RestartableStreamingWriteFailure,
-    ConcurrentWriteFailure,
     Stat,
     DirEntry,
     Context,
     INVALID_HOSTNAME_STATUS,
-    StreamingReadFile,
-    StreamingWriteFile,
     CHUNK_SIZE,
 )
-
-# max 100MB https://docs.microsoft.com/en-us/rest/api/storageservices/put-block#remarks
-# there is a preview version of the API that allows this to be 4000MiB
-AZURE_MAX_BLOCK_SIZE = 100_000_000
-AZURE_BLOCK_COUNT_LIMIT = 50_000
-PARALLEL_COPY_MINIMUM_PART_SIZE = 32 * 2 ** 20
 
 # https://cloud.google.com/storage/docs/naming
 # https://www.w3.org/TR/xml/#charsets
 INVALID_CHARS = (
     set().union(range(0x0, 0x9)).union(range(0xB, 0xE)).union(range(0xE, 0x20))
 )
-
-AZURE_RESPONSE_HEADER_TO_REQUEST_HEADER = {
-    "Cache-Control": "x-ms-blob-cache-control",
-    "Content-Type": "x-ms-blob-content-type",
-    "Content-MD5": "x-ms-blob-content-md5",
-    "Content-Encoding": "x-ms-blob-content-encoding",
-    "Content-Language": "x-ms-blob-content-language",
-    "Content-Disposition": "x-ms-blob-content-disposition",
-}
 
 ESCAPED_COLON = "___COLON___"
 
@@ -183,7 +160,11 @@ def _download_chunk(src: str, dst: str, start: int, size: int) -> None:
 
 
 def _parallel_download(
-    executor: concurrent.futures.Executor, src: str, dst: str, return_md5: bool
+    ctx: Context,
+    executor: concurrent.futures.Executor,
+    src: str,
+    dst: str,
+    return_md5: bool,
 ) -> Optional[str]:
     s = stat(src)
 
@@ -193,7 +174,9 @@ def _parallel_download(
         f.write(b"\0")
 
     max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
-    part_size = max(math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE)
+    part_size = max(
+        math.ceil(s.size / max_workers), common.PARALLEL_COPY_MINIMUM_PART_SIZE
+    )
     start = 0
     futures = []
     while start < s.size:
@@ -207,197 +190,7 @@ def _parallel_download(
 
     if return_md5:
         with BlobFile(dst, "rb") as f:
-            return binascii.hexlify(_block_md5(f)).decode("utf8")
-
-
-def _azure_upload_chunk(
-    path: str, start: int, size: int, url: str, block_id: str
-) -> None:
-    req = Request(
-        url=url,
-        method="PUT",
-        params=dict(comp="block", blockid=block_id),
-        # this needs to be specified since we use a file object for the data
-        headers={"Content-Length": str(size)},
-        data=FileBody(path, start=start, end=start + size),
-        success_codes=(201,),
-    )
-    azure.execute_api_request(_context, req)
-
-
-def _azure_finalize_blob(
-    path: str, url: str, block_ids: List[str], md5_digest: bytes
-) -> None:
-    body = {"BlockList": {"Latest": block_ids}}
-    req = Request(
-        url=url,
-        method="PUT",
-        # azure does not calculate md5s for us, we have to do that manually
-        # https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
-        headers={"x-ms-blob-content-md5": base64.b64encode(md5_digest).decode("utf8")},
-        params=dict(comp="blocklist"),
-        data=body,
-        success_codes=(201, 400),
-    )
-    resp = azure.execute_api_request(_context, req)
-    if resp.status == 400:
-        result = xmltodict.parse(resp.data)
-        if result["Error"]["Code"] == "InvalidBlockList":
-            # the most likely way this could happen is if the file was deleted while
-            # we were uploading, so assume that is what happened
-            # this could be interpreted as a sort of RestartableStreamingWriteFailure but
-            # that could result in two processes fighting while uploading the file
-            raise ConcurrentWriteFailure.create_from_request_response(
-                f"Invalid block list, most likely a concurrent writer wrote to the same path: `{path}`",
-                request=req,
-                response=resp,
-            )
-        else:
-            raise RequestFailure.create_from_request_response(
-                message=f"unexpected status {resp.status}", request=req, response=resp
-            )
-
-
-def _azure_block_index_to_block_id(index: int, upload_id: int) -> str:
-    assert index < 2 ** 17
-    id_plus_index = (upload_id << 17) + index
-    assert id_plus_index < 2 ** 64
-    return base64.b64encode(id_plus_index.to_bytes(8, byteorder="big")).decode("utf8")
-
-
-def _azure_parallel_upload(
-    executor: concurrent.futures.Executor, src: str, dst: str, return_md5: bool
-) -> Optional[str]:
-    assert _is_local_path(src) and _is_azure_path(dst)
-
-    with BlobFile(src, "rb") as f:
-        md5_digest = _block_md5(f)
-
-    account, container, blob = azure.split_path(dst)
-    dst_url = azure.build_url(
-        account, "/{container}/{blob}", container=container, blob=blob
-    )
-
-    upload_id = random.randint(0, 2 ** 47 - 1)
-    s = stat(src)
-    block_ids = []
-    max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
-    part_size = min(
-        max(math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE),
-        AZURE_MAX_BLOCK_SIZE,
-    )
-    i = 0
-    start = 0
-    futures = []
-    while start < s.size:
-        block_id = _azure_block_index_to_block_id(i, upload_id)
-        future = executor.submit(
-            _azure_upload_chunk,
-            src,
-            start,
-            min(_context.azure_write_chunk_size, s.size - start),
-            dst_url,
-            block_id,
-        )
-        futures.append(future)
-        block_ids.append(block_id)
-        i += 1
-        start += part_size
-    for future in futures:
-        future.result()
-
-    _azure_finalize_blob(
-        path=dst, url=dst_url, block_ids=block_ids, md5_digest=md5_digest
-    )
-    return binascii.hexlify(md5_digest).decode("utf8") if return_md5 else None
-
-
-def _gcp_upload_part(path: str, start: int, size: int, dst: str) -> str:
-    bucket, blob = gcp.split_path(dst)
-    req = Request(
-        url=gcp.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
-        method="POST",
-        params=dict(uploadType="media", name=blob),
-        data=FileBody(path, start=start, end=start + size),
-        success_codes=(200,),
-    )
-    resp = gcp.execute_api_request(_context, req)
-    metadata = json.loads(resp.data)
-    return metadata["generation"]
-
-
-def _gcp_delete_part(bucket: str, name: str) -> None:
-    req = Request(
-        url=gcp.build_url(
-            "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=name
-        ),
-        method="DELETE",
-        success_codes=(204, 404),
-    )
-    gcp.execute_api_request(_context, req)
-
-
-def _gcp_parallel_upload(
-    executor: concurrent.futures.Executor, src: str, dst: str, return_md5: bool
-) -> Optional[str]:
-    assert _is_local_path(src) and _is_gcp_path(dst)
-
-    with BlobFile(src, "rb") as f:
-        md5_digest = _block_md5(f)
-
-    s = stat(src)
-
-    dstbucket, dstname = gcp.split_path(dst)
-    source_objects = []
-    object_names = []
-    max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
-    part_size = max(math.ceil(s.size / max_workers), PARALLEL_COPY_MINIMUM_PART_SIZE)
-    i = 0
-    start = 0
-    futures = []
-    while start < s.size:
-        suffix = f".part.{i}"
-        future = executor.submit(
-            _gcp_upload_part, src, start, min(part_size, s.size - start), dst + suffix
-        )
-        futures.append(future)
-        object_names.append(dstname + suffix)
-        i += 1
-        start += part_size
-    for name, future in zip(object_names, futures):
-        generation = future.result()
-        source_objects.append(
-            {
-                "name": name,
-                "generation": generation,
-                "objectPreconditions": {"ifGenerationMatch": generation},
-            }
-        )
-
-    req = Request(
-        url=gcp.build_url(
-            "/storage/v1/b/{destinationBucket}/o/{destinationObject}/compose",
-            destinationBucket=dstbucket,
-            destinationObject=dstname,
-        ),
-        method="POST",
-        data={"sourceObjects": source_objects},
-        success_codes=(200,),
-    )
-    resp = gcp.execute_api_request(_context, req)
-    metadata = json.loads(resp.data)
-    hexdigest = binascii.hexlify(md5_digest).decode("utf8")
-    _gcp_maybe_update_md5(dst, metadata["generation"], hexdigest)
-
-    # delete parts in parallel
-    delete_futures = []
-    for name in object_names:
-        future = executor.submit(_gcp_delete_part, dstbucket, name)
-        delete_futures.append(future)
-    for future in delete_futures:
-        future.result()
-
-    return hexdigest if return_md5 else None
+            return binascii.hexlify(common.block_md5(f)).decode("utf8")
 
 
 def copy(
@@ -538,7 +331,7 @@ def copy(
             raise Error(f"Invalid copy status: '{copy_status}'")
         if return_md5:
             # if the file is the same one that we just copied, return the stored MD5
-            st = _azure_maybe_stat(dst)
+            st = azure.maybe_stat(_context, dst)
             if st is not None and st.version == etag:
                 return st.md5
         return
@@ -549,17 +342,19 @@ def copy(
             copy_fn = _parallel_download
 
         if _is_local_path(src) and _is_azure_path(dst):
-            copy_fn = _azure_parallel_upload
+            copy_fn = azure.parallel_upload
 
         if _is_local_path(src) and _is_gcp_path(dst):
-            copy_fn = _gcp_parallel_upload
+            copy_fn = gcp.parallel_upload
 
         if copy_fn is not None:
             if parallel_executor is None:
                 with concurrent.futures.ProcessPoolExecutor() as executor:
-                    return copy_fn(executor, src, dst, return_md5=return_md5)
+                    return copy_fn(_context, executor, src, dst, return_md5=return_md5)
             else:
-                return copy_fn(parallel_executor, src, dst, return_md5=return_md5)
+                return copy_fn(
+                    _context, parallel_executor, src, dst, return_md5=return_md5
+                )
 
     for attempt, backoff in enumerate(common.exponential_sleep_generator()):
         try:
@@ -592,22 +387,6 @@ def copy(
                     f"error {err} when executing a streaming write to {dst} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
                 )
             time.sleep(backoff)
-
-
-def _calc_range(start: Optional[int] = None, end: Optional[int] = None) -> str:
-    # https://cloud.google.com/storage/docs/xml-api/get-object-download
-    # oddly range requests are not mentioned in the JSON API, only in the XML api
-    if start is not None and end is not None:
-        return f"bytes={start}-{end-1}"
-    elif start is not None:
-        return f"bytes={start}-"
-    elif end is not None:
-        if end > 0:
-            return f"bytes=0-{end-1}"
-        else:
-            return f"bytes=-{-int(end)}"
-    else:
-        raise Error("Invalid range")
 
 
 def _create_gcp_page_iterator(
@@ -697,40 +476,6 @@ def _azure_get_entries(
                 yield _entry_from_path_stat(path, azure.make_stat(props))
 
 
-def _gcp_maybe_stat(path: str) -> Optional[Stat]:
-    bucket, blob = gcp.split_path(path)
-    if blob == "":
-        return None
-    req = Request(
-        url=gcp.build_url(
-            "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
-        ),
-        method="GET",
-        success_codes=(200, 404),
-    )
-    resp = gcp.execute_api_request(_context, req)
-    if resp.status != 200:
-        return None
-    return gcp.make_stat(json.loads(resp.data))
-
-
-def _azure_maybe_stat(path: str) -> Optional[Stat]:
-    account, container, blob = azure.split_path(path)
-    if blob == "":
-        return None
-    req = Request(
-        url=azure.build_url(
-            account, "/{container}/{blob}", container=container, blob=blob
-        ),
-        method="HEAD",
-        success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
-    )
-    resp = azure.execute_api_request(_context, req)
-    if resp.status != 200:
-        return None
-    return azure.make_stat(resp.headers)
-
-
 def exists(path: str) -> bool:
     """
     Return true if that path exists (either as a file or a directory)
@@ -738,12 +483,12 @@ def exists(path: str) -> bool:
     if _is_local_path(path):
         return os.path.exists(path)
     elif _is_gcp_path(path):
-        st = _gcp_maybe_stat(path)
+        st = gcp.maybe_stat(_context, path)
         if st is not None:
             return True
         return isdir(path)
     elif _is_azure_path(path):
-        st = _azure_maybe_stat(path)
+        st = azure.maybe_stat(_context, path)
         if st is not None:
             return True
         return isdir(path)
@@ -1286,14 +1031,14 @@ def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
 
 def _get_entry(path: str) -> Optional[DirEntry]:
     if _is_gcp_path(path):
-        st = _gcp_maybe_stat(path)
+        st = gcp.maybe_stat(_context, path)
         if st is not None:
             if path.endswith("/"):
                 return _entry_from_dirpath(path)
             else:
                 return _entry_from_path_stat(path, st)
     elif _is_azure_path(path):
-        st = _azure_maybe_stat(path)
+        st = azure.maybe_stat(_context, path)
         if st is not None:
             if path.endswith("/"):
                 return _entry_from_dirpath(path)
@@ -1373,40 +1118,16 @@ def remove(path: str) -> None:
     elif _is_gcp_path(path):
         if path.endswith("/"):
             raise IsADirectoryError(f"Is a directory: '{path}'")
-        bucket, blob = gcp.split_path(path)
-        if blob == "":
-            raise FileNotFoundError(
-                f"The system cannot find the path specified: '{path}'"
-            )
-        req = Request(
-            url=gcp.build_url(
-                "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
-            ),
-            method="DELETE",
-            success_codes=(204, 404),
-        )
-        resp = gcp.execute_api_request(_context, req)
-        if resp.status == 404:
+        ok = gcp.remove(_context, path)
+        if not ok:
             raise FileNotFoundError(
                 f"The system cannot find the path specified: '{path}'"
             )
     elif _is_azure_path(path):
         if path.endswith("/"):
             raise IsADirectoryError(f"Is a directory: '{path}'")
-        account, container, blob = azure.split_path(path)
-        if blob == "":
-            raise FileNotFoundError(
-                f"The system cannot find the path specified: '{path}'"
-            )
-        req = Request(
-            url=azure.build_url(
-                account, "/{container}/{blob}", container=container, blob=blob
-            ),
-            method="DELETE",
-            success_codes=(202, 404, INVALID_HOSTNAME_STATUS),
-        )
-        resp = azure.execute_api_request(_context, req)
-        if resp.status in (404, INVALID_HOSTNAME_STATUS):
+        ok = azure.remove(_context, path)
+        if not ok:
             raise FileNotFoundError(
                 f"The system cannot find the path specified: '{path}'"
             )
@@ -1489,12 +1210,12 @@ def stat(path: str) -> Stat:
             size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None, version=None
         )
     elif _is_gcp_path(path):
-        st = _gcp_maybe_stat(path)
+        st = gcp.maybe_stat(_context, path)
         if st is None:
             raise FileNotFoundError(f"No such file: '{path}'")
         return st
     elif _is_azure_path(path):
-        st = _azure_maybe_stat(path)
+        st = azure.maybe_stat(_context, path)
         if st is None:
             raise FileNotFoundError(f"No such file: '{path}'")
         return st
@@ -1819,74 +1540,6 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
         raise Error(f"Unrecognized path: '{path}'")
 
 
-def _block_md5(f: BinaryIO) -> bytes:
-    m = hashlib.md5()
-    while True:
-        block = f.read(CHUNK_SIZE)
-        if block == b"":
-            break
-        m.update(block)
-    return m.digest()
-
-
-def _azure_maybe_update_md5(path: str, etag: str, hexdigest: str) -> bool:
-    account, container, blob = azure.split_path(path)
-    req = Request(
-        url=azure.build_url(
-            account, "/{container}/{blob}", container=container, blob=blob
-        ),
-        method="HEAD",
-        headers={"If-Match": etag},
-        success_codes=(200, 404, 412),
-    )
-    resp = azure.execute_api_request(_context, req)
-    if resp.status in (404, 412):
-        return False
-
-    # these will be cleared if not provided, there does not appear to be a PATCH method like for GCS
-    # https://docs.microsoft.com/en-us/rest/api/storageservices/set-blob-properties#remarks
-    headers: Dict[str, str] = {}
-    for src, dst in AZURE_RESPONSE_HEADER_TO_REQUEST_HEADER.items():
-        if src in resp.headers:
-            headers[dst] = resp.headers[src]
-    headers["x-ms-blob-content-md5"] = base64.b64encode(
-        binascii.unhexlify(hexdigest)
-    ).decode("utf8")
-
-    req = Request(
-        url=azure.build_url(
-            account, "/{container}/{blob}", container=container, blob=blob
-        ),
-        method="PUT",
-        params=dict(comp="properties"),
-        headers={
-            **headers,
-            # https://docs.microsoft.com/en-us/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations
-            "If-Match": etag,
-        },
-        success_codes=(200, 404, 412),
-    )
-    resp = azure.execute_api_request(_context, req)
-    return resp.status == 200
-
-
-def _gcp_maybe_update_md5(path: str, generation: str, hexdigest: str) -> bool:
-    bucket, blob = gcp.split_path(path)
-    req = Request(
-        url=gcp.build_url(
-            "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
-        ),
-        method="PATCH",
-        params=dict(ifGenerationMatch=generation),
-        # it looks like we can't set the underlying md5Hash, only the metadata fields
-        data=dict(metadata={"md5": hexdigest}),
-        success_codes=(200, 404, 412),
-    )
-
-    resp = gcp.execute_api_request(_context, req)
-    return resp.status == 200
-
-
 def md5(path: str) -> str:
     """
     Get the MD5 hash for a file in hexdigest format.
@@ -1897,7 +1550,7 @@ def md5(path: str) -> str:
     For local paths, this must always calculate the MD5.
     """
     if _is_gcp_path(path):
-        st = _gcp_maybe_stat(path)
+        st = gcp.maybe_stat(_context, path)
         if st is None:
             raise FileNotFoundError(f"No such file: '{path}'")
 
@@ -1907,13 +1560,13 @@ def md5(path: str) -> str:
 
         # this is probably a composite object, calculate the md5 and store it on the file if the file has not changed
         with BlobFile(path, "rb") as f:
-            result = _block_md5(f).hex()
+            result = common.block_md5(f).hex()
 
         assert st.version is not None
-        _gcp_maybe_update_md5(path, st.version, result)
+        gcp.maybe_update_md5(_context, path, st.version, result)
         return result
     elif _is_azure_path(path):
-        st = _azure_maybe_stat(path)
+        st = azure.maybe_stat(_context, path)
         if st is None:
             raise FileNotFoundError(f"No such file: '{path}'")
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
@@ -1921,321 +1574,13 @@ def md5(path: str) -> str:
         if h is None:
             # md5 is missing, calculate it and store it on file if the file has not changed
             with BlobFile(path, "rb") as f:
-                h = _block_md5(f).hex()
+                h = common.block_md5(f).hex()
             assert st.version is not None
-            _azure_maybe_update_md5(path, st.version, h)
+            azure.maybe_update_md5(_context, path, st.version, h)
         return h
     else:
         with BlobFile(path, "rb") as f:
-            return _block_md5(f).hex()
-
-
-class _GoogleStreamingReadFile(StreamingReadFile):
-    def __init__(self, path: str) -> None:
-        st = _gcp_maybe_stat(path)
-        if st is None:
-            raise FileNotFoundError(f"No such file or bucket: '{path}'")
-        super().__init__(ctx=_context, path=path, size=st.size)
-
-    def _request_chunk(
-        self, streaming: bool, start: int, end: Optional[int] = None
-    ) -> urllib3.response.HTTPResponse:
-        bucket, name = gcp.split_path(self._path)
-        req = Request(
-            url=gcp.build_url(
-                "/storage/v1/b/{bucket}/o/{name}", bucket=bucket, name=name
-            ),
-            method="GET",
-            params=dict(alt="media"),
-            headers={"Range": _calc_range(start=start, end=end)},
-            success_codes=(206, 416),
-            # if we are streaming the data, make
-            # sure we don't preload it
-            preload_content=not streaming,
-        )
-        return gcp.execute_api_request(_context, req)
-
-
-class _AzureStreamingReadFile(StreamingReadFile):
-    def __init__(self, path: str) -> None:
-        st = _azure_maybe_stat(path)
-        if st is None:
-            raise FileNotFoundError(f"No such file or directory: '{path}'")
-        super().__init__(ctx=_context, path=path, size=st.size)
-
-    def _request_chunk(
-        self, streaming: bool, start: int, end: Optional[int] = None
-    ) -> urllib3.response.HTTPResponse:
-        account, container, blob = azure.split_path(self._path)
-        req = Request(
-            url=azure.build_url(
-                account, "/{container}/{blob}", container=container, blob=blob
-            ),
-            method="GET",
-            headers={"Range": _calc_range(start=start, end=end)},
-            success_codes=(206, 416),
-            # if we are streaming the data, make
-            # sure we don't preload it
-            preload_content=not streaming,
-        )
-        resp = azure.execute_api_request(_context, req)
-        return resp
-
-
-class _GoogleStreamingWriteFile(StreamingWriteFile):
-    def __init__(self, path: str) -> None:
-        bucket, name = gcp.split_path(path)
-        req = Request(
-            url=gcp.build_url(
-                "/upload/storage/v1/b/{bucket}/o?uploadType=resumable", bucket=bucket
-            ),
-            method="POST",
-            data=dict(name=name),
-            success_codes=(200, 400, 404),
-        )
-        resp = gcp.execute_api_request(_context, req)
-        if resp.status in (400, 404):
-            raise FileNotFoundError(f"No such file or bucket: '{path}'")
-        self._upload_url = resp.headers["Location"]
-        # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
-        assert _context.google_write_chunk_size % (256 * 1024) == 0
-        super().__init__(ctx=_context, chunk_size=_context.google_write_chunk_size)
-
-    def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
-        start = self._offset
-        end = self._offset + len(chunk) - 1
-
-        total_size = "*"
-        if finalize:
-            total_size = self._offset + len(chunk)
-            assert len(self._buf) == 0
-
-        headers = {
-            "Content-Type": "application/octet-stream",
-            "Content-Range": f"bytes {start}-{end}/{total_size}",
-        }
-        if len(chunk) == 0 and finalize:
-            # this is not mentioned in the docs but appears to be allowed
-            # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
-            headers["Content-Range"] = f"bytes */{total_size}"
-
-        req = Request(
-            url=self._upload_url,
-            data=chunk,
-            headers=headers,
-            method="PUT",
-            success_codes=(200, 201) if finalize else (308,),
-        )
-
-        try:
-            gcp.execute_api_request(_context, req)
-        except RequestFailure as e:
-            # https://cloud.google.com/storage/docs/resumable-uploads#practices
-            if e.response_status in (404, 410):
-                raise RestartableStreamingWriteFailure(
-                    message=e.message,
-                    request_string=e.request_string,
-                    response_status=e.response_status,
-                    error=e.error,
-                    error_description=e.error_description,
-                )
-            else:
-                raise
-
-
-def _clear_uncommitted_blocks(url: str, metadata: Dict[str, str]) -> None:
-    # to avoid leaking uncommitted blocks, we can do a Put Block List with
-    # all the existing blocks for a file
-    # this will change the last-modified timestamp and the etag
-    req = Request(
-        url=url, params=dict(comp="blocklist"), method="GET", success_codes=(200, 404)
-    )
-    resp = azure.execute_api_request(_context, req)
-    if resp.status != 200:
-        return
-
-    result = xmltodict.parse(resp.data)
-    if result["BlockList"]["CommittedBlocks"] is None:
-        return
-
-    blocks = result["BlockList"]["CommittedBlocks"]["Block"]
-    if isinstance(blocks, dict):
-        blocks = [blocks]
-
-    body = {"BlockList": {"Latest": [b["Name"] for b in blocks]}}
-    # make sure to preserve metadata for the file
-    headers: Dict[str, str] = {
-        k: v for k, v in metadata.items() if k.startswith("x-ms-meta-")
-    }
-    for src, dst in AZURE_RESPONSE_HEADER_TO_REQUEST_HEADER.items():
-        if src in metadata:
-            headers[dst] = metadata[src]
-    req = Request(
-        url=url,
-        method="PUT",
-        params=dict(comp="blocklist"),
-        headers={**headers, "If-Match": metadata["etag"]},
-        data=body,
-        success_codes=(201, 404, 412),
-    )
-    azure.execute_api_request(_context, req)
-
-
-class _AzureStreamingWriteFile(StreamingWriteFile):
-    def __init__(self, path: str) -> None:
-        self._path = path
-        account, container, blob = azure.split_path(path)
-        self._url = azure.build_url(
-            account, "/{container}/{blob}", container=container, blob=blob
-        )
-        # block blobs let you upload up to 100,000 "uncommitted" blocks with user-chosen block ids
-        # using the "Put Block" call
-        # you may then call "Put Block List" with up to 50,000 block ids of the blocks you
-        # want to be in the blob (50,000 is the max blocks per blob)
-        # all unused uncommitted blocks will be deleted
-        # uncommitted blocks also expire after a week if they are not committed
-        #
-        # since we use block blobs, there are a few ways we could implement this streaming write file
-        #
-        # method 1:
-        #   upload the first chunk of the file as block id "0", the second as block id "1" etc
-        #   when we are done writing the file, we call "Put Block List" using range(num_blocks) as
-        #   the block ids
-        #
-        #   this has the advantage that if our program crashes, the same block ids will be reused
-        #   for the next upload and so we'll never get more than 50,000 uncommitted blocks
-        #
-        #   in general, azure does not seem to support concurrent writers except maybe
-        #   for writing small files (GCS does to a limited extent through resumable upload sessions)
-        #
-        #   with method 1, if you have two writers:
-        #
-        #       writer 0: write block id "0"
-        #       writer 1: write block id "0"
-        #       writer 1: crash
-        #       writer 0: write block id "1"
-        #       writer 0: put block list ["0", "1"]
-        #
-        #   then you will end up with block "0" from writer 1 and block "1" from writer 0, which means
-        #   your file will be corrupted
-        #
-        #   this appears to be the method used by the azure python SDK
-        #
-        # method 2:
-        #   generate a random session id
-        #   upload the first chunk of the file as block id "<session id>-0",
-        #       the second block as "<session id>-1" etc
-        #   when we are done writing the file, call "Put Block List" using
-        #       [f"<session id>-{i}" for i in range(num_blocks)] as the block list
-        #
-        #   this has the advantage that we should not observe data corruption from concurrent writers
-        #       assuming that the session ids are unique, although whichever writer finishes first will
-        #       win, because calling "Put Block List" will delete all uncommitted blocks
-        #
-        #   this has the disadvantage that we can end up hitting the uncommitted block limit
-        #       1) with 100,000 concurrent writers, each one would write the first block, then all
-        #           would immediately hit the block limit and get 409 errors
-        #       2) with a single writer that crashes every time it writes the second block, it would
-        #           retry 100,000 times, then be unable to continue due to all the uncommitted blocks
-        #           it was generating
-        #
-        #   the workaround we use here is that whenever a file is opened for reading, we clear all
-        #       uncommitted blocks by calling "Put Block List" with the list of currently committed blocks
-        #
-        #   this seems to be reasonably fast in practice, and means that failure #2 should not be an issue
-        #
-        #   failure #1 could still happen with concurrent writers, but this should result only in a
-        #       confusing error message (409 error) instead of a ConcurrentWriteFailure, though we
-        #       could likely raise that error if we saw a 409 with the error RequestEntityTooLargeBlockCountExceedsLimit
-        #
-        #   this does change the behavior slightly, now the writer that will end up succeeding on "Put Block List"
-        #       is likely to be the last writer to open the file for writing, the others will fail
-        #       because their uncommitted blocks have been cleared
-        #
-        # it would be nice to replace this with a less odd method, but it's not obvious how
-        #   to do this on azure storage
-        #
-        # if there were upload sessions like GCS, this wouldn't be an issue
-        # if there was no uncommitted block limit, method 2 would work fine
-        # if blobs could automatically expire without having to add a container lifecycle rule
-        #   then we could upload to a temp path, then copy to the final path (assuming copy is atomic)
-        #   without automatic expiry, we'd leak temp files
-        # we can use the lease system, but then we have to deal with leases
-
-        self._upload_id = random.randint(0, 2 ** 47 - 1)
-        self._block_index = 0
-        # check to see if there is an existing blob at this location with the wrong type
-        req = Request(
-            url=self._url,
-            method="HEAD",
-            success_codes=(200, 400, 404, INVALID_HOSTNAME_STATUS),
-        )
-        resp = azure.execute_api_request(_context, req)
-        if resp.status == 200:
-            if resp.headers["x-ms-blob-type"] == "BlockBlob":
-                # because we delete all the uncommitted blocks, any concurrent writers will fail
-                # but they would fail anyway since the first writer to finish would end up
-                # deleting all uncommitted blocks
-                # this means that the last writer to start is likely to win, the others should fail
-                # with ConcurrentWriteFailure
-                _clear_uncommitted_blocks(self._url, resp.headers)
-            else:
-                # if the existing blob type is not compatible with the block blob we are about to write
-                # we have to delete the file before writing our block blob or else we will get a 409
-                # error when putting the first block
-                remove(path)
-        elif resp.status in (400, INVALID_HOSTNAME_STATUS) or (
-            resp.status == 404
-            and resp.headers["x-ms-error-code"] == "ContainerNotFound"
-        ):
-            raise FileNotFoundError(
-                f"No such file or container/account does not exist: '{path}'"
-            )
-        self._md5 = hashlib.md5()
-        super().__init__(ctx=_context, chunk_size=_context.azure_write_chunk_size)
-
-    def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
-        start = 0
-        while start < len(chunk):
-            # premium block blob storage supports block blobs and append blobs
-            # https://azure.microsoft.com/en-us/blog/azure-premium-block-blob-storage-is-now-generally-available/
-            # we use block blobs because they are compatible with WASB:
-            # https://docs.microsoft.com/en-us/azure/databricks/kb/data-sources/wasb-check-blob-types
-            end = start + _context.azure_write_chunk_size
-            data = chunk[start:end]
-            self._md5.update(data)
-            req = Request(
-                url=self._url,
-                method="PUT",
-                params=dict(
-                    comp="block",
-                    blockid=_azure_block_index_to_block_id(
-                        self._block_index, self._upload_id
-                    ),
-                ),
-                data=data,
-                success_codes=(201,),
-            )
-            azure.execute_api_request(_context, req)
-            self._block_index += 1
-            if self._block_index >= AZURE_BLOCK_COUNT_LIMIT:
-                raise Error(
-                    f"Exceeded block count limit of {AZURE_BLOCK_COUNT_LIMIT} for Azure Storage.  Increase `azure_write_chunk_size` so that {AZURE_BLOCK_COUNT_LIMIT} * `azure_write_chunk_size` exceeds the size of the file you are writing."
-                )
-
-            start += _context.azure_write_chunk_size
-
-        if finalize:
-            block_ids = [
-                _azure_block_index_to_block_id(i, self._upload_id)
-                for i in range(self._block_index)
-            ]
-            _azure_finalize_blob(
-                path=self._path,
-                url=self._url,
-                block_ids=block_ids,
-                md5_digest=self._md5.digest(),
-            )
+            return common.block_md5(f).hex()
 
 
 @overload
@@ -2314,17 +1659,17 @@ def BlobFile(
                 f = io.BufferedWriter(f, buffer_size=buffer_size)
         elif _is_gcp_path(path):
             if mode in ("w", "wb"):
-                f = _GoogleStreamingWriteFile(path)
+                f = gcp.StreamingWriteFile(_context, path)
             elif mode in ("r", "rb"):
-                f = _GoogleStreamingReadFile(path)
+                f = gcp.StreamingReadFile(_context, path)
                 f = io.BufferedReader(f, buffer_size=buffer_size)
             else:
                 raise Error(f"Unsupported mode: '{mode}'")
         elif _is_azure_path(path):
             if mode in ("w", "wb"):
-                f = _AzureStreamingWriteFile(path)
+                f = azure.StreamingWriteFile(_context, path)
             elif mode in ("r", "rb"):
-                f = _AzureStreamingReadFile(path)
+                f = azure.StreamingReadFile(_context, path)
                 f = io.BufferedReader(f, buffer_size=buffer_size)
             else:
                 raise Error(f"Unsupported mode: '{mode}'")
@@ -2385,7 +1730,7 @@ def BlobFile(
                         remote_version = ""
                         # get some sort of consistent remote hash so we can check for a local file
                         if _is_gcp_path(path):
-                            st = _gcp_maybe_stat(path)
+                            st = gcp.maybe_stat(_context, path)
                             if st is None:
                                 raise FileNotFoundError(f"No such file: '{path}'")
                             assert st.version is not None
@@ -2394,7 +1739,7 @@ def BlobFile(
                         elif _is_azure_path(path):
                             # in the azure case the remote md5 may not exist
                             # this duplicates some of md5() because we want more control
-                            st = _azure_maybe_stat(path)
+                            st = azure.maybe_stat(_context, path)
                             if st is None:
                                 raise FileNotFoundError(f"No such file: '{path}'")
                             assert st.version is not None
@@ -2434,12 +1779,12 @@ def BlobFile(
 
                             if remote_hash is None:
                                 if _is_azure_path(path):
-                                    _azure_maybe_update_md5(
-                                        path, remote_version, local_hexdigest
+                                    azure.maybe_update_md5(
+                                        _context, path, remote_version, local_hexdigest
                                     )
                                 elif _is_gcp_path(path):
-                                    _gcp_maybe_update_md5(
-                                        path, remote_version, local_hexdigest
+                                    gcp.maybe_update_md5(
+                                        _context, path, remote_version, local_hexdigest
                                     )
                         else:
                             assert remote_hash is not None

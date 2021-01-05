@@ -1,3 +1,6 @@
+import binascii
+import hashlib
+import random
 import urllib.parse
 import os
 import json
@@ -7,6 +10,8 @@ import time
 import calendar
 import datetime
 import re
+import math
+import concurrent.futures
 from typing import Any, Mapping, Dict, Optional, Tuple, Sequence, List
 
 import xmltodict
@@ -20,6 +25,11 @@ from blobfile._common import (
     Context,
     INVALID_HOSTNAME_STATUS,
     TokenManager,
+    ConcurrentWriteFailure,
+    RequestFailure,
+    BaseStreamingReadFile,
+    BaseStreamingWriteFile,
+    FileBody,
 )
 
 SHARED_KEY = "shared_key"
@@ -31,6 +41,21 @@ ANONYMOUS = "anonymous"
 SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
 # these seem to be expired manually, but we don't currently detect that
 SHARED_KEY_EXPIRATION_SECONDS = 24 * 60 * 60
+
+# max 100MB https://docs.microsoft.com/en-us/rest/api/storageservices/put-block#remarks
+# there is a preview version of the API that allows this to be 4000MiB
+MAX_BLOCK_SIZE = 100_000_000
+
+BLOCK_COUNT_LIMIT = 50_000
+
+RESPONSE_HEADER_TO_REQUEST_HEADER = {
+    "Cache-Control": "x-ms-blob-cache-control",
+    "Content-Type": "x-ms-blob-content-type",
+    "Content-MD5": "x-ms-blob-content-md5",
+    "Content-Encoding": "x-ms-blob-content-encoding",
+    "Content-Language": "x-ms-blob-content-language",
+    "Content-Disposition": "x-ms-blob-content-disposition",
+}
 
 
 def _load_credentials() -> Dict[str, Any]:
@@ -688,6 +713,396 @@ def execute_api_request(ctx: Context, req: Request) -> urllib3.HTTPResponse:
         )
 
     return common.execute_request(ctx, build_req)
+
+
+def _block_index_to_block_id(index: int, upload_id: int) -> str:
+    assert index < 2 ** 17
+    id_plus_index = (upload_id << 17) + index
+    assert id_plus_index < 2 ** 64
+    return base64.b64encode(id_plus_index.to_bytes(8, byteorder="big")).decode("utf8")
+
+
+def _clear_uncommitted_blocks(ctx: Context, url: str, metadata: Dict[str, str]) -> None:
+    # to avoid leaking uncommitted blocks, we can do a Put Block List with
+    # all the existing blocks for a file
+    # this will change the last-modified timestamp and the etag
+    req = Request(
+        url=url, params=dict(comp="blocklist"), method="GET", success_codes=(200, 404)
+    )
+    resp = execute_api_request(ctx, req)
+    if resp.status != 200:
+        return
+
+    result = xmltodict.parse(resp.data)
+    if result["BlockList"]["CommittedBlocks"] is None:
+        return
+
+    blocks = result["BlockList"]["CommittedBlocks"]["Block"]
+    if isinstance(blocks, dict):
+        blocks = [blocks]
+
+    body = {"BlockList": {"Latest": [b["Name"] for b in blocks]}}
+    # make sure to preserve metadata for the file
+    headers: Dict[str, str] = {
+        k: v for k, v in metadata.items() if k.startswith("x-ms-meta-")
+    }
+    for src, dst in RESPONSE_HEADER_TO_REQUEST_HEADER.items():
+        if src in metadata:
+            headers[dst] = metadata[src]
+    req = Request(
+        url=url,
+        method="PUT",
+        params=dict(comp="blocklist"),
+        headers={**headers, "If-Match": metadata["etag"]},
+        data=body,
+        success_codes=(201, 404, 412),
+    )
+    execute_api_request(ctx, req)
+
+
+def _finalize_blob(
+    ctx: Context, path: str, url: str, block_ids: List[str], md5_digest: bytes
+) -> None:
+    body = {"BlockList": {"Latest": block_ids}}
+    req = Request(
+        url=url,
+        method="PUT",
+        # azure does not calculate md5s for us, we have to do that manually
+        # https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
+        headers={"x-ms-blob-content-md5": base64.b64encode(md5_digest).decode("utf8")},
+        params=dict(comp="blocklist"),
+        data=body,
+        success_codes=(201, 400),
+    )
+    resp = execute_api_request(ctx, req)
+    if resp.status == 400:
+        result = xmltodict.parse(resp.data)
+        if result["Error"]["Code"] == "InvalidBlockList":
+            # the most likely way this could happen is if the file was deleted while
+            # we were uploading, so assume that is what happened
+            # this could be interpreted as a sort of RestartableStreamingWriteFailure but
+            # that could result in two processes fighting while uploading the file
+            raise ConcurrentWriteFailure.create_from_request_response(
+                f"Invalid block list, most likely a concurrent writer wrote to the same path: `{path}`",
+                request=req,
+                response=resp,
+            )
+        else:
+            raise RequestFailure.create_from_request_response(
+                message=f"unexpected status {resp.status}", request=req, response=resp
+            )
+
+
+class StreamingReadFile(BaseStreamingReadFile):
+    def __init__(self, ctx: Context, path: str) -> None:
+        st = maybe_stat(ctx, path)
+        if st is None:
+            raise FileNotFoundError(f"No such file or directory: '{path}'")
+        super().__init__(ctx=ctx, path=path, size=st.size)
+
+    def _request_chunk(
+        self, streaming: bool, start: int, end: Optional[int] = None
+    ) -> urllib3.response.HTTPResponse:
+        account, container, blob = split_path(self._path)
+        req = Request(
+            url=build_url(
+                account, "/{container}/{blob}", container=container, blob=blob
+            ),
+            method="GET",
+            headers={"Range": common.calc_range(start=start, end=end)},
+            success_codes=(206, 416),
+            # if we are streaming the data, make
+            # sure we don't preload it
+            preload_content=not streaming,
+        )
+        resp = execute_api_request(self._ctx, req)
+        return resp
+
+
+class StreamingWriteFile(BaseStreamingWriteFile):
+    def __init__(self, ctx: Context, path: str) -> None:
+        self._path = path
+        account, container, blob = split_path(path)
+        self._url = build_url(
+            account, "/{container}/{blob}", container=container, blob=blob
+        )
+        # block blobs let you upload up to 100,000 "uncommitted" blocks with user-chosen block ids
+        # using the "Put Block" call
+        # you may then call "Put Block List" with up to 50,000 block ids of the blocks you
+        # want to be in the blob (50,000 is the max blocks per blob)
+        # all unused uncommitted blocks will be deleted
+        # uncommitted blocks also expire after a week if they are not committed
+        #
+        # since we use block blobs, there are a few ways we could implement this streaming write file
+        #
+        # method 1:
+        #   upload the first chunk of the file as block id "0", the second as block id "1" etc
+        #   when we are done writing the file, we call "Put Block List" using range(num_blocks) as
+        #   the block ids
+        #
+        #   this has the advantage that if our program crashes, the same block ids will be reused
+        #   for the next upload and so we'll never get more than 50,000 uncommitted blocks
+        #
+        #   in general, azure does not seem to support concurrent writers except maybe
+        #   for writing small files (GCS does to a limited extent through resumable upload sessions)
+        #
+        #   with method 1, if you have two writers:
+        #
+        #       writer 0: write block id "0"
+        #       writer 1: write block id "0"
+        #       writer 1: crash
+        #       writer 0: write block id "1"
+        #       writer 0: put block list ["0", "1"]
+        #
+        #   then you will end up with block "0" from writer 1 and block "1" from writer 0, which means
+        #   your file will be corrupted
+        #
+        #   this appears to be the method used by the azure python SDK
+        #
+        # method 2:
+        #   generate a random session id
+        #   upload the first chunk of the file as block id "<session id>-0",
+        #       the second block as "<session id>-1" etc
+        #   when we are done writing the file, call "Put Block List" using
+        #       [f"<session id>-{i}" for i in range(num_blocks)] as the block list
+        #
+        #   this has the advantage that we should not observe data corruption from concurrent writers
+        #       assuming that the session ids are unique, although whichever writer finishes first will
+        #       win, because calling "Put Block List" will delete all uncommitted blocks
+        #
+        #   this has the disadvantage that we can end up hitting the uncommitted block limit
+        #       1) with 100,000 concurrent writers, each one would write the first block, then all
+        #           would immediately hit the block limit and get 409 errors
+        #       2) with a single writer that crashes every time it writes the second block, it would
+        #           retry 100,000 times, then be unable to continue due to all the uncommitted blocks
+        #           it was generating
+        #
+        #   the workaround we use here is that whenever a file is opened for reading, we clear all
+        #       uncommitted blocks by calling "Put Block List" with the list of currently committed blocks
+        #
+        #   this seems to be reasonably fast in practice, and means that failure #2 should not be an issue
+        #
+        #   failure #1 could still happen with concurrent writers, but this should result only in a
+        #       confusing error message (409 error) instead of a ConcurrentWriteFailure, though we
+        #       could likely raise that error if we saw a 409 with the error RequestEntityTooLargeBlockCountExceedsLimit
+        #
+        #   this does change the behavior slightly, now the writer that will end up succeeding on "Put Block List"
+        #       is likely to be the last writer to open the file for writing, the others will fail
+        #       because their uncommitted blocks have been cleared
+        #
+        # it would be nice to replace this with a less odd method, but it's not obvious how
+        #   to do this on azure storage
+        #
+        # if there were upload sessions like GCS, this wouldn't be an issue
+        # if there was no uncommitted block limit, method 2 would work fine
+        # if blobs could automatically expire without having to add a container lifecycle rule
+        #   then we could upload to a temp path, then copy to the final path (assuming copy is atomic)
+        #   without automatic expiry, we'd leak temp files
+        # we can use the lease system, but then we have to deal with leases
+
+        self._upload_id = random.randint(0, 2 ** 47 - 1)
+        self._block_index = 0
+        # check to see if there is an existing blob at this location with the wrong type
+        req = Request(
+            url=self._url,
+            method="HEAD",
+            success_codes=(200, 400, 404, INVALID_HOSTNAME_STATUS),
+        )
+        resp = execute_api_request(ctx, req)
+        if resp.status == 200:
+            if resp.headers["x-ms-blob-type"] == "BlockBlob":
+                # because we delete all the uncommitted blocks, any concurrent writers will fail
+                # but they would fail anyway since the first writer to finish would end up
+                # deleting all uncommitted blocks
+                # this means that the last writer to start is likely to win, the others should fail
+                # with ConcurrentWriteFailure
+                _clear_uncommitted_blocks(ctx, self._url, resp.headers)
+            else:
+                # if the existing blob type is not compatible with the block blob we are about to write
+                # we have to delete the file before writing our block blob or else we will get a 409
+                # error when putting the first block
+                remove(ctx, path)
+        elif resp.status in (400, INVALID_HOSTNAME_STATUS) or (
+            resp.status == 404
+            and resp.headers["x-ms-error-code"] == "ContainerNotFound"
+        ):
+            raise FileNotFoundError(
+                f"No such file or container/account does not exist: '{path}'"
+            )
+        self._md5 = hashlib.md5()
+        super().__init__(ctx=ctx, chunk_size=ctx.azure_write_chunk_size)
+
+    def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
+        start = 0
+        while start < len(chunk):
+            # premium block blob storage supports block blobs and append blobs
+            # https://azure.microsoft.com/en-us/blog/azure-premium-block-blob-storage-is-now-generally-available/
+            # we use block blobs because they are compatible with WASB:
+            # https://docs.microsoft.com/en-us/azure/databricks/kb/data-sources/wasb-check-blob-types
+            end = start + self._ctx.azure_write_chunk_size
+            data = chunk[start:end]
+            self._md5.update(data)
+            req = Request(
+                url=self._url,
+                method="PUT",
+                params=dict(
+                    comp="block",
+                    blockid=_block_index_to_block_id(
+                        self._block_index, self._upload_id
+                    ),
+                ),
+                data=data,
+                success_codes=(201,),
+            )
+            execute_api_request(self._ctx, req)
+            self._block_index += 1
+            if self._block_index >= BLOCK_COUNT_LIMIT:
+                raise Error(
+                    f"Exceeded block count limit of {BLOCK_COUNT_LIMIT} for Azure Storage.  Increase `azure_write_chunk_size` so that {BLOCK_COUNT_LIMIT} * `azure_write_chunk_size` exceeds the size of the file you are writing."
+                )
+
+            start += self._ctx.azure_write_chunk_size
+
+        if finalize:
+            block_ids = [
+                _block_index_to_block_id(i, self._upload_id)
+                for i in range(self._block_index)
+            ]
+            _finalize_blob(
+                ctx=self._ctx,
+                path=self._path,
+                url=self._url,
+                block_ids=block_ids,
+                md5_digest=self._md5.digest(),
+            )
+
+
+def _upload_chunk(
+    ctx: Context, path: str, start: int, size: int, url: str, block_id: str
+) -> None:
+    req = Request(
+        url=url,
+        method="PUT",
+        params=dict(comp="block", blockid=block_id),
+        # this needs to be specified since we use a file object for the data
+        headers={"Content-Length": str(size)},
+        data=FileBody(path, start=start, end=start + size),
+        success_codes=(201,),
+    )
+    execute_api_request(ctx, req)
+
+
+def parallel_upload(
+    ctx: Context,
+    executor: concurrent.futures.Executor,
+    src: str,
+    dst: str,
+    return_md5: bool,
+) -> Optional[str]:
+    with open(src, "rb") as f:
+        md5_digest = common.block_md5(f)
+
+    account, container, blob = split_path(dst)
+    dst_url = build_url(account, "/{container}/{blob}", container=container, blob=blob)
+
+    upload_id = random.randint(0, 2 ** 47 - 1)
+    s = os.stat(src)
+    block_ids = []
+    max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
+    part_size = min(
+        max(math.ceil(s.st_size / max_workers), common.PARALLEL_COPY_MINIMUM_PART_SIZE),
+        MAX_BLOCK_SIZE,
+    )
+    i = 0
+    start = 0
+    futures = []
+    while start < s.st_size:
+        block_id = _block_index_to_block_id(i, upload_id)
+        future = executor.submit(
+            _upload_chunk,
+            ctx,
+            src,
+            start,
+            min(ctx.azure_write_chunk_size, s.st_size - start),
+            dst_url,
+            block_id,
+        )
+        futures.append(future)
+        block_ids.append(block_id)
+        i += 1
+        start += part_size
+    for future in futures:
+        future.result()
+
+    _finalize_blob(
+        ctx=ctx, path=dst, url=dst_url, block_ids=block_ids, md5_digest=md5_digest
+    )
+    return binascii.hexlify(md5_digest).decode("utf8") if return_md5 else None
+
+
+def maybe_stat(ctx: Context, path: str) -> Optional[Stat]:
+    account, container, blob = split_path(path)
+    if blob == "":
+        return None
+    req = Request(
+        url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
+        method="HEAD",
+        success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
+    )
+    resp = execute_api_request(ctx, req)
+    if resp.status != 200:
+        return None
+    return make_stat(resp.headers)
+
+
+def remove(ctx: Context, path: str) -> bool:
+    account, container, blob = split_path(path)
+    if blob == "":
+        raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
+    req = Request(
+        url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
+        method="DELETE",
+        success_codes=(202, 404, INVALID_HOSTNAME_STATUS),
+    )
+    resp = execute_api_request(ctx, req)
+    return resp.status == 202
+
+
+def maybe_update_md5(ctx: Context, path: str, etag: str, hexdigest: str) -> bool:
+    account, container, blob = split_path(path)
+    req = Request(
+        url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
+        method="HEAD",
+        headers={"If-Match": etag},
+        success_codes=(200, 404, 412),
+    )
+    resp = execute_api_request(ctx, req)
+    if resp.status in (404, 412):
+        return False
+
+    # these will be cleared if not provided, there does not appear to be a PATCH method like for GCS
+    # https://docs.microsoft.com/en-us/rest/api/storageservices/set-blob-properties#remarks
+    headers: Dict[str, str] = {}
+    for src, dst in RESPONSE_HEADER_TO_REQUEST_HEADER.items():
+        if src in resp.headers:
+            headers[dst] = resp.headers[src]
+    headers["x-ms-blob-content-md5"] = base64.b64encode(
+        binascii.unhexlify(hexdigest)
+    ).decode("utf8")
+
+    req = Request(
+        url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
+        method="PUT",
+        params=dict(comp="properties"),
+        headers={
+            **headers,
+            # https://docs.microsoft.com/en-us/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations
+            "If-Match": etag,
+        },
+        success_codes=(200, 404, 412),
+    )
+    resp = execute_api_request(ctx, req)
+    return resp.status == 200
 
 
 access_token_manager = TokenManager(_get_access_token)

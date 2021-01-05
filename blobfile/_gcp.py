@@ -14,10 +14,9 @@ from Cryptodome.Hash import SHA256
 from Cryptodome.PublicKey import RSA
 
 from blobfile import _common as common
-from blobfile._common import Request, Error, Stat
+from blobfile._common import Request, Error, Stat, GCP_BASE_URL
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
-BASE_URL = "https://storage.googleapis.com"
 
 
 def _b64encode(s: bytes) -> bytes:
@@ -129,7 +128,7 @@ def create_access_token_request(scopes: List[str]) -> Request:
 
 
 def build_url(template: str, **data: str) -> str:
-    return common.build_url(BASE_URL, template, **data)
+    return common.build_url(GCP_BASE_URL, template, **data)
 
 
 def make_api_request(req: Request, access_token: str) -> Request:

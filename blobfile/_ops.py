@@ -116,95 +116,90 @@ AZURE_RESPONSE_HEADER_TO_REQUEST_HEADER = {
 ESCAPED_COLON = "___COLON___"
 
 
-_http = None
-_http_pid = None
-_http_lock = threading.Lock()
-_connection_pool_max_size = DEFAULT_CONNECTION_POOL_MAX_SIZE
-_max_connection_pool_count = DEFAULT_MAX_CONNECTION_POOL_COUNT
-# https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-block-blobs
-# the chunk size determines the maximum size of an individual blob
-_azure_write_chunk_size = DEFAULT_AZURE_WRITE_CHUNK_SIZE
-_gcp_write_chunk_size = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE
-_retry_log_threshold = DEFAULT_RETRY_LOG_THRESHOLD
-_retry_limit = None
-_connect_timeout = DEFAULT_CONNECT_TIMEOUT
-_read_timeout = DEFAULT_READ_TIMEOUT
-_output_az_paths = False
-_use_azure_storage_account_key_fallback = True
-
-
 def _default_log_fn(msg: str) -> None:
     print(f"blobfile: {msg}")
 
 
-_log_callback = _default_log_fn
+class Context:
+    def __init__(
+        self,
+        log_callback: Callable[[str], None] = _default_log_fn,
+        connection_pool_max_size: int = DEFAULT_CONNECTION_POOL_MAX_SIZE,
+        max_connection_pool_count: int = DEFAULT_MAX_CONNECTION_POOL_COUNT,
+        # https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-block-blobs
+        # the chunk size determines the maximum size of an individual blob
+        azure_write_chunk_size: int = DEFAULT_AZURE_WRITE_CHUNK_SIZE,
+        google_write_chunk_size: int = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
+        retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
+        retry_limit: Optional[int] = None,
+        connect_timeout: Optional[int] = DEFAULT_CONNECT_TIMEOUT,
+        read_timeout: Optional[int] = DEFAULT_READ_TIMEOUT,
+        output_az_paths: bool = False,
+        use_azure_storage_account_key_fallback: bool = True,
+    ) -> None:
+        self.log_callback = log_callback
+        self.connection_pool_max_size = connection_pool_max_size
+        self.max_connection_pool_count = max_connection_pool_count
+        self.azure_write_chunk_size = azure_write_chunk_size
+        self.retry_log_threshold = retry_log_threshold
+        self.retry_limit = retry_limit
+        self.google_write_chunk_size = google_write_chunk_size
+        self.connect_timeout = connect_timeout
+        self.read_timeout = read_timeout
+        self.output_az_paths = output_az_paths
+        self.use_azure_storage_account_key_fallback = (
+            use_azure_storage_account_key_fallback
+        )
+
+        self.http = None
+        self.http_pid = None
+        self.http_lock = threading.Lock()
+
+    def get_http_pool(self) -> urllib3.PoolManager:
+        # ssl is not fork safe https://docs.python.org/2/library/ssl.html#multi-processing
+        # urllib3 may not be fork safe https://github.com/urllib3/urllib3/issues/1179
+        # both are supposedly threadsafe though, so we shouldn't need a thread-local pool
+        with self.http_lock:
+            if self.http is None or self.http_pid != os.getpid():
+                # tensorflow imports requests which calls
+                #   import urllib3.contrib.pyopenssl
+                #   urllib3.contrib.pyopenssl.inject_into_urllib3()
+                # which will monkey patch urllib3 to use pyopenssl and sometimes break things
+                # with errors such as "certificate verify failed"
+                # https://github.com/pyca/pyopenssl/issues/823
+                # https://github.com/psf/requests/issues/5238
+                # in order to fix this here are a couple of options:
+
+                # method 1
+                # from urllib3.util import ssl_
+
+                # if ssl_.IS_PYOPENSSL:
+                #     import urllib3.contrib.pyopenssl
+
+                #     urllib3.contrib.pyopenssl.extract_from_urllib3()
+                # http = urllib3.PoolManager()
+
+                # method 2
+                # build a context based on https://github.com/urllib3/urllib3/blob/edc3ddb3d1cbc5871df4a17a53ca53be7b37facc/src/urllib3/util/ssl_.py#L220
+                # this exists because there's no obvious way to cause that function to use the ssl.SSLContext except for un-monkey-patching urllib3
+                context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+                context.verify_mode = ssl.CERT_REQUIRED
+                context.options |= (
+                    ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_COMPRESSION
+                )
+                context.load_default_certs()
+                self.http_pid = os.getpid()
+                self.http = urllib3.PoolManager(
+                    ssl_context=context,
+                    maxsize=self.connection_pool_max_size,
+                    num_pools=self.max_connection_pool_count,
+                )
+                # for debugging with mitmproxy
+                # self.http = urllib3.ProxyManager('http://localhost:8080/', ssl_context=context)
+        return self.http
 
 
-def _get_http_pool() -> urllib3.PoolManager:
-    # ssl is not fork safe https://docs.python.org/2/library/ssl.html#multi-processing
-    # urllib3 may not be fork safe https://github.com/urllib3/urllib3/issues/1179
-    # both are supposedly threadsafe though, so we shouldn't need a thread-local pool
-    global _http, _http_pid
-    with _http_lock:
-        if _http is None or _http_pid != os.getpid():
-            # tensorflow imports requests which calls
-            #   import urllib3.contrib.pyopenssl
-            #   urllib3.contrib.pyopenssl.inject_into_urllib3()
-            # which will monkey patch urllib3 to use pyopenssl and sometimes break things
-            # with errors such as "certificate verify failed"
-            # https://github.com/pyca/pyopenssl/issues/823
-            # https://github.com/psf/requests/issues/5238
-            # in order to fix this here are a couple of options:
-
-            # method 1
-            # from urllib3.util import ssl_
-
-            # if ssl_.IS_PYOPENSSL:
-            #     import urllib3.contrib.pyopenssl
-
-            #     urllib3.contrib.pyopenssl.extract_from_urllib3()
-            # http = urllib3.PoolManager()
-
-            # method 2
-            # build a context based on https://github.com/urllib3/urllib3/blob/edc3ddb3d1cbc5871df4a17a53ca53be7b37facc/src/urllib3/util/ssl_.py#L220
-            # this exists because there's no obvious way to cause that function to use the ssl.SSLContext except for un-monkey-patching urllib3
-            context = ssl.SSLContext(ssl.PROTOCOL_TLS)
-            context.verify_mode = ssl.CERT_REQUIRED
-            context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_COMPRESSION
-            context.load_default_certs()
-            _http_pid = os.getpid()
-            _http = urllib3.PoolManager(
-                ssl_context=context,
-                maxsize=_connection_pool_max_size,
-                num_pools=_max_connection_pool_count,
-            )
-            # for debugging with mitmproxy
-            # _http = urllib3.ProxyManager('http://localhost:8080/', ssl_context=context)
-
-        return _http
-
-
-# rather than a global configure object, there should probably be a context
-# object that tracks all the settings
-# this could also avoid issues with configuring while another thread is already calling blobfile functions
-# as long as getting/setting the global context is thread safe and contexts are immutable
-#
-# class Context:
-#   # class with all blobfile functions as methods
-#   # and existing global variables as properties
-# def create_context(**config_options) -> Context:
-#   # create a context, can be called by user to have a special context
-# _global_context = create_context()
-# def configure(**config_options) -> None:
-#   global _global_context
-#   with _global_context_lock:
-#       _global_context = create_context(**config_options)
-# def get_global_context() -> Context:
-#   with _global_context_lock:
-#       return _global_context
-# def copy():
-#   # proxy functions for all methods on Context
-#   return get_global_context().copy()
+_context = Context()
 
 
 def configure(
@@ -212,6 +207,8 @@ def configure(
     log_callback: Callable[[str], None] = _default_log_fn,
     connection_pool_max_size: int = DEFAULT_CONNECTION_POOL_MAX_SIZE,
     max_connection_pool_count: int = DEFAULT_MAX_CONNECTION_POOL_COUNT,
+    # https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-block-blobs
+    # the chunk size determines the maximum size of an individual blob
     azure_write_chunk_size: int = DEFAULT_AZURE_WRITE_CHUNK_SIZE,
     google_write_chunk_size: int = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
     retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
@@ -233,22 +230,20 @@ def configure(
     output_az_paths: output `az://` paths instead of using the `https://` for azure
     use_azure_storage_account_key_fallback: fallback to storage account keys for azure containers, having this enabled (the default) requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
     """
-    global _log_callback, _http, _http_pid, _connection_pool_max_size, _max_connection_pool_count, _azure_write_chunk_size, _retry_log_threshold, _retry_limit, _gcp_write_chunk_size, _connect_timeout, _read_timeout, _output_az_paths, _use_azure_storage_account_key_fallback
-    with _http_lock:
-        _http = None
-        _http_pid = None
-
-        _log_callback = log_callback
-        _connection_pool_max_size = connection_pool_max_size
-        _max_connection_pool_count = max_connection_pool_count
-        _azure_write_chunk_size = azure_write_chunk_size
-        _gcp_write_chunk_size = google_write_chunk_size
-        _retry_log_threshold = retry_log_threshold
-        _retry_limit = retry_limit
-        _connect_timeout = connect_timeout
-        _read_timeout = read_timeout
-        _output_az_paths = output_az_paths
-        _use_azure_storage_account_key_fallback = use_azure_storage_account_key_fallback
+    global _context
+    _context = Context(
+        log_callback=log_callback,
+        connection_pool_max_size=connection_pool_max_size,
+        max_connection_pool_count=max_connection_pool_count,
+        azure_write_chunk_size=azure_write_chunk_size,
+        retry_log_threshold=retry_log_threshold,
+        retry_limit=retry_limit,
+        google_write_chunk_size=google_write_chunk_size,
+        connect_timeout=connect_timeout,
+        read_timeout=read_timeout,
+        output_az_paths=output_az_paths,
+        use_azure_storage_account_key_fallback=use_azure_storage_account_key_fallback,
+    )
 
 
 class TokenManager:
@@ -522,7 +517,7 @@ def _azure_get_access_token(key: Any) -> Tuple[Any, float]:
         if _azure_can_access_container(account, container, auth):
             return (auth, now + float(result["expires_in"]))
 
-        if _use_azure_storage_account_key_fallback:
+        if _context.use_azure_storage_account_key_fallback:
             # fall back to getting the storage keys
             storage_account_key_auth = _azure_get_storage_account_key(
                 account=account, container=container, creds=creds
@@ -545,7 +540,7 @@ def _azure_get_access_token(key: Any) -> Tuple[Any, float]:
         if _azure_can_access_container(account, container, auth):
             return (auth, now + float(result["expires_in"]))
 
-        if _use_azure_storage_account_key_fallback:
+        if _context.use_azure_storage_account_key_fallback:
             # fall back to getting the storage keys
             storage_account_key_auth = _azure_get_storage_account_key(
                 account=account, container=container, creds=creds
@@ -669,12 +664,14 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
 
         err = None
         try:
-            resp = _get_http_pool().request(
+            resp = _context.get_http_pool().request(
                 method=req.method,
                 url=url,
                 headers=req.headers,
                 body=body,
-                timeout=urllib3.Timeout(connect=_connect_timeout, read=_read_timeout),
+                timeout=urllib3.Timeout(
+                    connect=_context.connect_timeout, read=_context.read_timeout
+                ),
                 preload_content=req.preload_content,
                 retries=False,
                 redirect=False,
@@ -738,11 +735,11 @@ def _execute_request(build_req: Callable[[], Request],) -> urllib3.HTTPResponse:
             if f is not None:
                 f.close()
 
-        if _retry_limit is not None and attempt >= _retry_limit:
+        if _context.retry_limit is not None and attempt >= _context.retry_limit:
             raise err
 
-        if attempt >= _retry_log_threshold:
-            _log_callback(
+        if attempt >= _context.retry_log_threshold:
+            _context.log_callback(
                 f"error {err} when executing http request {req} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
             )
         time.sleep(backoff)
@@ -937,7 +934,7 @@ def _azure_parallel_upload(
             _azure_upload_chunk,
             src,
             start,
-            min(_azure_write_chunk_size, s.size - start),
+            min(_context.azure_write_chunk_size, s.size - start),
             dst_url,
             block_id,
         )
@@ -1260,11 +1257,11 @@ def copy(
             # if this failure occurs, the upload must be restarted from the beginning
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
             # https://github.com/googleapis/gcs-resumable-upload/issues/15#issuecomment-249324122
-            if _retry_limit is not None and attempt >= _retry_limit:
+            if _context.retry_limit is not None and attempt >= _context.retry_limit:
                 raise
 
-            if attempt >= _retry_log_threshold:
-                _log_callback(
+            if attempt >= _context.retry_log_threshold:
+                _context.log_callback(
                     f"error {err} when executing a streaming write to {dst} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
                 )
             time.sleep(backoff)
@@ -1848,7 +1845,7 @@ def _get_slash_path(entry: DirEntry) -> str:
 
 
 def _azure_combine_path(account: str, container: str, obj: str) -> str:
-    if _output_az_paths:
+    if _context.output_az_paths:
         return azure.combine_az_path(account, container, obj)
     else:
         return azure.combine_https_path(account, container, obj)
@@ -2691,11 +2688,11 @@ class _StreamingReadFile(io.RawIOBase):
                 self._f = None
                 self.failures += 1
 
-                if _retry_limit is not None and attempt >= _retry_limit:
+                if _context.retry_limit is not None and attempt >= _context.retry_limit:
                     raise err
 
-                if attempt >= _retry_log_threshold:
-                    _log_callback(
+                if attempt >= _context.retry_log_threshold:
+                    _context.log_callback(
                         f"error {err} when executing readinto({len(b)}) at offset {self._offset} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
                     )
                 time.sleep(backoff)
@@ -2880,8 +2877,8 @@ class _GoogleStreamingWriteFile(_StreamingWriteFile):
             raise FileNotFoundError(f"No such file or bucket: '{path}'")
         self._upload_url = resp.headers["Location"]
         # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
-        assert _gcp_write_chunk_size % (256 * 1024) == 0
-        super().__init__(chunk_size=_gcp_write_chunk_size)
+        assert _context.google_write_chunk_size % (256 * 1024) == 0
+        super().__init__(chunk_size=_context.google_write_chunk_size)
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         start = self._offset
@@ -3074,7 +3071,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                 f"No such file or container/account does not exist: '{path}'"
             )
         self._md5 = hashlib.md5()
-        super().__init__(chunk_size=_azure_write_chunk_size)
+        super().__init__(chunk_size=_context.azure_write_chunk_size)
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         start = 0
@@ -3083,7 +3080,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
             # https://azure.microsoft.com/en-us/blog/azure-premium-block-blob-storage-is-now-generally-available/
             # we use block blobs because they are compatible with WASB:
             # https://docs.microsoft.com/en-us/azure/databricks/kb/data-sources/wasb-check-blob-types
-            end = start + _azure_write_chunk_size
+            end = start + _context.azure_write_chunk_size
             data = chunk[start:end]
             self._md5.update(data)
             req = Request(
@@ -3105,7 +3102,7 @@ class _AzureStreamingWriteFile(_StreamingWriteFile):
                     f"Exceeded block count limit of {AZURE_BLOCK_COUNT_LIMIT} for Azure Storage.  Increase `azure_write_chunk_size` so that {AZURE_BLOCK_COUNT_LIMIT} * `azure_write_chunk_size` exceeds the size of the file you are writing."
                 )
 
-            start += _azure_write_chunk_size
+            start += _context.azure_write_chunk_size
 
         if finalize:
             block_ids = [

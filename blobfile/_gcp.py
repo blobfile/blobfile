@@ -281,6 +281,47 @@ def generate_signed_url(
     signed_url = f"{host_name}{canonical_uri}?{canonical_query_string}&X-Goog-Signature={signature}"
     return signed_url, expiration
 
+def isdir(ctx: Context, path: str) -> bool:
+    if not path.endswith("/"):
+        path += "/"
+    bucket, blob = split_path(path)
+    if blob == "":
+        req = Request(
+            url=build_url("/storage/v1/b/{bucket}", bucket=bucket),
+            method="GET",
+            success_codes=(200, 404),
+        )
+        resp = execute_api_request(ctx, req)
+        return resp.status == 200
+    else:
+        req = Request(
+            url=build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+            method="GET",
+            params=dict(prefix=blob, delimiter="/", maxResults="1"),
+            success_codes=(200, 404),
+        )
+        resp = execute_api_request(ctx, req)
+        if resp.status == 404:
+            return False
+        result = json.loads(resp.data)
+        return "items" in result or "prefixes" in result
+
+def makedirs(ctx: Context, path: str) -> None:
+    """
+    Make any directories necessary to ensure that path is a directory
+    """
+    if not path.endswith("/"):
+        path += "/"
+    bucket, blob = split_path(path)
+    req = Request(
+        url=build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
+        method="POST",
+        params=dict(uploadType="media", name=blob),
+        success_codes=(200, 400),
+    )
+    resp = execute_api_request(ctx, req)
+    if resp.status == 400:
+        raise Error(f"Unable to create directory, bucket does not exist: '{path}'")
 
 def split_path(path: str) -> Tuple[str, str]:
     if not path.startswith("gs://"):

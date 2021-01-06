@@ -85,6 +85,23 @@ def _create_token_request(
     )
 
 
+def makedirs(ctx: Context, path: str) -> None:
+    """
+    Make any directories necessary to ensure that path is a directory
+    """
+    if not path.endswith("/"):
+        path += "/"
+    bucket, blob = split_path(path)
+    req = Request(
+        url=build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
+        method="POST",
+        params=dict(uploadType="media", name=blob),
+        success_codes=(200, 400),
+    )
+    resp = execute_api_request(ctx, req)
+    if resp.status == 400:
+        raise Error(f"Unable to create directory, bucket does not exist: '{path}'")
+    
 def _refresh_access_token_request(
     client_id: str, client_secret: str, refresh_token: str
 ) -> Request:

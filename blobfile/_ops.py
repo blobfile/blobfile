@@ -18,6 +18,7 @@ import itertools
 import math
 import concurrent.futures
 import multiprocessing as mp
+from types import ModuleType
 from typing import (
     overload,
     Optional,
@@ -44,7 +45,6 @@ if TYPE_CHECKING:
     from typing import Literal
 
 
-import xmltodict
 import filelock
 
 from blobfile import _gcp as gcp, _azure as azure, _common as common, _aws as aws
@@ -115,10 +115,6 @@ def configure(
     )
 
 
-def _is_local_path(path: str) -> bool:
-    return not _is_gcp_path(path) and not _is_azure_path(path)
-
-
 def _is_gcp_path(path: str) -> bool:
     url = urllib.parse.urlparse(path)
     return url.scheme == "gs"
@@ -136,6 +132,19 @@ def _is_aws_path(path: str) -> bool:
     return (
         url.scheme == "https" and url.netloc.endswith(".amazonaws.com")
     ) or url.scheme == "s3"
+
+def _get_module(path: str) -> Optional[ModuleType]:
+    if _is_gcp_path(path):
+        return gcp
+    elif _is_aws_path(path):
+        return aws
+    elif _is_azure_path(path):
+        return azure
+    else:
+        return None
+
+def _is_local_path(path: str) -> bool:
+    return _get_module(path) is None
 
 
 def _download_chunk(src: str, dst: str, start: int, size: int) -> None:
@@ -422,36 +431,7 @@ def _create_gcp_page_iterator(
         p["pageToken"] = result["nextPageToken"]
 
 
-def _create_azure_page_iterator(
-    url: str,
-    method: str,
-    data: Optional[Mapping[str, str]] = None,
-    params: Optional[Mapping[str, str]] = None,
-) -> Iterator[Dict[str, Any]]:
-    if params is None:
-        p = {}
-    else:
-        p = dict(params).copy()
-    if data is None:
-        d = None
-    else:
-        d = dict(data).copy()
-    while True:
-        req = Request(
-            url=url,
-            method=method,
-            params=p,
-            data=d,
-            success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
-        )
-        resp = azure.execute_api_request(_context, req)
-        if resp.status in (404, INVALID_HOSTNAME_STATUS):
-            return
-        result = xmltodict.parse(resp.data)["EnumerationResults"]
-        yield result
-        if result["NextMarker"] is None:
-            break
-        p["marker"] = result["NextMarker"]
+
 
 
 def _gcp_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntry]:
@@ -467,7 +447,6 @@ def _gcp_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntr
             else:
                 yield _entry_from_path_stat(path, gcp.make_stat(item))
 
-
 def _azure_get_entries(
     account: str, container: str, result: Mapping[str, Any]
 ) -> Iterator[DirEntry]:
@@ -478,13 +457,13 @@ def _azure_get_entries(
         if isinstance(blobs["BlobPrefix"], dict):
             blobs["BlobPrefix"] = [blobs["BlobPrefix"]]
         for bp in blobs["BlobPrefix"]:
-            path = _azure_combine_path(account, container, bp["Name"])
+            path = azure.combine_path(_context, account, container, bp["Name"])
             yield _entry_from_dirpath(path)
     if "Blob" in blobs:
         if isinstance(blobs["Blob"], dict):
             blobs["Blob"] = [blobs["Blob"]]
         for b in blobs["Blob"]:
-            path = _azure_combine_path(account, container, b["Name"])
+            path = azure.combine_path(_context, account, container, b["Name"])
             if b["Name"].endswith("/"):
                 yield _entry_from_dirpath(path)
             else:
@@ -500,6 +479,11 @@ def exists(path: str) -> bool:
         return os.path.exists(path)
     elif _is_gcp_path(path):
         st = gcp.maybe_stat(_context, path)
+        if st is not None:
+            return True
+        return isdir(path)
+    elif _is_aws_path(path):
+        st = aws.maybe_stat(_context, path)
         if st is not None:
             return True
         return isdir(path)
@@ -520,6 +504,9 @@ def basename(path: str) -> str:
     """
     if _is_gcp_path(path):
         _, obj = gcp.split_path(path)
+        return obj.split("/")[-1]
+    if _is_aws_path(path):
+        _, obj = aws.split_path(path)
         return obj.split("/")[-1]
     elif _is_azure_path(path):
         _, _, obj = azure.split_path(path)
@@ -738,7 +725,7 @@ def scanglob(pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
                     version=None,
                 ),
             )
-    elif _is_gcp_path(pattern) or _is_azure_path(pattern):
+    elif _is_gcp_path(pattern) or _is_azure_path(pattern) or _is_aws_path(pattern):
         if "*" not in pattern:
             entry = _get_entry(pattern)
             if entry is not None:
@@ -750,11 +737,16 @@ def scanglob(pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
             if "*" in bucket:
                 raise Error("Wildcards cannot be used in bucket name")
             root = gcp.combine_path(bucket, "")
+        elif _is_aws_path(pattern):
+            bucket, blob_prefix = aws.split_path(pattern)
+            if "*" in bucket:
+                raise Error("Wildcards cannot be used in bucket name")
+            root = aws.combine_path(bucket, "")
         else:
             account, container, blob_prefix = azure.split_path(pattern)
             if "*" in account or "*" in container:
                 raise Error("Wildcards cannot be used in account or container")
-            root = _azure_combine_path(account, container, "")
+            root = azure.combine_path(_context, account, container, "")
 
         initial_task = _GlobTask("", _split_path(blob_prefix))
 
@@ -811,63 +803,9 @@ def isdir(path: str) -> bool:
     if _is_local_path(path):
         return os.path.isdir(path)
     elif _is_gcp_path(path):
-        if not path.endswith("/"):
-            path += "/"
-        bucket, blob = gcp.split_path(path)
-        if blob == "":
-            req = Request(
-                url=gcp.build_url("/storage/v1/b/{bucket}", bucket=bucket),
-                method="GET",
-                success_codes=(200, 404),
-            )
-            resp = gcp.execute_api_request(_context, req)
-            return resp.status == 200
-        else:
-            params = dict(prefix=blob, delimiter="/", maxResults="1")
-            req = Request(
-                url=gcp.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
-                method="GET",
-                params=params,
-                success_codes=(200, 404),
-            )
-            resp = gcp.execute_api_request(_context, req)
-            if resp.status == 404:
-                return False
-            result = json.loads(resp.data)
-            return "items" in result or "prefixes" in result
+        return gcp.isdir(_context, path)
     elif _is_azure_path(path):
-        if not path.endswith("/"):
-            path += "/"
-        account, container, blob = azure.split_path(path)
-        if blob == "":
-            req = Request(
-                url=azure.build_url(
-                    account, "/{container}", container=container, blob=blob
-                ),
-                method="GET",
-                params=dict(restype="container"),
-                success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
-            )
-            resp = azure.execute_api_request(_context, req)
-            return resp.status == 200
-        else:
-            # even though we're only interested in having one result, we still need to make an
-            # iterator. as it happens, azure is perfectly willing to return an empty first page.
-            it = _create_azure_page_iterator(
-                url=azure.build_url(account, "/{container}", container=container),
-                method="GET",
-                params=dict(
-                    comp="list",
-                    restype="container",
-                    prefix=blob,
-                    delimiter="/",
-                    maxresults="1",
-                ),
-            )
-            for result in it:
-                if result["Blobs"] is not None:
-                    return "BlobPrefix" in result["Blobs"] or "Blob" in result["Blobs"]
-            return False
+        return azure.isdir(_context, path)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -878,10 +816,13 @@ def _guess_isdir(path: str) -> bool:
     """
     if _is_local_path(path) and os.path.isdir(path):
         return True
-    elif (_is_gcp_path(path) or _is_azure_path(path)) and path.endswith("/"):
+    elif (_is_gcp_path(path) or _is_azure_path(path) or _is_aws_path(path)) and path.endswith("/"):
         return True
     return False
 
+
+def _aws_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
+    raise NotImplementedError()
 
 def _gcp_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
     params = {}
@@ -905,7 +846,8 @@ def _azure_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[Di
         params["delimiter"] = delimiter
 
     account, container, prefix = azure.split_path(path)
-    it = _create_azure_page_iterator(
+    it = azure.create_page_iterator(
+        _context,
         url=azure.build_url(account, "/{container}", container=container),
         method="GET",
         params=dict(comp="list", restype="container", prefix=prefix, **params),
@@ -922,6 +864,8 @@ def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry
 
     if _is_gcp_path(path):
         yield from _gcp_list_blobs(path, delimiter=delimiter)
+    elif _is_aws_path(path):
+        yield from _aws_list_blobs(path, delimiter=delimiter)
     elif _is_azure_path(path):
         yield from _azure_list_blobs(path, delimiter=delimiter)
     else:
@@ -932,17 +876,10 @@ def _get_slash_path(entry: DirEntry) -> str:
     return entry.path + "/" if entry.is_dir else entry.path
 
 
-def _azure_combine_path(account: str, container: str, obj: str) -> str:
-    if _context.output_az_paths:
-        return azure.combine_az_path(account, container, obj)
-    else:
-        return azure.combine_https_path(account, container, obj)
-
-
 def _normalize_path(path: str) -> str:
     # convert paths to the canonical format
     if _is_azure_path(path):
-        return _azure_combine_path(*azure.split_path(path))
+        return azure.combine_path(_context, *azure.split_path(path))
     return path
 
 
@@ -974,7 +911,7 @@ def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
     """
     Same as `listdir`, but returns `DirEntry` objects instead of strings
     """
-    if (_is_gcp_path(path) or _is_azure_path(path)) and not path.endswith("/"):
+    if (_is_gcp_path(path) or _is_azure_path(path) or _is_aws_path(path)) and not path.endswith("/"):
         path += "/"
     if not exists(path):
         raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
@@ -1005,7 +942,7 @@ def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
                         version=None,
                     ),
                 )
-    elif _is_gcp_path(path) or _is_azure_path(path):
+    elif _is_gcp_path(path) or _is_azure_path(path) or _is_aws_path(path):
         if shard_prefix_length == 0:
             yield from _list_blobs_in_dir(path, exclude_prefix=True)
         else:
@@ -1053,6 +990,13 @@ def _get_entry(path: str) -> Optional[DirEntry]:
                 return _entry_from_dirpath(path)
             else:
                 return _entry_from_path_stat(path, st)
+    elif _is_aws_path(path):
+        st = aws.maybe_stat(_context, path)
+        if st is not None:
+            if path.endswith("/"):
+                return _entry_from_dirpath(path)
+            else:
+                return _entry_from_path_stat(path, st)
     elif _is_azure_path(path):
         st = azure.maybe_stat(_context, path)
         if st is not None:
@@ -1092,35 +1036,11 @@ def makedirs(path: str) -> None:
     if _is_local_path(path):
         os.makedirs(path, exist_ok=True)
     elif _is_gcp_path(path):
-        if not path.endswith("/"):
-            path += "/"
-        bucket, blob = gcp.split_path(path)
-        req = Request(
-            url=gcp.build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
-            method="POST",
-            params=dict(uploadType="media", name=blob),
-            success_codes=(200, 400),
-        )
-        resp = gcp.execute_api_request(_context, req)
-        if resp.status == 400:
-            raise Error(f"Unable to create directory, bucket does not exist: '{path}'")
+        gcp.makedirs(_context, path)
+    elif _is_aws_path(path):
+        aws.makedirs(_context, path)
     elif _is_azure_path(path):
-        if not path.endswith("/"):
-            path += "/"
-        account, container, blob = azure.split_path(path)
-        req = Request(
-            url=azure.build_url(
-                account, "/{container}/{blob}", container=container, blob=blob
-            ),
-            method="PUT",
-            headers={"x-ms-blob-type": "BlockBlob"},
-            success_codes=(201, 400),
-        )
-        resp = azure.execute_api_request(_context, req)
-        if resp.status == 400:
-            raise Error(
-                f"Unable to create directory, account/container does not exist: '{path}'"
-            )
+        azure.makedirs(_context, path)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -1135,6 +1055,14 @@ def remove(path: str) -> None:
         if path.endswith("/"):
             raise IsADirectoryError(f"Is a directory: '{path}'")
         ok = gcp.remove(_context, path)
+        if not ok:
+            raise FileNotFoundError(
+                f"The system cannot find the path specified: '{path}'"
+            )
+    elif _is_aws_path(path):
+        if path.endswith("/"):
+            raise IsADirectoryError(f"Is a directory: '{path}'")
+        ok = aws.remove(_context, path)
         if not ok:
             raise FileNotFoundError(
                 f"The system cannot find the path specified: '{path}'"
@@ -1202,6 +1130,8 @@ def rmdir(path: str) -> None:
             success_codes=(204,),
         )
         gcp.execute_api_request(_context, req)
+    elif _is_aws_path(path):
+        raise NotImplementedError()
     elif _is_azure_path(path):
         account, container, blob = azure.split_path(path)
         req = Request(
@@ -1227,6 +1157,11 @@ def stat(path: str) -> Stat:
         )
     elif _is_gcp_path(path):
         st = gcp.maybe_stat(_context, path)
+        if st is None:
+            raise FileNotFoundError(f"No such file: '{path}'")
+        return st
+    elif _is_aws_path(path):
+        st = aws.maybe_stat(_context, path)
         if st is None:
             raise FileNotFoundError(f"No such file: '{path}'")
         return st
@@ -1268,6 +1203,8 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
         if resp.status == 404:
             raise FileNotFoundError(f"No such file: '{path}'")
         return resp.status == 200
+    elif _is_aws_path(path):
+        raise NotImplementedError()
     elif _is_azure_path(path):
         account, container, blob = azure.split_path(path)
         headers = {}
@@ -1338,6 +1275,8 @@ def rmtree(path: str) -> None:
                 success_codes=(204, 404),
             )
             gcp.execute_api_request(_context, req)
+    elif _is_aws_path(path):
+        raise NotImplementedError()
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
@@ -1384,7 +1323,7 @@ def walk(
             if root.endswith(os.sep):
                 root = root[:-1]
             yield (root, sorted(dirnames), sorted(filenames))
-    elif _is_gcp_path(top) or _is_azure_path(top):
+    elif _is_gcp_path(top) or _is_azure_path(top) or _is_aws_path(top):
         top = _normalize_path(top)
         if not top.endswith("/"):
             top += "/"
@@ -1396,6 +1335,8 @@ def walk(
                 assert cur.endswith("/")
                 if _is_gcp_path(top):
                     it = _gcp_list_blobs(cur, delimiter="/")
+                elif _is_aws_path(top):
+                    it = _aws_list_blobs(cur, delimiter="/")
                 elif _is_azure_path(top):
                     it = _azure_list_blobs(cur, delimiter="/")
                 else:
@@ -1415,6 +1356,8 @@ def walk(
         else:
             if _is_gcp_path(top):
                 it = _gcp_list_blobs(top)
+            elif _is_aws_path(top):
+                it = _aws_list_blobs(top)
             elif _is_azure_path(top):
                 it = _azure_list_blobs(top)
             else:
@@ -1473,14 +1416,22 @@ def dirname(path: str) -> str:
             return gcp.combine_path(bucket, obj)
         else:
             return gcp.combine_path(bucket, "")[:-1]
+    if _is_aws_path(path):
+        bucket, obj = aws.split_path(path)
+        obj = _strip_slashes(obj)
+        if "/" in obj:
+            obj = "/".join(obj.split("/")[:-1])
+            return aws.combine_path(bucket, obj)
+        else:
+            return aws.combine_path(bucket, "")[:-1]
     elif _is_azure_path(path):
         account, container, obj = azure.split_path(path)
         obj = _strip_slashes(obj)
         if "/" in obj:
             obj = "/".join(obj.split("/")[:-1])
-            return _azure_combine_path(account, container, obj)
+            return azure.combine_path(_context, account, container, obj)
         else:
-            return _azure_combine_path(account, container, "")[:-1]
+            return azure.combine_path(_context, account, container, "")[:-1]
     else:
         return os.path.dirname(path)
 
@@ -1509,7 +1460,7 @@ def _safe_urljoin(a: str, b: str) -> str:
 def _join2(a: str, b: str) -> str:
     if _is_local_path(a):
         return os.path.join(a, b)
-    elif _is_gcp_path(a) or _is_azure_path(a):
+    elif _is_gcp_path(a) or _is_azure_path(a) or _is_aws_path(a):
         if not a.endswith("/"):
             a += "/"
 
@@ -1519,12 +1470,18 @@ def _join2(a: str, b: str) -> str:
             if obj.startswith("/"):
                 obj = obj[1:]
             return gcp.combine_path(bucket, obj)
+        elif _is_aws_path(a):
+            bucket, obj = aws.split_path(a)
+            obj = _safe_urljoin(obj, b)
+            if obj.startswith("/"):
+                obj = obj[1:]
+            return aws.combine_path(bucket, obj)
         elif _is_azure_path(a):
             account, container, obj = azure.split_path(a)
             obj = _safe_urljoin(obj, b)
             if obj.startswith("/"):
                 obj = obj[1:]
-            return _azure_combine_path(account, container, obj)
+            return azure.combine_path(_context, account, container, obj)
         else:
             raise Error(f"Unrecognized path: '{a}'")
     else:
@@ -1538,6 +1495,8 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
     if _is_gcp_path(path):
         bucket, blob = gcp.split_path(path)
         return gcp.generate_signed_url(bucket, blob, expiration=gcp.MAX_EXPIRATION)
+    elif _is_aws_path(path):
+        raise NotImplementedError()
     elif _is_azure_path(path):
         account, container, blob = azure.split_path(path)
         url = azure.build_url(
@@ -1581,6 +1540,8 @@ def md5(path: str) -> str:
         assert st.version is not None
         gcp.maybe_update_md5(_context, path, st.version, result)
         return result
+    elif _is_aws_path(path):
+        raise NotImplementedError()
     elif _is_azure_path(path):
         st = azure.maybe_stat(_context, path)
         if st is None:
@@ -1681,6 +1642,14 @@ def BlobFile(
                 f = io.BufferedReader(f, buffer_size=buffer_size)
             else:
                 raise Error(f"Unsupported mode: '{mode}'")
+        elif _is_aws_path(path):
+            if mode in ("w", "wb"):
+                f = aws.StreamingWriteFile(_context, path)
+            elif mode in ("r", "rb"):
+                f = aws.StreamingReadFile(_context, path)
+                f = io.BufferedReader(f, buffer_size=buffer_size)
+            else:
+                raise Error(f"Unsupported mode: '{mode}'")
         elif _is_azure_path(path):
             if mode in ("w", "wb"):
                 f = azure.StreamingWriteFile(_context, path)
@@ -1723,7 +1692,7 @@ def BlobFile(
         local_filename = basename(path)
         if local_filename == "":
             local_filename = "local.tmp"
-        if _is_gcp_path(path) or _is_azure_path(path):
+        if _is_gcp_path(path) or _is_azure_path(path) or _is_aws_path(path):
             remote_path = path
             if mode in ("a", "ab"):
                 tmp_dir = tempfile.mkdtemp()
@@ -1747,6 +1716,13 @@ def BlobFile(
                         # get some sort of consistent remote hash so we can check for a local file
                         if _is_gcp_path(path):
                             st = gcp.maybe_stat(_context, path)
+                            if st is None:
+                                raise FileNotFoundError(f"No such file: '{path}'")
+                            assert st.version is not None
+                            remote_version = st.version
+                            remote_hash = st.md5
+                        elif _is_aws_path(path):
+                            st = aws.maybe_stat(_context, path)
                             if st is None:
                                 raise FileNotFoundError(f"No such file: '{path}'")
                             assert st.version is not None
@@ -1800,6 +1776,10 @@ def BlobFile(
                                     )
                                 elif _is_gcp_path(path):
                                     gcp.maybe_update_md5(
+                                        _context, path, remote_version, local_hexdigest
+                                    )
+                                elif _is_aws_path(path):
+                                    aws.maybe_update_md5(
                                         _context, path, remote_version, local_hexdigest
                                     )
                         else:

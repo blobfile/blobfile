@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 import xmltodict
 import filelock
 
-from blobfile import _gcp as gcp, _azure as azure, _common as common
+from blobfile import _gcp as gcp, _azure as azure, _common as common, _aws as aws
 from blobfile._common import (
     Request,
     Error,
@@ -129,6 +129,13 @@ def _is_azure_path(path: str) -> bool:
     return (
         url.scheme == "https" and url.netloc.endswith(".blob.core.windows.net")
     ) or url.scheme == "az"
+
+
+def _is_aws_path(path: str) -> bool:
+    url = urllib.parse.urlparse(path)
+    return (
+        url.scheme == "https" and url.netloc.endswith(".amazonaws.com")
+    ) or url.scheme == "s3"
 
 
 def _download_chunk(src: str, dst: str, start: int, size: int) -> None:
@@ -259,6 +266,10 @@ def copy(
                     return
             params["rewriteToken"] = result["rewriteToken"]
 
+    if _is_aws_path(src) and _is_aws_path(dst):
+        # TODO(8enmann)
+        raise NotImplementedError()
+
     if _is_azure_path(src) and _is_azure_path(dst):
         # https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob
         dst_account, dst_container, dst_blob = azure.split_path(dst)
@@ -338,7 +349,9 @@ def copy(
 
     if parallel:
         copy_fn = None
-        if (_is_azure_path(src) or _is_gcp_path(src)) and _is_local_path(dst):
+        if (
+            _is_azure_path(src) or _is_gcp_path(src) or _is_aws_path(src)
+        ) and _is_local_path(dst):
             copy_fn = _parallel_download
 
         if _is_local_path(src) and _is_azure_path(dst):
@@ -346,6 +359,9 @@ def copy(
 
         if _is_local_path(src) and _is_gcp_path(dst):
             copy_fn = gcp.parallel_upload
+
+        if _is_local_path(src) and _is_aws_path(dst):
+            copy_fn = aws.parallel_upload
 
         if copy_fn is not None:
             if parallel_executor is None:

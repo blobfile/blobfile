@@ -35,6 +35,7 @@ setup_dict = dict(
             "imageio-ffmpeg",
             "azure-cli",
             "google-cloud-storage",
+            "boto3==1.15.18",
         ]
     },
     python_requires=">=3.7.0",

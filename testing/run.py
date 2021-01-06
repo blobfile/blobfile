@@ -18,12 +18,14 @@ def run_tests(name, rest, env):
     )
     google_credentials_path = os.environ.get(
         "GOOGLE_APPLICATION_CREDENTIALS",
-        os.path.expanduser(
-            "~/AppData/Roaming/gcloud/application_default_credentials.json"
-        ),
+        os.path.expanduser("~/.config/gcloud/application_default_credentials.json"),
     )
     azure_credentials_path = os.environ.get("AZURE_APPLICATION_CREDENTIALS")
     azure_cli_credentials_path = os.path.expanduser("~/.azure")
+
+    aws_credentials_path = os.environ.get(
+        "AWS_SHARED_CREDENTIALS_FILE", os.path.expanduser("~/.aws/credentials")
+    )
 
     docker_cmd = [
         "docker",
@@ -36,12 +38,18 @@ def run_tests(name, rest, env):
         f"{google_credentials_path}:/root/.config/gcloud/application_default_credentials.json",
         "--env",
         "GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json",
+        # pass in azure
         "--env",
         "AZURE_APPLICATION_CREDENTIALS=/root/azure_credentials.json",
         "--volume",
         f"{azure_credentials_path}:/root/azure_credentials.json",
         "--volume",
         f"{azure_cli_credentials_path}:/root/.azure",
+        # pass in aws
+        "--env",
+        "AWS_SHARED_CREDENTIALS_FILE=/root/.aws/credentials",
+        "--volume",
+        f"{aws_credentials_path}:/root/.aws/credentials",
     ]
 
     for e in env:

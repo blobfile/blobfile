@@ -179,20 +179,6 @@ def _create_access_token_request(
     )
 
 
-def _create_user_delegation_sas_request(account: str) -> Request:
-    # https://docs.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas
-    now = datetime.datetime.utcnow()
-    start = (now + datetime.timedelta(hours=-1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    expiration = now + datetime.timedelta(days=6)
-    expiry = expiration.strftime("%Y-%m-%dT%H:%M:%SZ")
-    return Request(
-        url=f"https://{account}.blob.core.windows.net/",
-        method="POST",
-        params=dict(restype="service", comp="userdelegationkey"),
-        data={"KeyInfo": {"Start": start, "Expiry": expiry}},
-    )
-
-
 def create_api_request(req: Request, auth: Tuple[str, str]) -> Request:
     if req.headers is None:
         headers = {}
@@ -683,7 +669,18 @@ def _get_sas_token(ctx: Context, key: Any) -> Tuple[Any, float]:
     account, container = key
 
     def build_req() -> Request:
-        req = _create_user_delegation_sas_request(account=account)
+        # https://docs.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas
+        now = datetime.datetime.utcnow()
+        start = (now + datetime.timedelta(hours=-1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        expiration = now + datetime.timedelta(days=6)
+        expiry = expiration.strftime("%Y-%m-%dT%H:%M:%SZ")
+        req = Request(
+            url=f"https://{account}.blob.core.windows.net/",
+            method="POST",
+            params=dict(restype="service", comp="userdelegationkey"),
+            data={"KeyInfo": {"Start": start, "Expiry": expiry}},
+            success_codes=(200, 403),
+        )
         auth = access_token_manager.get_token(ctx, key=key)
         if auth[0] != OAUTH_TOKEN:
             raise Error(
@@ -695,6 +692,12 @@ def _get_sas_token(ctx: Context, key: Any) -> Tuple[Any, float]:
         return create_api_request(req, auth=auth)
 
     resp = common.execute_request(ctx, build_req)
+    if resp.status == 403:
+        raise Error(
+            f"You do not have permission to generate an SAS token for account {account}. "
+            "Try setting the Storage Blob Delegator or Storage Blob Data Contributor IAM role "
+            "at the account level."
+        )
     out = xmltodict.parse(resp.data)
     t = time.time() + SAS_TOKEN_EXPIRATION_SECONDS
     return out["UserDelegationKey"], t

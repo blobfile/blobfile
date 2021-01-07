@@ -276,7 +276,6 @@ def copy(
             params["rewriteToken"] = result["rewriteToken"]
 
     if _is_aws_path(src) and _is_aws_path(dst):
-        # TODO(8enmann)
         raise NotImplementedError()
 
     if _is_azure_path(src) and _is_azure_path(dst):

@@ -4,30 +4,35 @@ import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
+import base64
+import contextlib
+import hashlib
+import json
+import multiprocessing as mp
+import os
+import platform
 import random
 import string
-import tempfile
-import os
-import contextlib
-import json
-import urllib.request
-import hashlib
-import time
 import subprocess as sp
-import multiprocessing as mp
-import platform
-import base64
+import tempfile
+import time
+import urllib.request
 
 import av
-import pytest
-from tensorflow.io import gfile
 import imageio
 import numpy as np
+import pytest
+import boto3
+from tensorflow.io import gfile
 
 import blobfile as bf
-from blobfile import _ops as ops, _azure as azure, _common as common
+from blobfile import _azure as azure
+from blobfile import _aws as aws
+from blobfile import _common as common
+from blobfile import _ops as ops
 
 GCS_TEST_BUCKET = os.getenv("GCS_TEST_BUCKET", "csh-test-3")
+AWS_TEST_BUCKET = os.getenv("AWS_TEST_BUCKET", "blobfile-test")
 AS_TEST_ACCOUNT = os.getenv("AS_TEST_ACCOUNT", "cshteststorage2")
 AS_TEST_ACCOUNT2 = os.getenv("AS_TEST_ACCOUNT2", "cshteststorage3")
 AS_TEST_CONTAINER = os.getenv("AS_TEST_CONTAINER", "testcontainer2")
@@ -44,6 +49,9 @@ AZURE_INVALID_CONTAINER_NO_ACCOUNT = (
 )
 GCS_VALID_BUCKET = f"gs://{GCS_TEST_BUCKET}"
 GCS_INVALID_BUCKET = f"gs://{GCS_TEST_BUCKET}-does-not-exist"
+
+AWS_VALID_BUCKET = f"s3://{AWS_TEST_BUCKET}"
+AWS_INVALID_BUCKET = f"s3://{AWS_TEST_BUCKET}-does-not-exist"
 
 AZURE_PUBLIC_URL = (
     f"https://{AS_EXTERNAL_ACCOUNT}.blob.core.windows.net/publiccontainer/test_cat.png"
@@ -86,16 +94,27 @@ def _get_temp_local_path():
 @contextlib.contextmanager
 def _get_temp_gcs_path():
     path = f"gs://{GCS_TEST_BUCKET}/" + "".join(
-        random.choice(string.ascii_lowercase) for i in range(16)
+        random.choice(string.ascii_lowercase) for _ in range(16)
     )
     gfile.mkdir(path)
     yield path + "/file.name"
     gfile.rmtree(path)
 
+@contextlib.contextmanager
+def _get_temp_aws_path():
+    test_dir = "".join(
+        random.choice(string.ascii_lowercase) for _ in range(16)
+    )
+    path = f"s3://{AWS_TEST_BUCKET}/" + test_dir
+    s3 = boto3.resource('s3')
+    bucket = s3.Bucket(AWS_TEST_BUCKET)
+    yield path + "/file.name"
+    bucket.objects.filter(Prefix=test_dir + "/").delete()
+
 
 @contextlib.contextmanager
 def _get_temp_as_path(account=AS_TEST_ACCOUNT, container=AS_TEST_CONTAINER):
-    random_id = "".join(random.choice(string.ascii_lowercase) for i in range(16))
+    random_id = "".join(random.choice(string.ascii_lowercase) for _ in range(16))
     path = f"https://{account}.blob.core.windows.net/{container}/" + random_id
     yield path + "/file.name"
     sp.run(
@@ -116,7 +135,7 @@ def _get_temp_as_path(account=AS_TEST_ACCOUNT, container=AS_TEST_CONTAINER):
     )
 
 
-def _write_contents(path, contents):
+def _write_contents(path: str, contents: str):
     if ".blob.core.windows.net" in path:
         with tempfile.TemporaryDirectory() as tmpdir:
             assert isinstance(tmpdir, str)
@@ -144,12 +163,16 @@ def _write_contents(path, contents):
                 stdout=sp.DEVNULL,
                 stderr=sp.DEVNULL,
             )
+    elif path.startswith("s3://"):
+        bucket, key = aws.split_path(path)
+        client = boto3.client('s3')
+        client.put_object(Body=contents, Bucket=bucket, Key=key)
     else:
         with gfile.GFile(path, "wb") as f:
             f.write(contents)
 
 
-def _read_contents(path):
+def _read_contents(path: str):
     if ".blob.core.windows.net" in path:
         with tempfile.TemporaryDirectory() as tmpdir:
             assert isinstance(tmpdir, str)
@@ -177,6 +200,11 @@ def _read_contents(path):
             )
             with open(filepath, "rb") as f:
                 return f.read()
+    elif path.startswith("s3://"):
+        bucket, key = aws.split_path(path)
+        client = boto3.client('s3')
+        obj = client.get_object(Bucket=bucket, Key=key)
+        return json.loads(obj['Body'].read().decode('utf-8'))
     else:
         with gfile.GFile(path, "rb") as f:
             return f.read()
@@ -194,6 +222,11 @@ def test_basename():
         ("gs://a/b/", ""),
         ("gs://a/b", "b"),
         ("gs://a/b/c/test.filename", "test.filename"),
+        ("s3://a", ""),
+        ("s3://a/", ""),
+        ("s3://a/b/", ""),
+        ("s3://a/b", "b"),
+        ("s3://a/b/c/test.filename", "test.filename"),
         ("https://a.blob.core.windows.net/b", ""),
         ("https://a.blob.core.windows.net/b/", ""),
         ("https://a.blob.core.windows.net/b/c/", ""),
@@ -220,6 +253,13 @@ def test_dirname():
         ("gs://a/b/c/test.filename", "gs://a/b/c"),
         ("gs://a/b/c/", "gs://a/b"),
         ("gs://a/b/c/////", "gs://a/b"),
+        ("s3://a", "s3://a"),
+        ("s3://a/", "s3://a"),
+        ("s3://a/////", "s3://a"),
+        ("s3://a/b", "s3://a"),
+        ("s3://a/b/c/test.filename", "s3://a/b/c"),
+        ("s3://a/b/c/", "s3://a/b"),
+        ("s3://a/b/c/////", "s3://a/b"),
         (
             "https://a.blob.core.windows.net/container",
             "https://a.blob.core.windows.net/container",
@@ -276,6 +316,14 @@ def test_join():
         ("gs://a/b/", "../c", "gs://a/c"),
         ("gs://a/b/", "../c/", "gs://a/c/"),
         ("gs://a/b/", "../../c/", "gs://a/c/"),
+        ("s3://a", "b", "s3://a/b"),
+        ("s3://a/b", "c", "s3://a/b/c"),
+        ("s3://a/b/", "c", "s3://a/b/c"),
+        ("s3://a/b/", "c/", "s3://a/b/c/"),
+        ("s3://a/b/", "/c/", "s3://a/c/"),
+        ("s3://a/b/", "../c", "s3://a/c"),
+        ("s3://a/b/", "../c/", "s3://a/c/"),
+        ("s3://a/b/", "../../c/", "s3://a/c/"),
         (
             "https://a.blob.core.windows.net/container",
             "b",
@@ -333,7 +381,7 @@ def _convert_https_to_az(path):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_get_url(ctx):
     contents = b"meow!"
@@ -342,6 +390,22 @@ def test_get_url(ctx):
         url, _ = bf.get_url(path)
         assert urllib.request.urlopen(url).read() == contents
 
+def test_aws_signature():
+    import datetime
+    os.environ["AWS_ACCESS_KEY_ID"] = "AKIAIOSFODNN7EXAMPLE"
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
+    # https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
+    url, expiration = aws.generate_signed_url("examplebucket", "test.txt", 86400, "GET", now=datetime.datetime(year=2013, month=5, day=24))
+    assert expiration == 86400
+
+    assert url == ("https://examplebucket.s3.amazonaws.com/test.txt?"
+    "X-Amz-Algorithm=AWS4-HMAC-SHA256"
+    "&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request"
+    "&X-Amz-Date=20130524T000000Z"
+    "&X-Amz-Expires=86400"
+    "&X-Amz-SignedHeaders=host"
+    "&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404")
 
 def test_azure_public_get_url():
     contents = urllib.request.urlopen(AZURE_PUBLIC_URL).read()
@@ -351,7 +415,7 @@ def test_azure_public_get_url():
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 @pytest.mark.parametrize("streaming", [True, False])
 def test_read_write(ctx, streaming):
@@ -385,7 +449,7 @@ def test_az_path():
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_append(ctx):
     contents = b"meow!\n"
@@ -400,7 +464,7 @@ def test_append(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_stat(ctx):
     contents = b"meow!"
@@ -412,7 +476,7 @@ def test_stat(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_set_mtime(ctx):
     contents = b"meow!"
@@ -443,7 +507,7 @@ def test_azure_metadata(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_remove(ctx):
     contents = b"meow!"
@@ -457,7 +521,7 @@ def test_remove(ctx):
 @pytest.mark.parametrize(
     # don't test local path because that has slightly different behavior
     "ctx",
-    [_get_temp_gcs_path, _get_temp_as_path],
+    [_get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path],
 )
 def test_rmdir(ctx):
     contents = b"meow!"
@@ -485,7 +549,7 @@ def test_rmdir(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_makedirs(ctx):
     contents = b"meow!"
@@ -497,7 +561,7 @@ def test_makedirs(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_isdir(ctx):
     contents = b"meow!"
@@ -522,7 +586,7 @@ def test_isdir(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_listdir(ctx):
     contents = b"meow!"
@@ -543,7 +607,7 @@ def test_listdir(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_scandir(ctx):
     contents = b"meow!"
@@ -569,7 +633,7 @@ def test_scandir(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_listdir_sharded(ctx):
     contents = b"meow!"
@@ -597,7 +661,7 @@ def test_listdir_sharded(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 @pytest.mark.parametrize("topdown", [False, True])
 def test_walk(ctx, topdown):
@@ -624,7 +688,7 @@ def test_walk(ctx, topdown):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 @pytest.mark.parametrize("parallel", [False, True])
 def test_glob(ctx, parallel):
@@ -688,7 +752,7 @@ def test_glob(ctx, parallel):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_scanglob(ctx):
     contents = b"meow!"
@@ -715,7 +779,7 @@ def test_scanglob(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_rmtree(ctx):
     contents = b"meow!"
@@ -811,7 +875,7 @@ def test_copy_azure_public():
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_exists(ctx):
     contents = b"meow!"
@@ -960,7 +1024,7 @@ def test_invalid_paths(base_path):
 
 
 @pytest.mark.parametrize("buffer_size", [1, 100])
-@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path])
 def test_read_stats(buffer_size, ctx):
     with ctx() as path:
         contents = b"meow!"
@@ -991,7 +1055,7 @@ def test_read_stats(buffer_size, ctx):
             assert r.raw.bytes_read == len(contents)  # type: ignore
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path])
 def test_cache_dir(ctx):
     cache_dir = tempfile.mkdtemp()
     contents = b"meow!"
@@ -1013,7 +1077,7 @@ def test_cache_dir(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 @pytest.mark.parametrize("use_random", [False, True])
 def test_change_file_size(ctx, use_random):
@@ -1062,7 +1126,7 @@ def test_change_file_size(ctx, use_random):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_overwrite_while_reading(ctx):
     chunk_size = 2 ** 20
@@ -1103,7 +1167,7 @@ def test_create_local_intermediate_dirs():
 @pytest.mark.parametrize("binary", [True, False])
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_more_read_write(binary, streaming, ctx):
     rng = np.random.RandomState(0)
@@ -1183,7 +1247,7 @@ def test_more_read_write(binary, streaming, ctx):
 
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_video(streaming, ctx):
     rng = np.random.RandomState(0)
@@ -1220,7 +1284,7 @@ def test_video(streaming, ctx):
 # this is pretty slow and docker will often run out of memory
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_large_file(ctx):
     contents = b"0" * 2 ** 32
@@ -1271,7 +1335,7 @@ def test_composite_objects():
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_md5(ctx):
     contents = b"meow!"

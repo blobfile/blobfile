@@ -27,11 +27,11 @@ import numpy as np
 import blobfile as bf
 from blobfile import _ops as ops, _azure as azure, _common as common
 
-GCS_TEST_BUCKET = "csh-test-3"
-AS_TEST_ACCOUNT = "cshteststorage2"
-AS_TEST_ACCOUNT2 = "cshteststorage3"
-AS_TEST_CONTAINER = "testcontainer2"
-AS_TEST_CONTAINER2 = "testcontainer3"
+GCS_TEST_BUCKET = os.getenv("GCS_TEST_BUCKET", "csh-test-3")
+AS_TEST_ACCOUNT = os.getenv("AS_TEST_ACCOUNT", "cshteststorage2")
+AS_TEST_ACCOUNT2 = os.getenv("AS_TEST_ACCOUNT2", "cshteststorage3")
+AS_TEST_CONTAINER = os.getenv("AS_TEST_CONTAINER", "testcontainer2")
+AS_TEST_CONTAINER2 = os.getenv("AS_TEST_CONTAINER2", "testcontainer3")
 AS_INVALID_ACCOUNT = f"{AS_TEST_ACCOUNT}-does-not-exist"
 AS_EXTERNAL_ACCOUNT = "cshteststorage4"
 

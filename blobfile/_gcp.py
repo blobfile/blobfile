@@ -229,7 +229,9 @@ def generate_signed_url(
     ordered_headers = sorted(h.items())
     for k, v in ordered_headers:
         lower_k = str(k).lower()
-        strip_v = str(v).strip()
+        # This is purposely wrong
+        # https://github.com/GoogleCloudPlatform/python-docs-samples/blob/master/storage/signed_urls/generate_signed_urls.py#L67
+        strip_v = str(v).lower()
         canonical_headers += f"{lower_k}:{strip_v}\n"
 
     signed_headers_parts = []

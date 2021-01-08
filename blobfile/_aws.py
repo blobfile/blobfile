@@ -8,10 +8,12 @@ import os
 import platform
 import re
 import urllib.parse
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
 import urllib3
+import xmltodict
 
+from blobfile import _common as common
 from blobfile._common import (
     BaseStreamingReadFile,
     BaseStreamingWriteFile,
@@ -70,12 +72,88 @@ def _load_credentials() -> Tuple[Dict[str, Any], Optional[str]]:
         "credentials not found, please login with 'aws configure' or else set the 'AWS_SHARED_CREDENTIALS_FILE' environment variable to the path of a ini format service account key",
     )
 
+def isdir(ctx: Context, path: str) -> bool:
+    if not path.endswith("/"):
+        path += "/"
+    bucket, _, blob = split_path(path)
+    if blob == "":
+        req = Request(
+            url=build_url(bucket, "/"),
+            method="GET",
+            success_codes=(200, 404),
+        )
+        resp = execute_api_request(ctx, req)
+        return resp.status == 200
+    else:
+        # even though we're only interested in having one result, we still need to make an
+        # iterator since aws might return an empty first page.
+        it = create_page_iterator(
+            ctx,
+            url=build_url(bucket, "/"),
+            method="GET",
+            params={
+                "prefix": blob,
+                "delimiter": "/",
+                "max-results": "1",
+            },
+        )
+        for result in it:
+            if result.get("Contents") is not None:
+                return "Key" in result["Contents"]
+            if result.get("CommonPrefixes") is not None:
+                return True
+        return False
 
+
+def create_page_iterator(
+    ctx: Context,
+    url: str,
+    method: str,
+    data: Optional[Mapping[str, str]] = None,
+    params: Optional[Mapping[str, str]] = None,
+) -> Iterator[Dict[str, Any]]:
+    if params is None:
+        p = {}
+    else:
+        p = dict(params).copy()
+    if data is None:
+        d = None
+    else:
+        d = dict(data).copy()
+    while True:
+        req = Request(
+            url=url,
+            method=method,
+            params=p,
+            data=d,
+            success_codes=(200, 404),
+        )
+        resp = execute_api_request(ctx, req)
+        if resp.status in (404,):
+            return
+        result = xmltodict.parse(resp.data)["ListBucketResult"]
+        yield result
+        if result.get("NextMarker") is None:
+            break
+        p["marker"] = result["NextMarker"]
+        
 def makedirs(ctx: Context, path: str) -> None:
     """
     Make any directories necessary to ensure that path is a directory
     """
-    raise NotImplementedError()
+    if not path.endswith("/"):
+        path += "/"
+    bucket, _, blob = split_path(path)
+    req = Request(
+        url=build_url(bucket, "/{blob}", blob=blob),
+        method="PUT",
+        success_codes=(200, 400),
+    )
+    resp = execute_api_request(ctx, req)
+    if resp.status == 400:
+        raise Error(
+            f"Unable to create directory, account/container does not exist: '{path}'"
+        )
 
 
 def sign_request(
@@ -84,10 +162,11 @@ def sign_request(
     url: str,
     region: str,
     method: str,
-    body: str = "",
+    params: Optional[Mapping[str, str]] = None,
+    body: bytes = b"",
     service: str = "s3",
     now: Optional[datetime.datetime] = None,
-):
+) -> Dict[str, str]:
     u = urllib.parse.urlparse(url)
 
     # Create a date for headers and the credential string
@@ -109,12 +188,21 @@ def sign_request(
     # request parameters are in the query string. Query string values must
     # be URL-encoded (space=%20). The parameters must be sorted by name.
     # For this example, the query string is pre-formatted in the request_parameters variable.
-    canonical_querystring = u.query
+    canonical_querystring = ""
+    params = params or u.params
+    if params:
+        canonical_query_string_parts = []
+        ordered_params = sorted(params.items())
+        for k, v in ordered_params:
+            encoded_k = urllib.parse.quote(str(k), safe="")
+            encoded_v = urllib.parse.quote(str(v), safe="")
+            canonical_query_string_parts.append(f"{encoded_k}={encoded_v}")
+        canonical_querystring = "&".join(canonical_query_string_parts)
 
     headers = {
         "host": u.netloc,
         "x-amz-date": amzdate,
-        "x-amz-content-sha256": hashlib.sha256(body.encode()).hexdigest(),
+        "x-amz-content-sha256": hashlib.sha256(body).hexdigest(),
     }
 
     # Step 4: Create the canonical headers and signed headers. Header names
@@ -140,7 +228,7 @@ def sign_request(
 
     # Step 6: Create payload hash (hash of the request body content). For GET
     # requests, the payload is an empty string ("").
-    payload_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    payload_hash = headers["x-amz-content-sha256"]
 
     # Step 7: Combine elements to create canonical request
     canonical_request = "\n".join(
@@ -212,9 +300,9 @@ def create_api_request(req: Request, access_token: str) -> Request:
 
     data = req.data
     if data is not None and isinstance(data, dict):
-        raise NotImplementedError()
+        data = xmltodict.unparse(data).encode("utf8")
     else:
-        data = ""
+        data = b""
 
     creds, err = _load_credentials()
     if err is not None:
@@ -227,6 +315,7 @@ def create_api_request(req: Request, access_token: str) -> Request:
             region=creds["aws_default_region"],
             method=req.method,
             url=req.url,
+            params=req.params,
             body=data,
         )
     )
@@ -471,7 +560,16 @@ def maybe_stat(ctx: Context, path: str) -> Optional[Stat]:
 
 
 def remove(ctx: Context, path: str) -> bool:
-    raise NotImplementedError()
+    bucket, _, blob = split_path(path)
+    if blob == "":
+        raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
+    req = Request(
+        url=build_url(bucket, "/{object}", object=blob),
+        method="DELETE",
+        success_codes=(204, 404),
+    )
+    resp = execute_api_request(ctx, req)
+    return resp.status == 204
 
 
 def maybe_update_md5(ctx: Context, path: str, generation: str, hexdigest: str) -> bool:

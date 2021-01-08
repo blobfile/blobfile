@@ -420,14 +420,18 @@ def test_aws_signature():
 def test_aws_auth():
     import datetime
 
-    headers = aws.sign_request(
+    common_params = dict(
         access_key="AKIAIOSFODNN7EXAMPLE",
         secret_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
         region="us-east-1",
-        url=aws.build_url("examplebucket", "/?lifecycle="),
-        body="",
+        body=b"",
         method="GET",
         now=datetime.datetime(year=2013, month=5, day=24),
+    )
+
+    headers = aws.sign_request(
+        **common_params,
+        url=aws.build_url("examplebucket", "/?lifecycle="),
     )
 
     assert headers["Authorization"] == (
@@ -435,6 +439,28 @@ def test_aws_auth():
         "SignedHeaders=host;x-amz-content-sha256;x-amz-date,"
         "Signature=fea454ca298b7da1c68078a5d1bdbfbbe0d65c699e0f91ac7a200a0136783543"
     )
+
+    headers = aws.sign_request(
+        **common_params,
+        url=aws.build_url("examplebucket", "/?max-keys=2&prefix=J")
+    )
+
+    list_obj_auth = (
+        "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,"
+        "SignedHeaders=host;x-amz-content-sha256;x-amz-date,"
+        "Signature=34b48302e7b5fa45bde8084f4b7868a86f0a534bc59db6670ed5711ef69dc6f7"
+    )
+    assert headers["Authorization"] == list_obj_auth
+
+    headers = aws.sign_request(
+        **common_params,
+        params={
+            "max-keys": "2",
+            "prefix": "J"
+        },
+        url=aws.build_url("examplebucket", "/")
+    )
+    assert headers["Authorization"] == list_obj_auth
 
 
 def test_azure_public_get_url():
@@ -538,7 +564,7 @@ def test_azure_metadata(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_remove(ctx):
     contents = b"meow!"
@@ -592,7 +618,7 @@ def test_makedirs(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 def test_isdir(ctx):
     contents = b"meow!"

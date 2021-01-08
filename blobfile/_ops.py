@@ -802,6 +802,8 @@ def isdir(path: str) -> bool:
         return os.path.isdir(path)
     elif _is_gcp_path(path):
         return gcp.isdir(_context, path)
+    elif _is_aws_path(path):
+        return aws.isdir(_context, path)
     elif _is_azure_path(path):
         return azure.isdir(_context, path)
     else:

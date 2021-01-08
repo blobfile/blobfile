@@ -1,9 +1,11 @@
 # https://docs.github.com/en/free-pro-team@latest/actions/creating-actions/creating-a-docker-container-action#testing-out-your-action-in-a-workflow
+# https://docs.github.com/en/free-pro-team@latest/actions/creating-actions/metadata-syntax-for-github-actions
 name: 'Run tests'
 description: 'Run tests'
 runs:
   using: 'docker'
-  image: 'Dockerfile'
+  image: 'testing/Dockerfile'
   
-  # TODO: add other tests
-  entrypoint: '/github/workspace/testing/run-static.py'
+  entrypoint:
+    - 'python'
+    - '/github/workspace/testing/run-static.py'

@@ -5,10 +5,8 @@ jobs:
     runs-on: ubuntu-latest
     name: Run tests
     steps:
-      # To use this repository's private action,
-      # you must check out the repository
       - name: Checkout
         uses: actions/checkout@v2
       - name: Run tests step
-        uses: ./testing # Uses an action in the testing directory
+        uses: ./
         id: test

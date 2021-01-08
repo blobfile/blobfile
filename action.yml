@@ -6,6 +6,4 @@ runs:
   using: 'docker'
   image: 'testing/Dockerfile'
   
-  entrypoint:
-    - 'python'
-    - '/github/workspace/testing/run-static.py'
+  entrypoint: 'python /github/workspace/testing/run-static.py'

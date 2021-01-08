@@ -1,3 +1,4 @@
+#!/root/miniconda3/envs/env/bin/python
 import subprocess as sp
 import shlex
 import os

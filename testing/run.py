@@ -1,8 +1,7 @@
-import os
-import time
-import os
 import argparse
+import os
 import subprocess as sp
+import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -29,7 +28,7 @@ def run_tests_docker(name, rest, env):
     assert os.path.exists("testing/Dockerfile")
 
     sp.run(
-        ["docker", "build", "--file", "testing/Dockerfile", "--tag", name, "."],
+        ["docker", "build", "--file", "testing/Dockerfile", "--tag", name, "testing"],
         check=True,
     )
     google_credentials_path = os.environ.get(

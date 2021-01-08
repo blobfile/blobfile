@@ -1,6 +1,5 @@
 import os
 import time
-import shlex
 import argparse
 import subprocess as sp
 
@@ -13,7 +12,7 @@ def run_tests(name, rest, env):
     assert os.path.exists("testing/Dockerfile")
 
     sp.run(
-        ["docker", "build", "--file", "testing/Dockerfile", "--tag", name, "."],
+        ["docker", "build", "--file", "testing/Dockerfile", "--tag", name, "testing"],
         check=True,
     )
     google_credentials_path = os.environ.get(

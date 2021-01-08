@@ -10,5 +10,5 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
       - name: Run tests step
-        uses: ./ # Uses an action in the root directory
+        uses: ./testing # Uses an action in the testing directory
         id: test

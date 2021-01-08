@@ -6,4 +6,4 @@ runs:
   image: 'Dockerfile'
   
   # TODO: add other tests
-  entrypoint: 'python /github/workspace/testing/run-static.py'
+  entrypoint: '/github/workspace/testing/run-static.py'

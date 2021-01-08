@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env conda run -n env python
 import subprocess as sp
 import shlex
 import os

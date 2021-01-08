@@ -28,7 +28,7 @@ def run_tests_docker(name, rest, env):
     assert os.path.exists("testing/Dockerfile")
 
     sp.run(
-        ["docker", "build", "--file", "testing/Dockerfile", "--tag", name, "testing"],
+        ["docker", "build", "--file", "testing/Dockerfile", "--tag", name, "."],
         check=True,
     )
     google_credentials_path = os.environ.get(

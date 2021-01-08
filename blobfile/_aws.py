@@ -12,7 +12,6 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 import urllib3
 
-from blobfile import _common as common
 from blobfile._common import (
     BaseStreamingReadFile,
     BaseStreamingWriteFile,

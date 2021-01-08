@@ -55,7 +55,6 @@ from blobfile._common import (
     Stat,
     DirEntry,
     Context,
-    INVALID_HOSTNAME_STATUS,
     CHUNK_SIZE,
 )
 

@@ -1,19 +1,34 @@
-import os
-import time
-import shlex
 import argparse
+import os
 import subprocess as sp
+import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def run_tests(name, rest, env):
-    os.chdir(os.path.dirname(SCRIPT_DIR))
+def run_tests_direct(rest, env):
+    print("running static checks")
 
+    for kv_pair in env:
+        k, _, v = kv_pair.partition("=")
+        os.environ[k] = v
+
+    start = time.time()
+    sp.run(["python", "testing/run-static.py"], check=True)
+    elapsed = int(time.time() - start)
+    print(f"elapsed {elapsed}s")
+
+    start = time.time()
+    sp.run(["python", "testing/run-tests.py", *rest], check=True)
+    elapsed = int(time.time() - start)
+    print(f"elapsed {elapsed}s")
+
+
+def run_tests_docker(name, rest, env):
     assert os.path.exists("testing/Dockerfile")
 
     sp.run(
-        ["docker", "build", "--file", "testing/Dockerfile", "--tag", name, "."],
+        ["docker", "build", "--file", "testing/Dockerfile", "--tag", name, "testing"],
         check=True,
     )
     google_credentials_path = os.environ.get(
@@ -93,10 +108,18 @@ def run_tests(name, rest, env):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--env", action="append")
+    parser.add_argument("--direct", action="store_true", help="run without docker")
+    parser.add_argument(
+        "--env", action="append", help="key=value environment variables to set"
+    )
     args, rest = parser.parse_known_args()
 
-    run_tests("blobfile", rest, [] if args.env is None else args.env)
+    os.chdir(os.path.dirname(SCRIPT_DIR))
+
+    if args.direct:
+        run_tests_direct(rest, [] if args.env is None else args.env)
+    else:
+        run_tests_docker("blobfile", rest, [] if args.env is None else args.env)
 
 
 if __name__ == "__main__":

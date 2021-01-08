@@ -1,4 +1,4 @@
-#!/usr/bin/env conda run -n env python
+#!/root/miniconda3/envs/env/bin/python
 import subprocess as sp
 import shlex
 import os
@@ -20,6 +20,7 @@ def format_files(dirpath, extensions, command):
 
 
 def main():
+    shell(["which", "python"])
     print("formatting python files")
     shell(
         [

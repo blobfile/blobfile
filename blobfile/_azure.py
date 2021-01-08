@@ -329,12 +329,12 @@ def combine_https_path(account: str, container: str, obj: str) -> str:
 def combine_az_path(account: str, container: str, obj: str) -> str:
     return f"az://{account}/{container}/{obj}"
 
+
 def combine_path(ctx: Context, account: str, container: str, obj: str) -> str:
     if ctx.output_az_paths:
         return combine_az_path(account, container, obj)
     else:
         return combine_https_path(account, container, obj)
-
 
 
 def makedirs(ctx: Context, path: str) -> None:
@@ -345,9 +345,7 @@ def makedirs(ctx: Context, path: str) -> None:
         path += "/"
     account, container, blob = split_path(path)
     req = Request(
-        url= build_url(
-            account, "/{container}/{blob}", container=container, blob=blob
-        ),
+        url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
         method="PUT",
         headers={"x-ms-blob-type": "BlockBlob"},
         success_codes=(201, 400),
@@ -357,7 +355,8 @@ def makedirs(ctx: Context, path: str) -> None:
         raise Error(
             f"Unable to create directory, account/container does not exist: '{path}'"
         )
-        
+
+
 def sign_with_shared_key(req: Request, key: str) -> str:
     # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key
     params_to_sign = []
@@ -825,6 +824,7 @@ def _finalize_blob(
                 message=f"unexpected status {resp.status}", request=req, response=resp
             )
 
+
 def isdir(ctx: Context, path: str) -> bool:
     """
     Return true if a path is an existing directory
@@ -834,9 +834,7 @@ def isdir(ctx: Context, path: str) -> bool:
     account, container, blob = split_path(path)
     if blob == "":
         req = Request(
-            url=build_url(
-                account, "/{container}", container=container, blob=blob
-            ),
+            url=build_url(account, "/{container}", container=container, blob=blob),
             method="GET",
             params=dict(restype="container"),
             success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
@@ -862,6 +860,7 @@ def isdir(ctx: Context, path: str) -> bool:
             if result["Blobs"] is not None:
                 return "BlobPrefix" in result["Blobs"] or "Blob" in result["Blobs"]
         return False
+
 
 def create_page_iterator(
     ctx: Context,
@@ -894,6 +893,7 @@ def create_page_iterator(
         if result["NextMarker"] is None:
             break
         p["marker"] = result["NextMarker"]
+
 
 class StreamingReadFile(BaseStreamingReadFile):
     def __init__(self, ctx: Context, path: str) -> None:

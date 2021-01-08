@@ -133,6 +133,7 @@ def _is_aws_path(path: str) -> bool:
         url.scheme == "https" and url.netloc.endswith(".amazonaws.com")
     ) or url.scheme == "s3"
 
+
 def _get_module(path: str) -> Optional[ModuleType]:
     if _is_gcp_path(path):
         return gcp
@@ -142,6 +143,7 @@ def _get_module(path: str) -> Optional[ModuleType]:
         return azure
     else:
         return None
+
 
 def _is_local_path(path: str) -> bool:
     return _get_module(path) is None
@@ -430,9 +432,6 @@ def _create_gcp_page_iterator(
         p["pageToken"] = result["nextPageToken"]
 
 
-
-
-
 def _gcp_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntry]:
     if "prefixes" in result:
         for p in result["prefixes"]:
@@ -445,6 +444,7 @@ def _gcp_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntr
                 yield _entry_from_dirpath(path)
             else:
                 yield _entry_from_path_stat(path, gcp.make_stat(item))
+
 
 def _azure_get_entries(
     account: str, container: str, result: Mapping[str, Any]
@@ -815,13 +815,16 @@ def _guess_isdir(path: str) -> bool:
     """
     if _is_local_path(path) and os.path.isdir(path):
         return True
-    elif (_is_gcp_path(path) or _is_azure_path(path) or _is_aws_path(path)) and path.endswith("/"):
+    elif (
+        _is_gcp_path(path) or _is_azure_path(path) or _is_aws_path(path)
+    ) and path.endswith("/"):
         return True
     return False
 
 
 def _aws_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
     raise NotImplementedError()
+
 
 def _gcp_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
     params = {}
@@ -910,7 +913,9 @@ def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
     """
     Same as `listdir`, but returns `DirEntry` objects instead of strings
     """
-    if (_is_gcp_path(path) or _is_azure_path(path) or _is_aws_path(path)) and not path.endswith("/"):
+    if (
+        _is_gcp_path(path) or _is_azure_path(path) or _is_aws_path(path)
+    ) and not path.endswith("/"):
         path += "/"
     if not exists(path):
         raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")

@@ -281,6 +281,7 @@ def generate_signed_url(
     signed_url = f"{host_name}{canonical_uri}?{canonical_query_string}&X-Goog-Signature={signature}"
     return signed_url, expiration
 
+
 def isdir(ctx: Context, path: str) -> bool:
     if not path.endswith("/"):
         path += "/"
@@ -306,6 +307,7 @@ def isdir(ctx: Context, path: str) -> bool:
         result = json.loads(resp.data)
         return "items" in result or "prefixes" in result
 
+
 def makedirs(ctx: Context, path: str) -> None:
     """
     Make any directories necessary to ensure that path is a directory
@@ -322,6 +324,7 @@ def makedirs(ctx: Context, path: str) -> None:
     resp = execute_api_request(ctx, req)
     if resp.status == 400:
         raise Error(f"Unable to create directory, bucket does not exist: '{path}'")
+
 
 def split_path(path: str) -> Tuple[str, str]:
     if not path.startswith("gs://"):

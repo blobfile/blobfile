@@ -164,7 +164,7 @@ def _write_contents(path: str, contents: str):
                 stderr=sp.DEVNULL,
             )
     elif path.startswith("s3://"):
-        bucket, key = aws.split_path(path)
+        bucket, _, key = aws.split_path(path)
         client = boto3.client('s3')
         client.put_object(Body=contents, Bucket=bucket, Key=key)
     else:
@@ -406,6 +406,25 @@ def test_aws_signature():
     "&X-Amz-Expires=86400"
     "&X-Amz-SignedHeaders=host"
     "&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404")
+
+def test_aws_auth():
+    import datetime
+    headers = aws.sign_request(
+        access_key="AKIAIOSFODNN7EXAMPLE", secret_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        region="us-east-1",
+        url=aws.build_url("examplebucket", "/?lifecycle="),
+        body="",
+        method="GET",
+        now=datetime.datetime(year=2013, month=5, day=24)
+    )
+
+
+
+    assert headers["Authorization"] == (
+        "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,"
+        "SignedHeaders=host;x-amz-content-sha256;x-amz-date,"
+        "Signature=fea454ca298b7da1c68078a5d1bdbfbbe0d65c699e0f91ac7a200a0136783543"
+    )
 
 def test_azure_public_get_url():
     contents = urllib.request.urlopen(AZURE_PUBLIC_URL).read()

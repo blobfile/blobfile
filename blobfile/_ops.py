@@ -1203,6 +1203,7 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
             raise FileNotFoundError(f"No such file: '{path}'")
         return resp.status == 200
     elif _is_aws_path(path):
+        # https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingMetadata.html
         raise NotImplementedError()
     elif _is_azure_path(path):
         account, container, blob = azure.split_path(path)

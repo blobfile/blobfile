@@ -229,7 +229,7 @@ def generate_signed_url(
     ordered_headers = sorted(h.items())
     for k, v in ordered_headers:
         lower_k = str(k).lower()
-        strip_v = str(v).lower()
+        strip_v = str(v).strip()
         canonical_headers += f"{lower_k}:{strip_v}\n"
 
     signed_headers_parts = []

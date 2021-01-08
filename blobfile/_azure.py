@@ -30,7 +30,6 @@ from blobfile._common import (
     BaseStreamingReadFile,
     BaseStreamingWriteFile,
     FileBody,
-    DirEntry,
 )
 
 SHARED_KEY = "shared_key"

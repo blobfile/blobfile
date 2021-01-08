@@ -2,6 +2,7 @@
 import subprocess as sp
 import shlex
 import os
+import shutil
 
 
 def shell(cmd):
@@ -20,7 +21,6 @@ def format_files(dirpath, extensions, command):
 
 
 def main():
-    shell(["which", "python"])
     print("formatting python files")
     shell(
         [
@@ -32,7 +32,7 @@ def main():
     )
 
     print("checking python files")
-    shell(["pyright", "--project", "."])
+    shell([shutil.which("pyright"), "--project", "."])
 
 
 if __name__ == "__main__":

@@ -1,35 +1,14 @@
-import urllib.parse
-import json
-import base64
-import os
-import time
-import platform
-import datetime
-import hashlib
-import socket
-import binascii
-import math
 import concurrent.futures
-from typing import Mapping, Dict, Any, Optional, Tuple, List
+from typing import Mapping, Any, Optional, Tuple
 
-from Cryptodome.Signature import pkcs1_15
-from Cryptodome.Hash import SHA256
-from Cryptodome.PublicKey import RSA
 import urllib3
 
-from blobfile import _common as common
 from blobfile._common import (
     Request,
-    Error,
     Stat,
-    GCP_BASE_URL,
     Context,
-    TokenManager,
-    RequestFailure,
-    RestartableStreamingWriteFailure,
     BaseStreamingReadFile,
     BaseStreamingWriteFile,
-    FileBody,
 )
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60

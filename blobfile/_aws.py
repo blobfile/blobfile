@@ -256,12 +256,6 @@ def create_api_request(req: Request, access_token: str) -> Request:
         retry_codes=tuple(req.retry_codes),
     )
 
-    import requests
-
-    r = requests.head(result.url, headers=headers)
-    import ipdb
-
-    ipdb.set_trace()
     return result
 
 

@@ -505,7 +505,7 @@ def basename(path: str) -> str:
         _, obj = gcp.split_path(path)
         return obj.split("/")[-1]
     if _is_aws_path(path):
-        _, obj = aws.split_path(path)
+        _, _, obj = aws.split_path(path)
         return obj.split("/")[-1]
     elif _is_azure_path(path):
         _, _, obj = azure.split_path(path)
@@ -1417,7 +1417,7 @@ def dirname(path: str) -> str:
         else:
             return gcp.combine_path(bucket, "")[:-1]
     if _is_aws_path(path):
-        bucket, obj = aws.split_path(path)
+        bucket, _, obj = aws.split_path(path)
         obj = _strip_slashes(obj)
         if "/" in obj:
             obj = "/".join(obj.split("/")[:-1])
@@ -1471,7 +1471,7 @@ def _join2(a: str, b: str) -> str:
                 obj = obj[1:]
             return gcp.combine_path(bucket, obj)
         elif _is_aws_path(a):
-            bucket, obj = aws.split_path(a)
+            bucket, _, obj = aws.split_path(a)
             obj = _safe_urljoin(obj, b)
             if obj.startswith("/"):
                 obj = obj[1:]

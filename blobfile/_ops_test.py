@@ -381,7 +381,7 @@ def _convert_https_to_az(path):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_get_url(ctx):
     contents = b"meow!"
@@ -434,7 +434,7 @@ def test_azure_public_get_url():
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 @pytest.mark.parametrize("streaming", [True, False])
 def test_read_write(ctx, streaming):
@@ -468,7 +468,7 @@ def test_az_path():
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_append(ctx):
     contents = b"meow!\n"
@@ -495,7 +495,7 @@ def test_stat(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_set_mtime(ctx):
     contents = b"meow!"
@@ -526,7 +526,7 @@ def test_azure_metadata(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_remove(ctx):
     contents = b"meow!"
@@ -540,7 +540,7 @@ def test_remove(ctx):
 @pytest.mark.parametrize(
     # don't test local path because that has slightly different behavior
     "ctx",
-    [_get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path],
+    [_get_temp_gcs_path, _get_temp_as_path],
 )
 def test_rmdir(ctx):
     contents = b"meow!"
@@ -568,7 +568,7 @@ def test_rmdir(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_makedirs(ctx):
     contents = b"meow!"
@@ -580,7 +580,7 @@ def test_makedirs(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_isdir(ctx):
     contents = b"meow!"
@@ -605,7 +605,7 @@ def test_isdir(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_listdir(ctx):
     contents = b"meow!"
@@ -626,7 +626,7 @@ def test_listdir(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_scandir(ctx):
     contents = b"meow!"
@@ -652,7 +652,7 @@ def test_scandir(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_listdir_sharded(ctx):
     contents = b"meow!"
@@ -680,7 +680,7 @@ def test_listdir_sharded(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 @pytest.mark.parametrize("topdown", [False, True])
 def test_walk(ctx, topdown):
@@ -707,7 +707,7 @@ def test_walk(ctx, topdown):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 @pytest.mark.parametrize("parallel", [False, True])
 def test_glob(ctx, parallel):
@@ -771,7 +771,7 @@ def test_glob(ctx, parallel):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_scanglob(ctx):
     contents = b"meow!"
@@ -798,7 +798,7 @@ def test_scanglob(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_rmtree(ctx):
     contents = b"meow!"
@@ -894,7 +894,7 @@ def test_copy_azure_public():
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_exists(ctx):
     contents = b"meow!"
@@ -1043,7 +1043,7 @@ def test_invalid_paths(base_path):
 
 
 @pytest.mark.parametrize("buffer_size", [1, 100])
-@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path])
+@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])
 def test_read_stats(buffer_size, ctx):
     with ctx() as path:
         contents = b"meow!"
@@ -1074,7 +1074,7 @@ def test_read_stats(buffer_size, ctx):
             assert r.raw.bytes_read == len(contents)  # type: ignore
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path])
+@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])
 def test_cache_dir(ctx):
     cache_dir = tempfile.mkdtemp()
     contents = b"meow!"
@@ -1096,7 +1096,7 @@ def test_cache_dir(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 @pytest.mark.parametrize("use_random", [False, True])
 def test_change_file_size(ctx, use_random):
@@ -1145,7 +1145,7 @@ def test_change_file_size(ctx, use_random):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_overwrite_while_reading(ctx):
     chunk_size = 2 ** 20
@@ -1186,7 +1186,7 @@ def test_create_local_intermediate_dirs():
 @pytest.mark.parametrize("binary", [True, False])
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_more_read_write(binary, streaming, ctx):
     rng = np.random.RandomState(0)
@@ -1266,7 +1266,7 @@ def test_more_read_write(binary, streaming, ctx):
 
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_video(streaming, ctx):
     rng = np.random.RandomState(0)
@@ -1303,7 +1303,7 @@ def test_video(streaming, ctx):
 # this is pretty slow and docker will often run out of memory
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_large_file(ctx):
     contents = b"0" * 2 ** 32
@@ -1354,7 +1354,7 @@ def test_composite_objects():
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_md5(ctx):
     contents = b"meow!"

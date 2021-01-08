@@ -1,29 +1,24 @@
+import base64
 import concurrent.futures
+import configparser
 import datetime
 import hashlib
+import hmac
 import os
 import platform
+import re
 import urllib.parse
-from typing import Any, Dict, List, Mapping, Optional, Tuple
-import configparser
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 import urllib3
-from Cryptodome.Hash import SHA256
-from Cryptodome.PublicKey import RSA
-import hmac
-from Cryptodome.Signature import pkcs1_15
 
 from blobfile import _common as common
 from blobfile._common import (
-    GCP_BASE_URL,
     BaseStreamingReadFile,
     BaseStreamingWriteFile,
     Context,
     Error,
-    FileBody,
     Request,
-    RequestFailure,
-    RestartableStreamingWriteFailure,
     Stat,
     TokenManager,
 )
@@ -256,10 +251,6 @@ def create_api_request(req: Request, access_token: str) -> Request:
 def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
     # Dummy for now
     return None, 60 * 60 * 24
-
-
-def _create_access_token_request(scopes: List[str]) -> Request:
-    raise NotImplementedError()
 
 
 def execute_api_request(ctx: Context, req: Request) -> urllib3.HTTPResponse:

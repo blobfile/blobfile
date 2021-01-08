@@ -4,6 +4,9 @@ name: 'Run tests'
 description: 'Run tests'
 runs:
   using: 'docker'
-  image: 'testing/Dockerfile'
+  image: 'Dockerfile'
   
-  entrypoint: 'python /github/workspace/testing/run-static.py'
+  args: 
+    - 'python'
+    - '/github/workspace/testing/run-static.py'
+    - '--check-only'

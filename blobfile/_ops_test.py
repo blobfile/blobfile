@@ -6,6 +6,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 import base64
 import contextlib
+import datetime
 import hashlib
 import json
 import multiprocessing as mp
@@ -19,15 +20,15 @@ import time
 import urllib.request
 
 import av
+import boto3
 import imageio
 import numpy as np
 import pytest
-import boto3
 from tensorflow.io import gfile
 
 import blobfile as bf
-from blobfile import _azure as azure
 from blobfile import _aws as aws
+from blobfile import _azure as azure
 from blobfile import _common as common
 from blobfile import _ops as ops
 
@@ -391,8 +392,6 @@ def test_get_url(ctx):
 
 
 def test_aws_signature():
-    import datetime
-
     os.environ["AWS_ACCESS_KEY_ID"] = "AKIAIOSFODNN7EXAMPLE"
     os.environ["AWS_SECRET_ACCESS_KEY"] = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
     os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
@@ -418,8 +417,6 @@ def test_aws_signature():
 
 
 def test_aws_auth():
-    import datetime
-
     common_params = dict(
         access_key="AKIAIOSFODNN7EXAMPLE",
         secret_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",

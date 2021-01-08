@@ -100,13 +100,12 @@ def _get_temp_gcs_path():
     yield path + "/file.name"
     gfile.rmtree(path)
 
+
 @contextlib.contextmanager
 def _get_temp_aws_path():
-    test_dir = "".join(
-        random.choice(string.ascii_lowercase) for _ in range(16)
-    )
+    test_dir = "".join(random.choice(string.ascii_lowercase) for _ in range(16))
     path = f"s3://{AWS_TEST_BUCKET}/" + test_dir
-    s3 = boto3.resource('s3')
+    s3 = boto3.resource("s3")
     bucket = s3.Bucket(AWS_TEST_BUCKET)
     yield path + "/file.name"
     bucket.objects.filter(Prefix=test_dir + "/").delete()
@@ -165,7 +164,7 @@ def _write_contents(path: str, contents: str):
             )
     elif path.startswith("s3://"):
         bucket, _, key = aws.split_path(path)
-        client = boto3.client('s3')
+        client = boto3.client("s3")
         client.put_object(Body=contents, Bucket=bucket, Key=key)
     else:
         with gfile.GFile(path, "wb") as f:
@@ -202,9 +201,9 @@ def _read_contents(path: str):
                 return f.read()
     elif path.startswith("s3://"):
         bucket, key = aws.split_path(path)
-        client = boto3.client('s3')
+        client = boto3.client("s3")
         obj = client.get_object(Bucket=bucket, Key=key)
-        return json.loads(obj['Body'].read().decode('utf-8'))
+        return json.loads(obj["Body"].read().decode("utf-8"))
     else:
         with gfile.GFile(path, "rb") as f:
             return f.read()
@@ -390,41 +389,53 @@ def test_get_url(ctx):
         url, _ = bf.get_url(path)
         assert urllib.request.urlopen(url).read() == contents
 
+
 def test_aws_signature():
     import datetime
+
     os.environ["AWS_ACCESS_KEY_ID"] = "AKIAIOSFODNN7EXAMPLE"
     os.environ["AWS_SECRET_ACCESS_KEY"] = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
     os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
     # https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
-    url, expiration = aws.generate_signed_url("examplebucket", "test.txt", 86400, "GET", now=datetime.datetime(year=2013, month=5, day=24))
+    url, expiration = aws.generate_signed_url(
+        "examplebucket",
+        "test.txt",
+        86400,
+        "GET",
+        now=datetime.datetime(year=2013, month=5, day=24),
+    )
     assert expiration == 86400
 
-    assert url == ("https://examplebucket.s3.amazonaws.com/test.txt?"
-    "X-Amz-Algorithm=AWS4-HMAC-SHA256"
-    "&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request"
-    "&X-Amz-Date=20130524T000000Z"
-    "&X-Amz-Expires=86400"
-    "&X-Amz-SignedHeaders=host"
-    "&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404")
+    assert url == (
+        "https://examplebucket.s3.amazonaws.com/test.txt?"
+        "X-Amz-Algorithm=AWS4-HMAC-SHA256"
+        "&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request"
+        "&X-Amz-Date=20130524T000000Z"
+        "&X-Amz-Expires=86400"
+        "&X-Amz-SignedHeaders=host"
+        "&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
+    )
+
 
 def test_aws_auth():
     import datetime
+
     headers = aws.sign_request(
-        access_key="AKIAIOSFODNN7EXAMPLE", secret_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        access_key="AKIAIOSFODNN7EXAMPLE",
+        secret_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
         region="us-east-1",
         url=aws.build_url("examplebucket", "/?lifecycle="),
         body="",
         method="GET",
-        now=datetime.datetime(year=2013, month=5, day=24)
+        now=datetime.datetime(year=2013, month=5, day=24),
     )
-
-
 
     assert headers["Authorization"] == (
         "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,"
         "SignedHeaders=host;x-amz-content-sha256;x-amz-date,"
         "Signature=fea454ca298b7da1c68078a5d1bdbfbbe0d65c699e0f91ac7a200a0136783543"
     )
+
 
 def test_azure_public_get_url():
     contents = urllib.request.urlopen(AZURE_PUBLIC_URL).read()
@@ -483,7 +494,8 @@ def test_append(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx",
+    [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path],
 )
 def test_stat(ctx):
     contents = b"meow!"

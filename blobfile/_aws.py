@@ -1,16 +1,8 @@
-import base64
-import binascii
 import concurrent.futures
 import datetime
 import hashlib
-import json
-import logging
-import math
 import os
 import platform
-import re
-import socket
-import time
 import urllib.parse
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 import configparser
@@ -99,8 +91,8 @@ def sign_request(
     region: str,
     method: str,
     body: str = "",
-    service:str="s3",
-    now: Optional[datetime.datetime] = None
+    service: str = "s3",
+    now: Optional[datetime.datetime] = None,
 ):
     u = urllib.parse.urlparse(url)
 
@@ -128,7 +120,7 @@ def sign_request(
     headers = {
         "host": u.netloc,
         "x-amz-date": amzdate,
-        "x-amz-content-sha256": hashlib.sha256(body.encode()).hexdigest()
+        "x-amz-content-sha256": hashlib.sha256(body.encode()).hexdigest(),
     }
 
     # Step 4: Create the canonical headers and signed headers. Header names
@@ -450,6 +442,7 @@ def make_stat(item: Mapping[str, Any]) -> Stat:
         md5=_get_md5(item),
         version=item["Etag"],
     )
+
 
 class StreamingReadFile(BaseStreamingReadFile):
     def __init__(self, ctx: Context, path: str) -> None:

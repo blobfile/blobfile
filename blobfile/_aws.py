@@ -22,6 +22,8 @@ from blobfile._common import (
     Request,
     Stat,
     TokenManager,
+    RequestFailure,
+    RestartableStreamingWriteFailure,
 )
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
@@ -71,6 +73,7 @@ def _load_credentials() -> Tuple[Dict[str, Any], Optional[str]]:
         {},
         "credentials not found, please login with 'aws configure' or else set the 'AWS_SHARED_CREDENTIALS_FILE' environment variable to the path of a ini format service account key",
     )
+
 
 def isdir(ctx: Context, path: str) -> bool:
     if not path.endswith("/"):
@@ -136,7 +139,8 @@ def create_page_iterator(
         if result.get("NextMarker") is None:
             break
         p["marker"] = result["NextMarker"]
-        
+
+
 def makedirs(ctx: Context, path: str) -> None:
     """
     Make any directories necessary to ensure that path is a directory
@@ -190,6 +194,9 @@ def sign_request(
     # For this example, the query string is pre-formatted in the request_parameters variable.
     canonical_querystring = ""
     params = params or u.params
+    if "?" in url and not u.params:
+        # TODO(8enmann): handle subcommands better.
+        canonical_querystring = u.query
     if params:
         canonical_query_string_parts = []
         ordered_params = sorted(params.items())
@@ -330,7 +337,6 @@ def create_api_request(req: Request, access_token: str) -> Request:
         success_codes=tuple(req.success_codes),
         retry_codes=tuple(req.retry_codes),
     )
-
     return result
 
 
@@ -525,10 +531,7 @@ def make_stat(item: Mapping[str, Any]) -> Stat:
 
 class StreamingReadFile(BaseStreamingReadFile):
     def __init__(self, ctx: Context, path: str) -> None:
-        st = maybe_stat(ctx, path)
-        if st is None:
-            raise FileNotFoundError(f"No such file or bucket: '{path}'")
-        super().__init__(ctx=ctx, path=path, size=st.size)
+        raise NotImplementedError()
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
@@ -549,10 +552,86 @@ class StreamingReadFile(BaseStreamingReadFile):
 
 class StreamingWriteFile(BaseStreamingWriteFile):
     def __init__(self, ctx: Context, path: str) -> None:
-        raise NotImplementedError()
+        self._bucket, _, self._blob = split_path(path)
+        req = Request(
+            url=build_url(self._bucket, "/{blob}?uploads=", blob=self._blob),
+            method="POST",
+            success_codes=(200, 400, 404),
+        )
+        resp = execute_api_request(ctx, req)
+        if resp.status in (400, 404):
+            raise FileNotFoundError(f"No such file or bucket: '{path}'")
+        self._id = str(
+            xmltodict.parse(resp.data)["InitiateMultipartUploadResult"]["UploadId"]
+        )
+        # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
+        assert ctx.google_write_chunk_size % (256 * 1024) == 0
+        self._chunk_id = 1
+        self._etags: Dict[int, str] = {}
+        super().__init__(ctx=ctx, chunk_size=ctx.google_write_chunk_size)
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
-        raise NotImplementedError()
+        # part numbers from 1-10k inclusive
+        # non-final parts must be >= 5MB
+        # Content-MD5 must be included unless signing with auth header
+        req = Request(
+            url=build_url(self._bucket, "/{blob}", blob=self._blob),
+            params={
+                "partNumber": str(self._chunk_id),
+                "uploadId": self._id,
+            },
+            data=chunk,
+            method="PUT",
+            success_codes=(200, 201),
+        )
+
+        try:
+            resp = execute_api_request(self._ctx, req)
+            self._etags[self._chunk_id] = resp.headers["ETag"]
+
+        except RequestFailure as e:
+            # https://cloud.google.com/storage/docs/resumable-uploads#practices
+            if e.response_status in (404, 410):
+                raise RestartableStreamingWriteFailure(
+                    message=e.message,
+                    request_string=e.request_string,
+                    response_status=e.response_status,
+                    error=e.error,
+                    error_description=e.error_description,
+                )
+            else:
+                raise
+        self._chunk_id += 1
+
+        if finalize:
+            self._complete()
+
+    def _complete(self) -> None:
+        req = Request(
+            url=build_url(self._bucket, "/{blob}", blob=self._blob),
+            params={
+                "uploadId": self._id,
+            },
+            data={
+                "CompleteMultipartUpload": {
+                    "Part": [
+                        {"PartNumber": k, "ETag": v} for k, v in self._etags.items()
+                    ]
+                }
+            },
+            method="POST",
+            success_codes=(200, 201),
+        )
+        try:
+            resp = execute_api_request(self._ctx, req)
+            result = xmltodict.parse(resp.data)
+            if "Error" in result:
+                raise RequestFailure.create_from_request_response(
+                    message=str(result), request=req, response=resp
+                )
+        except RequestFailure as e:
+            # TODO(8enmann): Do something smart here.
+            raise e
 
 
 def maybe_stat(ctx: Context, path: str) -> Optional[Stat]:

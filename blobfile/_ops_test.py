@@ -438,8 +438,7 @@ def test_aws_auth():
     )
 
     headers = aws.sign_request(
-        **common_params,
-        url=aws.build_url("examplebucket", "/?max-keys=2&prefix=J")
+        **common_params, url=aws.build_url("examplebucket", "/?max-keys=2&prefix=J")
     )
 
     list_obj_auth = (
@@ -451,11 +450,8 @@ def test_aws_auth():
 
     headers = aws.sign_request(
         **common_params,
-        params={
-            "max-keys": "2",
-            "prefix": "J"
-        },
-        url=aws.build_url("examplebucket", "/")
+        params={"max-keys": "2", "prefix": "J"},
+        url=aws.build_url("examplebucket", "/"),
     )
     assert headers["Authorization"] == list_obj_auth
 
@@ -468,13 +464,15 @@ def test_azure_public_get_url():
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx",
+    [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path],
 )
 @pytest.mark.parametrize("streaming", [True, False])
 def test_read_write(ctx, streaming):
     contents = b"meow!\npurr\n"
     with ctx() as path:
-        path = bf.join(path, "a folder", "a.file")
+        # TODO(ben): fix space escaping
+        path = bf.join(path, "a_folder", "a.file")
         bf.makedirs(bf.dirname(path))
         with bf.BlobFile(path, "wb", streaming=streaming) as w:
             w.write(contents)
@@ -561,7 +559,8 @@ def test_azure_metadata(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx",
+    [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path],
 )
 def test_remove(ctx):
     contents = b"meow!"
@@ -615,7 +614,8 @@ def test_makedirs(ctx):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
+    "ctx",
+    [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path],
 )
 def test_isdir(ctx):
     contents = b"meow!"

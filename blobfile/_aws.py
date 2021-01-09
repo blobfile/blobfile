@@ -531,7 +531,10 @@ def make_stat(item: Mapping[str, Any]) -> Stat:
 
 class StreamingReadFile(BaseStreamingReadFile):
     def __init__(self, ctx: Context, path: str) -> None:
-        raise NotImplementedError()
+        st = maybe_stat(ctx, path)
+        if st is None:
+            raise FileNotFoundError(f"No such file or bucket: '{path}'")
+        super().__init__(ctx=ctx, path=path, size=st.size)
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None

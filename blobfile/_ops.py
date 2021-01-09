@@ -748,7 +748,7 @@ def scanglob(pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
                 raise Error("Wildcards cannot be used in bucket name")
             root = gcp.combine_path(bucket, "")
         elif _is_aws_path(pattern):
-            bucket, blob_prefix = aws.split_path(pattern)
+            bucket, _, blob_prefix = aws.split_path(pattern)
             if "*" in bucket:
                 raise Error("Wildcards cannot be used in bucket name")
             root = aws.combine_path(bucket, "")
@@ -842,9 +842,10 @@ def _aws_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirE
 
     bucket, _, blob = aws.split_path(path)
     it = aws.create_page_iterator(
+        ctx=_context,
         url=aws.build_url(bucket, "/{object}", object=blob),
         method="GET",
-        params=dict(prefix=prefix, **params),
+        params=dict(prefix=blob, **params),
     )
     for result in it:
         for entry in _aws_get_entries(bucket, result):

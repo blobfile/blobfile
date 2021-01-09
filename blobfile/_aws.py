@@ -531,12 +531,26 @@ def make_stat(item: Mapping[str, Any]) -> Stat:
 
 class StreamingReadFile(BaseStreamingReadFile):
     def __init__(self, ctx: Context, path: str) -> None:
-        raise NotImplementedError()
+        st = maybe_stat(ctx, path)
+        if st is None:
+            raise FileNotFoundError(f"No such file or bucket: '{path}'")
+        super().__init__(ctx=ctx, path=path, size=st.size)
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
     ) -> urllib3.response.HTTPResponse:
-        raise NotImplementedError()
+        bucket, _, blob = split_path(self._path)
+        req = Request(
+            url=build_url(bucket, "/{object}", object=blob),
+            method="GET",
+            params=dict(alt="media"),
+            headers={"Range": f"bytes={start}-{end}"},
+            success_codes=(206, 416),
+            # if we are streaming the data, make
+            # sure we don't preload it
+            preload_content=not streaming,
+        )
+        return execute_api_request(self._ctx, req)
 
 
 class StreamingWriteFile(BaseStreamingWriteFile):

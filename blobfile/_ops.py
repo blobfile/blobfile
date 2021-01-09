@@ -430,6 +430,18 @@ def _create_gcp_page_iterator(
             break
         p["pageToken"] = result["nextPageToken"]
 
+def _aws_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntry]:
+    if "prefixes" in result:
+        for p in result["prefixes"]:
+            path = aws.combine_path(bucket, p)
+            yield _entry_from_dirpath(path)
+    if "items" in result:
+        for item in result["items"]:
+            path = aws.combine_path(bucket, item["name"])
+            if item["name"].endswith("/"):
+                yield _entry_from_dirpath(path)
+            else:
+                yield _entry_from_path_stat(path, aws.make_stat(item))
 
 def _gcp_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntry]:
     if "prefixes" in result:
@@ -736,7 +748,7 @@ def scanglob(pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
                 raise Error("Wildcards cannot be used in bucket name")
             root = gcp.combine_path(bucket, "")
         elif _is_aws_path(pattern):
-            bucket, blob_prefix = aws.split_path(pattern)
+            bucket, _, blob_prefix = aws.split_path(pattern)
             if "*" in bucket:
                 raise Error("Wildcards cannot be used in bucket name")
             root = aws.combine_path(bucket, "")
@@ -824,7 +836,20 @@ def _guess_isdir(path: str) -> bool:
 
 
 def _aws_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
-    raise NotImplementedError()
+    params = {}
+    if delimiter is not None:
+        params["delimiter"] = delimiter
+
+    bucket, _, blob = aws.split_path(path)
+    it = aws.create_page_iterator(
+        ctx=_context,
+        url=aws.build_url(bucket, "/{object}", object=blob),
+        method="GET",
+        params=dict(prefix=blob, **params),
+    )
+    for result in it:
+        for entry in _aws_get_entries(bucket, result):
+            yield entry
 
 
 def _gcp_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:

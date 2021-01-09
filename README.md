@@ -1,8 +1,8 @@
 # blobfile
 
-This is a standalone clone of TensorFlow's [`gfile`](https://www.tensorflow.org/api_docs/python/tf/io/gfile/GFile), supporting local paths, Google Cloud Storage paths (`gs://<bucket>`), and Azure Blobs paths (`https://<account>.blob.core.windows.net/<container>/` or `az://<account>/<container>`).
+This is a standalone clone of TensorFlow's [`gfile`](https://www.tensorflow.org/api_docs/python/tf/io/gfile/GFile), supporting local paths, Google Cloud Storage paths (`gs://<bucket>`), and Azure Blob Storage paths (`https://<account>.blob.core.windows.net/<container>/` or `az://<account>/<container>`).
 
-The main function is `BlobFile`, a replacement for `GFile`.  There are also a few additional functions, `basename`, `dirname`, and `join`, which mostly do the same thing as their `os.path` namesakes, only they also support GCS paths and Azure Storage paths.
+The main function is `BlobFile`, a replacement for `GFile`.  There are also a few additional functions, `basename`, `dirname`, and `join`, which mostly do the same thing as their `os.path` namesakes, only they also support GCS paths and ABS paths.
 
 ## Installation
 

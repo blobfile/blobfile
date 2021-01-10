@@ -431,6 +431,13 @@ def _create_gcp_page_iterator(
         p["pageToken"] = result["nextPageToken"]
 
 def _aws_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntry]:
+    if "CommonPrefixes" in result:
+        contents = result["CommonPrefixes"]
+        if isinstance(contents, dict):
+            contents = [contents]
+        for c in contents:
+            path = aws.combine_path(bucket, c["Prefix"])
+            yield _entry_from_dirpath(path)
     if "Contents" in result:
         contents = result["Contents"]
         if isinstance(contents, dict):

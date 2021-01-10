@@ -431,17 +431,16 @@ def _create_gcp_page_iterator(
         p["pageToken"] = result["nextPageToken"]
 
 def _aws_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntry]:
-    if "prefixes" in result:
-        for p in result["prefixes"]:
-            path = aws.combine_path(bucket, p)
-            yield _entry_from_dirpath(path)
-    if "items" in result:
-        for item in result["items"]:
-            path = aws.combine_path(bucket, item["name"])
-            if item["name"].endswith("/"):
+    if "Contents" in result:
+        contents = result["Contents"]
+        if isinstance(contents, dict):
+            contents = [contents]
+        for c in contents:
+            path = aws.combine_path(bucket, c["Key"])
+            if c["Key"].endswith("/"):
                 yield _entry_from_dirpath(path)
             else:
-                yield _entry_from_path_stat(path, aws.make_stat(item))
+                yield _entry_from_path_stat(path, aws.make_stat(c))
 
 def _gcp_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntry]:
     if "prefixes" in result:
@@ -843,7 +842,7 @@ def _aws_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirE
     bucket, _, blob = aws.split_path(path)
     it = aws.create_page_iterator(
         ctx=_context,
-        url=aws.build_url(bucket, "/{object}", object=blob),
+        url=aws.build_url(bucket, "/"),
         method="GET",
         params=dict(prefix=blob, **params),
     )

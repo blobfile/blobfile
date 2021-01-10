@@ -509,21 +509,26 @@ def _get_md5(metadata: Mapping[str, Any]) -> Optional[str]:
 
 
 def _parse_timestamp(text: str) -> float:
+    if " " in text:
+        pattern = "%a, %d %b %Y %H:%M:%S %z"
+    else:
+        pattern = "%Y-%m-%dT%H:%M:%S.%fZ"
+
     return datetime.datetime.strptime(
-        text.replace("GMT", "Z"), "%a, %d %b %Y %H:%M:%S %z"
+        text.replace("GMT", "Z"), pattern
     ).timestamp()
 
 
 def make_stat(item: Mapping[str, Any]) -> Stat:
     # AWS doesn't provide ctime, only mtime.
     # https://stackoverflow.com/a/40699793
-    mtime = _parse_timestamp(item["Last-Modified"])
+    mtime = _parse_timestamp(item.get("Last-Modified") or item["LastModified"])
     return Stat(
-        size=int(item["Content-Length"]),
+        size=int(item.get("Content-Length") or item["Size"]),
         mtime=mtime,
         ctime=mtime,
         md5=_get_md5(item),
-        version=item["Etag"],
+        version=item.get("Etag") or item["ETag"],
     )
 
 

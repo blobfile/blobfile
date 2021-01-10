@@ -743,7 +743,7 @@ def test_walk(ctx, topdown):
 
 
 @pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
+    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path, _get_temp_aws_path]
 )
 @pytest.mark.parametrize("parallel", [False, True])
 def test_glob(ctx, parallel):

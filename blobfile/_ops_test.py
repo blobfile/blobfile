@@ -201,10 +201,11 @@ def _read_contents(path: str):
             with open(filepath, "rb") as f:
                 return f.read()
     elif path.startswith("s3://"):
-        bucket, key = aws.split_path(path)
+        bucket, _, key = aws.split_path(path)
         client = boto3.client("s3")
         obj = client.get_object(Bucket=bucket, Key=key)
-        return json.loads(obj["Body"].read().decode("utf-8"))
+        return obj["Body"].read()
+
     else:
         with gfile.GFile(path, "rb") as f:
             return f.read()
@@ -893,19 +894,24 @@ def test_copy(parallel):
     contents = b"meow!"
     with _get_temp_local_path() as local_path1, _get_temp_local_path() as local_path2, _get_temp_local_path() as local_path3, _get_temp_gcs_path() as gcs_path1, _get_temp_gcs_path() as gcs_path2, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2, _get_temp_as_path(
         account=AS_TEST_ACCOUNT2, container=AS_TEST_CONTAINER2
-    ) as as_path3, _get_temp_as_path() as as_path4:
+    ) as as_path3, _get_temp_as_path() as as_path4,  _get_temp_aws_path() as aws_path1, _get_temp_aws_path() as aws_path2:
         with pytest.raises(FileNotFoundError):
             bf.copy(gcs_path1, gcs_path2, parallel=parallel)
         with pytest.raises(FileNotFoundError):
             bf.copy(as_path1, as_path2, parallel=parallel)
+        with pytest.raises(FileNotFoundError):
+            bf.copy(aws_path1, as_path2, parallel=parallel)
 
         _write_contents(local_path1, contents)
 
         testcases = [
             (local_path1, local_path2),
             (local_path1, gcs_path1),
+            (local_path1, aws_path1),
             (gcs_path1, gcs_path2),
             (gcs_path2, as_path1),
+            #(aws_path1, aws_path2),
+            (gcs_path2, aws_path2),
             (as_path1, as_path2),
             (as_path2, as_path3),
             (as_path3, local_path3),

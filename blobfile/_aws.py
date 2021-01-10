@@ -209,7 +209,7 @@ def sign_request(
     headers = {
         "host": u.netloc,
         "x-amz-date": amzdate,
-        "x-amz-content-sha256": hashlib.sha256(body).hexdigest(),
+        "x-amz-content-sha256": hashlib.sha256(body or b"").hexdigest(),
     }
 
     # Step 4: Create the canonical headers and signed headers. Header names
@@ -308,8 +308,6 @@ def create_api_request(req: Request, access_token: str) -> Request:
     data = req.data
     if data is not None and isinstance(data, dict):
         data = xmltodict.unparse(data).encode("utf8")
-    else:
-        data = b""
 
     creds, err = _load_credentials()
     if err is not None:
@@ -545,7 +543,7 @@ class StreamingReadFile(BaseStreamingReadFile):
             method="GET",
             params=dict(alt="media"),
             headers={"Range": f"bytes={start}-{end}"},
-            success_codes=(206, 416),
+            success_codes=(200, 206, 416),
             # if we are streaming the data, make
             # sure we don't preload it
             preload_content=not streaming,

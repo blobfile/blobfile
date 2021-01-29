@@ -751,3 +751,9 @@ def calc_range(start: Optional[int] = None, end: Optional[int] = None) -> str:
             return f"bytes=-{-int(end)}"
     else:
         raise Error("Invalid range")
+
+
+def strip_slashes(path: str) -> str:
+    while path.endswith("/"):
+        path = path[:-1]
+    return path

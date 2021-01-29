@@ -31,6 +31,7 @@ from blobfile._common import (
     BaseStreamingWriteFile,
     FileBody,
     DirEntry,
+    strip_slashes,
 )
 
 SHARED_KEY = "shared_key"
@@ -1263,6 +1264,138 @@ def _get_entries(
             else:
                 props = b["Properties"]
                 yield entry_from_path_stat(path, make_stat(props))
+
+
+def get_url(ctx: Context, path: str) -> Tuple[str, Optional[float]]:
+    account, container, blob = split_path(path)
+    url = build_url(account, "/{container}/{blob}", container=container, blob=blob)
+    token = sas_token_manager.get_token(ctx=ctx, key=(account, container))
+    if token is None:
+        # the container has public access
+        return url, float("inf")
+    return generate_signed_url(key=token, url=url)
+
+
+def set_mtime(
+    ctx: Context, path: str, mtime: float, version: Optional[str] = None
+) -> bool:
+    account, container, blob = split_path(path)
+    headers = {}
+    if version is not None:
+        headers["If-Match"] = version
+    req = Request(
+        url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
+        method="HEAD",
+        params=dict(comp="metadata"),
+        headers=headers,
+        success_codes=(200, 404, 412),
+    )
+    resp = execute_api_request(ctx, req)
+    if resp.status == 404:
+        raise FileNotFoundError(f"No such file: '{path}'")
+    if resp.status == 412:
+        return False
+
+    headers = {k: v for k, v in resp.headers.items() if k.startswith("x-ms-meta-")}
+    headers["x-ms-meta-blobfilemtime"] = str(mtime)
+    if version is not None:
+        headers["If-Match"] = version
+    req = Request(
+        url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
+        method="PUT",
+        params=dict(comp="metadata"),
+        headers=headers,
+        success_codes=(200, 404, 412),
+    )
+    resp = execute_api_request(ctx, req)
+    if resp.status == 404:
+        raise FileNotFoundError(f"No such file: '{path}'")
+    return resp.status == 200
+
+
+def dirname(ctx: Context, path: str) -> str:
+    account, container, obj = split_path(path)
+    obj = strip_slashes(obj)
+    if "/" in obj:
+        obj = "/".join(obj.split("/")[:-1])
+        return combine_path(ctx, account, container, obj)
+    else:
+        return combine_path(ctx, account, container, "")[:-1]
+
+
+def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[str]:
+    # https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob
+    dst_account, dst_container, dst_blob = split_path(dst)
+    src_account, src_container, src_blob = split_path(src)
+
+    def build_req() -> Request:
+        src_url = build_url(
+            src_account, "/{container}/{blob}", container=src_container, blob=src_blob
+        )
+        if src_account != dst_account:
+            # the signed url can expire, so technically we should get the sas_token and build the signed url
+            # each time we build a new request
+            sas_token = sas_token_manager.get_token(
+                ctx=ctx, key=(src_account, src_container)
+            )
+            # if we don't get a token, it's likely we have anonymous access to the container
+            # if we do get a token, the container is likely private and we need to use
+            # a signed url as the source
+            if sas_token is not None:
+                src_url, _ = generate_signed_url(key=sas_token, url=src_url)
+        req = Request(
+            url=build_url(
+                dst_account,
+                "/{container}/{blob}",
+                container=dst_container,
+                blob=dst_blob,
+            ),
+            method="PUT",
+            headers={"x-ms-copy-source": src_url},
+            success_codes=(202, 404),
+        )
+        return create_api_request(
+            req,
+            auth=access_token_manager.get_token(
+                ctx=ctx, key=(dst_account, dst_container)
+            ),
+        )
+
+    resp = common.execute_request(ctx, build_req)
+    if resp.status == 404:
+        raise FileNotFoundError(f"Source file not found: '{src}'")
+    copy_id = resp.headers["x-ms-copy-id"]
+    copy_status = resp.headers["x-ms-copy-status"]
+    etag = resp.headers["etag"]
+
+    # wait for potentially async copy operation to finish
+    # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob
+    # pending, success, aborted, failed
+    backoff = common.exponential_sleep_generator()
+    while copy_status == "pending":
+        time.sleep(next(backoff))
+        req = Request(
+            url=build_url(
+                dst_account,
+                "/{container}/{blob}",
+                container=dst_container,
+                blob=dst_blob,
+            ),
+            method="GET",
+        )
+        resp = execute_api_request(ctx, req)
+        if resp.headers["x-ms-copy-id"] != copy_id:
+            raise Error("Copy id mismatch")
+        etag = resp.headers["etag"]
+        copy_status = resp.headers["x-ms-copy-status"]
+    if copy_status != "success":
+        raise Error(f"Invalid copy status: '{copy_status}'")
+    if return_md5:
+        # if the file is the same one that we just copied, return the stored MD5
+        st = maybe_stat(ctx, dst)
+        if st is not None and st.version == etag:
+            return st.md5
+    return
 
 
 access_token_manager = TokenManager(_get_access_token)

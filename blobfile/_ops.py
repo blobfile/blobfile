@@ -237,109 +237,10 @@ def copy(
 
     # special case cloud to cloud copy, don't download the file
     if _is_gcp_path(src) and _is_gcp_path(dst):
-        srcbucket, srcname = gcp.split_path(src)
-        dstbucket, dstname = gcp.split_path(dst)
-        params = {}
-        while True:
-            req = Request(
-                url=gcp.build_url(
-                    "/storage/v1/b/{sourceBucket}/o/{sourceObject}/rewriteTo/b/{destinationBucket}/o/{destinationObject}",
-                    sourceBucket=srcbucket,
-                    sourceObject=srcname,
-                    destinationBucket=dstbucket,
-                    destinationObject=dstname,
-                ),
-                method="POST",
-                params=params,
-                success_codes=(200, 404),
-            )
-            resp = gcp.execute_api_request(_context, req)
-            if resp.status == 404:
-                raise FileNotFoundError(f"Source file not found: '{src}'")
-            result = json.loads(resp.data)
-            if result["done"]:
-                if return_md5:
-                    return gcp.get_md5(result["resource"])
-                else:
-                    return
-            params["rewriteToken"] = result["rewriteToken"]
+        return gcp.remote_copy(_context, src=src, dst=dst, return_md5=return_md5)
 
     if _is_azure_path(src) and _is_azure_path(dst):
-        # https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob
-        dst_account, dst_container, dst_blob = azure.split_path(dst)
-        src_account, src_container, src_blob = azure.split_path(src)
-
-        def build_req() -> Request:
-            src_url = azure.build_url(
-                src_account,
-                "/{container}/{blob}",
-                container=src_container,
-                blob=src_blob,
-            )
-            if src_account != dst_account:
-                # the signed url can expire, so technically we should get the sas_token and build the signed url
-                # each time we build a new request
-                sas_token = azure.sas_token_manager.get_token(
-                    ctx=_context, key=(src_account, src_container)
-                )
-                # if we don't get a token, it's likely we have anonymous access to the container
-                # if we do get a token, the container is likely private and we need to use
-                # a signed url as the source
-                if sas_token is not None:
-                    src_url, _ = azure.generate_signed_url(key=sas_token, url=src_url)
-            req = Request(
-                url=azure.build_url(
-                    dst_account,
-                    "/{container}/{blob}",
-                    container=dst_container,
-                    blob=dst_blob,
-                ),
-                method="PUT",
-                headers={"x-ms-copy-source": src_url},
-                success_codes=(202, 404),
-            )
-            return azure.create_api_request(
-                req,
-                auth=azure.access_token_manager.get_token(
-                    ctx=_context, key=(dst_account, dst_container)
-                ),
-            )
-
-        resp = common.execute_request(_context, build_req)
-        if resp.status == 404:
-            raise FileNotFoundError(f"Source file not found: '{src}'")
-        copy_id = resp.headers["x-ms-copy-id"]
-        copy_status = resp.headers["x-ms-copy-status"]
-        etag = resp.headers["etag"]
-
-        # wait for potentially async copy operation to finish
-        # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob
-        # pending, success, aborted, failed
-        backoff = common.exponential_sleep_generator()
-        while copy_status == "pending":
-            time.sleep(next(backoff))
-            req = Request(
-                url=azure.build_url(
-                    dst_account,
-                    "/{container}/{blob}",
-                    container=dst_container,
-                    blob=dst_blob,
-                ),
-                method="GET",
-            )
-            resp = azure.execute_api_request(_context, req)
-            if resp.headers["x-ms-copy-id"] != copy_id:
-                raise Error("Copy id mismatch")
-            etag = resp.headers["etag"]
-            copy_status = resp.headers["x-ms-copy-status"]
-        if copy_status != "success":
-            raise Error(f"Invalid copy status: '{copy_status}'")
-        if return_md5:
-            # if the file is the same one that we just copied, return the stored MD5
-            st = azure.maybe_stat(_context, dst)
-            if st is not None and st.version == etag:
-                return st.md5
-        return
+        return azure.remote_copy(_context, src=src, dst=dst, return_md5=return_md5)
 
     if parallel:
         copy_fn = None
@@ -693,12 +594,6 @@ def _strip_slash(path: str) -> str:
         return path
 
 
-def _strip_slashes(path: str) -> str:
-    while path.endswith("/"):
-        path = path[:-1]
-    return path
-
-
 def isdir(path: str) -> bool:
     """
     Return true if a path is an existing directory
@@ -1029,60 +924,9 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
         os.utime(path, times=(mtime, mtime))
         return True
     elif _is_gcp_path(path):
-        bucket, blob = gcp.split_path(path)
-        params = None
-        if version is not None:
-            params = dict(ifGenerationMatch=version)
-        req = Request(
-            url=gcp.build_url(
-                "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
-            ),
-            method="PATCH",
-            params=params,
-            data=dict(metadata={"blobfile-mtime": str(mtime)}),
-            success_codes=(200, 404, 412),
-        )
-        resp = gcp.execute_api_request(_context, req)
-        if resp.status == 404:
-            raise FileNotFoundError(f"No such file: '{path}'")
-        return resp.status == 200
+        return gcp.set_mtime(_context, path=path, mtime=mtime, version=version)
     elif _is_azure_path(path):
-        account, container, blob = azure.split_path(path)
-        headers = {}
-        if version is not None:
-            headers["If-Match"] = version
-        req = Request(
-            url=azure.build_url(
-                account, "/{container}/{blob}", container=container, blob=blob
-            ),
-            method="HEAD",
-            params=dict(comp="metadata"),
-            headers=headers,
-            success_codes=(200, 404, 412),
-        )
-        resp = azure.execute_api_request(_context, req)
-        if resp.status == 404:
-            raise FileNotFoundError(f"No such file: '{path}'")
-        if resp.status == 412:
-            return False
-
-        headers = {k: v for k, v in resp.headers.items() if k.startswith("x-ms-meta-")}
-        headers["x-ms-meta-blobfilemtime"] = str(mtime)
-        if version is not None:
-            headers["If-Match"] = version
-        req = Request(
-            url=azure.build_url(
-                account, "/{container}/{blob}", container=container, blob=blob
-            ),
-            method="PUT",
-            params=dict(comp="metadata"),
-            headers=headers,
-            success_codes=(200, 404, 412),
-        )
-        resp = azure.execute_api_request(_context, req)
-        if resp.status == 404:
-            raise FileNotFoundError(f"No such file: '{path}'")
-        return resp.status == 200
+        return azure.set_mtime(_context, path=path, mtime=mtime, version=version)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -1244,21 +1088,9 @@ def dirname(path: str) -> str:
     On Azure Storage, the root directory is https://<account>.blob.core.windows.net/<container>/
     """
     if _is_gcp_path(path):
-        bucket, obj = gcp.split_path(path)
-        obj = _strip_slashes(obj)
-        if "/" in obj:
-            obj = "/".join(obj.split("/")[:-1])
-            return gcp.combine_path(bucket, obj)
-        else:
-            return gcp.combine_path(bucket, "")[:-1]
+        return gcp.dirname(_context, path)
     elif _is_azure_path(path):
-        account, container, obj = azure.split_path(path)
-        obj = _strip_slashes(obj)
-        if "/" in obj:
-            obj = "/".join(obj.split("/")[:-1])
-            return azure.combine_path(_context, account, container, obj)
-        else:
-            return azure.combine_path(_context, account, container, "")[:-1]
+        return azure.dirname(_context, path)
     else:
         return os.path.dirname(path)
 
@@ -1314,20 +1146,9 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
     Get a URL for the given path that a browser could open
     """
     if _is_gcp_path(path):
-        bucket, blob = gcp.split_path(path)
-        return gcp.generate_signed_url(bucket, blob, expiration=gcp.MAX_EXPIRATION)
+        return gcp.get_url(_context, path)
     elif _is_azure_path(path):
-        account, container, blob = azure.split_path(path)
-        url = azure.build_url(
-            account, "/{container}/{blob}", container=container, blob=blob
-        )
-        token = azure.sas_token_manager.get_token(
-            ctx=_context, key=(account, container)
-        )
-        if token is None:
-            # the container has public access
-            return url, float("inf")
-        return azure.generate_signed_url(key=token, url=url)
+        return azure.get_url(_context, path)
     elif _is_local_path(path):
         return f"file://{path}", None
     else:

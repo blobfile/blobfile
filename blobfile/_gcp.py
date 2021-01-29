@@ -31,6 +31,7 @@ from blobfile._common import (
     BaseStreamingWriteFile,
     FileBody,
     DirEntry,
+    strip_slashes,
 )
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
@@ -711,6 +712,70 @@ def entry_from_path_stat(path: str, stat: Stat) -> DirEntry:
     _, obj = split_path(path)
     name = obj.split("/")[-1]
     return DirEntry(name=name, path=path, is_dir=False, is_file=True, stat=stat)
+
+
+def get_url(ctx: Context, path: str) -> Tuple[str, Optional[float]]:
+    bucket, blob = split_path(path)
+    return generate_signed_url(bucket, blob, expiration=MAX_EXPIRATION)
+
+
+def set_mtime(
+    ctx: Context, path: str, mtime: float, version: Optional[str] = None
+) -> bool:
+    bucket, blob = split_path(path)
+    params = None
+    if version is not None:
+        params = dict(ifGenerationMatch=version)
+    req = Request(
+        url=build_url("/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob),
+        method="PATCH",
+        params=params,
+        data=dict(metadata={"blobfile-mtime": str(mtime)}),
+        success_codes=(200, 404, 412),
+    )
+    resp = execute_api_request(ctx, req)
+    if resp.status == 404:
+        raise FileNotFoundError(f"No such file: '{path}'")
+    return resp.status == 200
+
+
+def dirname(ctx: Context, path: str) -> str:
+    bucket, obj = split_path(path)
+    obj = strip_slashes(obj)
+    if "/" in obj:
+        obj = "/".join(obj.split("/")[:-1])
+        return combine_path(bucket, obj)
+    else:
+        return combine_path(bucket, "")[:-1]
+
+
+def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[str]:
+    srcbucket, srcname = split_path(src)
+    dstbucket, dstname = split_path(dst)
+    params = {}
+    while True:
+        req = Request(
+            url=build_url(
+                "/storage/v1/b/{sourceBucket}/o/{sourceObject}/rewriteTo/b/{destinationBucket}/o/{destinationObject}",
+                sourceBucket=srcbucket,
+                sourceObject=srcname,
+                destinationBucket=dstbucket,
+                destinationObject=dstname,
+            ),
+            method="POST",
+            params=params,
+            success_codes=(200, 404),
+        )
+        resp = execute_api_request(ctx, req)
+        if resp.status == 404:
+            raise FileNotFoundError(f"Source file not found: '{src}'")
+        result = json.loads(resp.data)
+        if result["done"]:
+            if return_md5:
+                return get_md5(result["resource"])
+            else:
+                return
+        params["rewriteToken"] = result["rewriteToken"]
 
 
 access_token_manager = TokenManager(_get_access_token)

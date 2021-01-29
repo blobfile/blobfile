@@ -26,9 +26,6 @@ from typing import (
     Callable,
     Sequence,
     Iterator,
-    Mapping,
-    Any,
-    Dict,
     TextIO,
     BinaryIO,
     cast,
@@ -346,9 +343,7 @@ def copy(
 
     if parallel:
         copy_fn = None
-        if (
-            _is_azure_path(src) or _is_gcp_path(src)
-        ) and _is_local_path(dst):
+        if (_is_azure_path(src) or _is_gcp_path(src)) and _is_local_path(dst):
             copy_fn = _parallel_download
 
         if _is_local_path(src) and _is_azure_path(dst):
@@ -397,61 +392,6 @@ def copy(
                     f"error {err} when executing a streaming write to {dst} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
                 )
             time.sleep(backoff)
-
-
-def _create_gcp_page_iterator(
-    url: str, method: str, params: Mapping[str, str]
-) -> Iterator[Dict[str, Any]]:
-    p = dict(params).copy()
-
-    while True:
-        req = Request(url=url, method=method, params=p, success_codes=(200, 404))
-        resp = gcp.execute_api_request(_context, req)
-        if resp.status == 404:
-            return
-        result = json.loads(resp.data)
-        yield result
-        if "nextPageToken" not in result:
-            break
-        p["pageToken"] = result["nextPageToken"]
-
-
-def _gcp_get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntry]:
-    if "prefixes" in result:
-        for p in result["prefixes"]:
-            path = gcp.combine_path(bucket, p)
-            yield _entry_from_dirpath(path)
-    if "items" in result:
-        for item in result["items"]:
-            path = gcp.combine_path(bucket, item["name"])
-            if item["name"].endswith("/"):
-                yield _entry_from_dirpath(path)
-            else:
-                yield _entry_from_path_stat(path, gcp.make_stat(item))
-
-
-def _azure_get_entries(
-    account: str, container: str, result: Mapping[str, Any]
-) -> Iterator[DirEntry]:
-    blobs = result["Blobs"]
-    if blobs is None:
-        return
-    if "BlobPrefix" in blobs:
-        if isinstance(blobs["BlobPrefix"], dict):
-            blobs["BlobPrefix"] = [blobs["BlobPrefix"]]
-        for bp in blobs["BlobPrefix"]:
-            path = azure.combine_path(_context, account, container, bp["Name"])
-            yield _entry_from_dirpath(path)
-    if "Blob" in blobs:
-        if isinstance(blobs["Blob"], dict):
-            blobs["Blob"] = [blobs["Blob"]]
-        for b in blobs["Blob"]:
-            path = azure.combine_path(_context, account, container, b["Name"])
-            if b["Name"].endswith("/"):
-                yield _entry_from_dirpath(path)
-            else:
-                props = b["Properties"]
-                yield _entry_from_path_stat(path, azure.make_stat(props))
 
 
 def exists(path: str) -> bool:
@@ -514,20 +454,6 @@ def _split_path(path: str) -> List[str]:
     return parts
 
 
-def _entry_from_dirpath(path: str) -> DirEntry:
-    path = _strip_slash(path)
-    return DirEntry(
-        name=basename(path), path=path, is_dir=True, is_file=False, stat=None
-    )
-
-
-def _entry_from_path_stat(path: str, stat: Stat) -> DirEntry:
-    assert not path.endswith("/")
-    return DirEntry(
-        name=basename(path), path=path, is_dir=False, is_file=True, stat=stat
-    )
-
-
 def _expand_implicit_dirs(root: str, it: Iterator[DirEntry]) -> Iterator[DirEntry]:
     # blob storage does not always have definitions for each intermediate dir
     # if we have a listing like
@@ -535,6 +461,13 @@ def _expand_implicit_dirs(root: str, it: Iterator[DirEntry]) -> Iterator[DirEntr
     #  gs://test/a/b/c/d
     # then we emit an entry "gs://test/a/b/c" for the implicit dir "c"
     # requires that iterator return objects in sorted order
+    if _is_gcp_path(root):
+        entry_from_dirpath = gcp.entry_from_dirpath
+    elif _is_azure_path(root):
+        entry_from_dirpath = azure.entry_from_dirpath
+    else:
+        raise Error(f"Unrecognized path '{root}'")
+
     previous_path = root
     for entry in it:
         # find the overlap between the previous_path and the current
@@ -543,11 +476,11 @@ def _expand_implicit_dirs(root: str, it: Iterator[DirEntry]) -> Iterator[DirEntr
         relpath = entry_slash_path[offset:]
         cur = entry_slash_path[:offset]
         if len(relpath) == 0:
-            yield _entry_from_dirpath(cur)
+            yield entry_from_dirpath(cur)
         else:
             for part in _split_path(relpath):
                 cur += part
-                yield _entry_from_dirpath(cur)
+                yield entry_from_dirpath(cur)
         assert entry_slash_path >= previous_path
         previous_path = entry_slash_path
 
@@ -786,44 +719,9 @@ def _guess_isdir(path: str) -> bool:
     """
     if _is_local_path(path) and os.path.isdir(path):
         return True
-    elif (
-        _is_gcp_path(path) or _is_azure_path(path)
-    ) and path.endswith("/"):
+    elif (_is_gcp_path(path) or _is_azure_path(path)) and path.endswith("/"):
         return True
     return False
-
-
-def _gcp_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
-    params = {}
-    if delimiter is not None:
-        params["delimiter"] = delimiter
-
-    bucket, prefix = gcp.split_path(path)
-    it = _create_gcp_page_iterator(
-        url=gcp.build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
-        method="GET",
-        params=dict(prefix=prefix, **params),
-    )
-    for result in it:
-        for entry in _gcp_get_entries(bucket, result):
-            yield entry
-
-
-def _azure_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
-    params = {}
-    if delimiter is not None:
-        params["delimiter"] = delimiter
-
-    account, container, prefix = azure.split_path(path)
-    it = azure.create_page_iterator(
-        _context,
-        url=azure.build_url(account, "/{container}", container=container),
-        method="GET",
-        params=dict(comp="list", restype="container", prefix=prefix, **params),
-    )
-    for result in it:
-        for entry in _azure_get_entries(account, container, result):
-            yield entry
 
 
 def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
@@ -832,9 +730,9 @@ def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry
         params["delimiter"] = delimiter
 
     if _is_gcp_path(path):
-        yield from _gcp_list_blobs(path, delimiter=delimiter)
+        yield from gcp.list_blobs(_context, path, delimiter=delimiter)
     elif _is_azure_path(path):
-        yield from _azure_list_blobs(path, delimiter=delimiter)
+        yield from azure.list_blobs(_context, path, delimiter=delimiter)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -878,9 +776,7 @@ def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
     """
     Same as `listdir`, but returns `DirEntry` objects instead of strings
     """
-    if (
-        _is_gcp_path(path) or _is_azure_path(path)
-    ) and not path.endswith("/"):
+    if (_is_gcp_path(path) or _is_azure_path(path)) and not path.endswith("/"):
         path += "/"
     if not exists(path):
         raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
@@ -956,21 +852,23 @@ def _get_entry(path: str) -> Optional[DirEntry]:
         st = gcp.maybe_stat(_context, path)
         if st is not None:
             if path.endswith("/"):
-                return _entry_from_dirpath(path)
+                return gcp.entry_from_dirpath(path)
             else:
-                return _entry_from_path_stat(path, st)
+                return gcp.entry_from_path_stat(path, st)
+        if isdir(path):
+            return gcp.entry_from_dirpath(path)
     elif _is_azure_path(path):
         st = azure.maybe_stat(_context, path)
         if st is not None:
             if path.endswith("/"):
-                return _entry_from_dirpath(path)
+                return azure.entry_from_dirpath(path)
             else:
-                return _entry_from_path_stat(path, st)
+                return azure.entry_from_path_stat(path, st)
+        if isdir(path):
+            return azure.entry_from_dirpath(path)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
-    if isdir(path):
-        return _entry_from_dirpath(path)
     return None
 
 
@@ -1202,7 +1100,7 @@ def rmtree(path: str) -> None:
         if not path.endswith("/"):
             path += "/"
         bucket, blob = gcp.split_path(path)
-        for entry in _gcp_list_blobs(path):
+        for entry in gcp.list_blobs(_context, path):
             entry_slash_path = _get_slash_path(entry)
             entry_bucket, entry_blob = gcp.split_path(entry_slash_path)
             assert entry_bucket == bucket and entry_blob.startswith(blob)
@@ -1222,7 +1120,7 @@ def rmtree(path: str) -> None:
         if not path.endswith("/"):
             path += "/"
         account, container, blob = azure.split_path(path)
-        for entry in _azure_list_blobs(path):
+        for entry in azure.list_blobs(_context, path):
             entry_slash_path = _get_slash_path(entry)
             entry_account, entry_container, entry_blob = azure.split_path(
                 entry_slash_path
@@ -1275,9 +1173,9 @@ def walk(
                 cur = dq.popleft()
                 assert cur.endswith("/")
                 if _is_gcp_path(top):
-                    it = _gcp_list_blobs(cur, delimiter="/")
+                    it = gcp.list_blobs(_context, cur, delimiter="/")
                 elif _is_azure_path(top):
-                    it = _azure_list_blobs(cur, delimiter="/")
+                    it = azure.list_blobs(_context, cur, delimiter="/")
                 else:
                     raise Error(f"Unrecognized path: '{top}'")
                 dirnames = []
@@ -1294,9 +1192,9 @@ def walk(
                 dq.extend(join(cur, dirname) + "/" for dirname in dirnames)
         else:
             if _is_gcp_path(top):
-                it = _gcp_list_blobs(top)
+                it = gcp.list_blobs(_context, top)
             elif _is_azure_path(top):
-                it = _azure_list_blobs(top)
+                it = azure.list_blobs(_context, top)
             else:
                 raise Error(f"Unrecognized path: '{top}'")
 

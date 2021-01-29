@@ -10,7 +10,7 @@ import socket
 import binascii
 import math
 import concurrent.futures
-from typing import Mapping, Dict, Any, Optional, Tuple, List
+from typing import Mapping, Dict, Any, Optional, Tuple, List, Iterator
 
 from Cryptodome.Signature import pkcs1_15
 from Cryptodome.Hash import SHA256
@@ -30,6 +30,7 @@ from blobfile._common import (
     BaseStreamingReadFile,
     BaseStreamingWriteFile,
     FileBody,
+    DirEntry,
 )
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
@@ -645,6 +646,71 @@ def parallel_upload(
         future.result()
 
     return hexdigest if return_md5 else None
+
+
+def _create_page_iterator(
+    ctx: Context, url: str, method: str, params: Mapping[str, str]
+) -> Iterator[Dict[str, Any]]:
+    p = dict(params).copy()
+
+    while True:
+        req = Request(url=url, method=method, params=p, success_codes=(200, 404))
+        resp = execute_api_request(ctx, req)
+        if resp.status == 404:
+            return
+        result = json.loads(resp.data)
+        yield result
+        if "nextPageToken" not in result:
+            break
+        p["pageToken"] = result["nextPageToken"]
+
+
+def list_blobs(
+    ctx: Context, path: str, delimiter: Optional[str] = None
+) -> Iterator[DirEntry]:
+    params = {}
+    if delimiter is not None:
+        params["delimiter"] = delimiter
+
+    bucket, prefix = split_path(path)
+    it = _create_page_iterator(
+        ctx=ctx,
+        url=build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
+        method="GET",
+        params=dict(prefix=prefix, **params),
+    )
+    for result in it:
+        for entry in _get_entries(bucket, result):
+            yield entry
+
+
+def _get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntry]:
+    if "prefixes" in result:
+        for p in result["prefixes"]:
+            path = combine_path(bucket, p)
+            yield entry_from_dirpath(path)
+    if "items" in result:
+        for item in result["items"]:
+            path = combine_path(bucket, item["name"])
+            if item["name"].endswith("/"):
+                yield entry_from_dirpath(path)
+            else:
+                yield entry_from_path_stat(path, make_stat(item))
+
+
+def entry_from_dirpath(path: str) -> DirEntry:
+    if path.endswith("/"):
+        path = path[:-1]
+    _, obj = split_path(path)
+    name = obj.split("/")[-1]
+    return DirEntry(name=name, path=path, is_dir=True, is_file=False, stat=None)
+
+
+def entry_from_path_stat(path: str, stat: Stat) -> DirEntry:
+    assert not path.endswith("/")
+    _, obj = split_path(path)
+    name = obj.split("/")[-1]
+    return DirEntry(name=name, path=path, is_dir=False, is_file=True, stat=stat)
 
 
 access_token_manager = TokenManager(_get_access_token)

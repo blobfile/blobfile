@@ -30,6 +30,7 @@ from blobfile._common import (
     BaseStreamingReadFile,
     BaseStreamingWriteFile,
     FileBody,
+    DirEntry,
 )
 
 SHARED_KEY = "shared_key"
@@ -1204,6 +1205,64 @@ def maybe_update_md5(ctx: Context, path: str, etag: str, hexdigest: str) -> bool
     )
     resp = execute_api_request(ctx, req)
     return resp.status == 200
+
+
+def list_blobs(
+    ctx: Context, path: str, delimiter: Optional[str] = None
+) -> Iterator[DirEntry]:
+    params = {}
+    if delimiter is not None:
+        params["delimiter"] = delimiter
+
+    account, container, prefix = split_path(path)
+    it = create_page_iterator(
+        ctx,
+        url=build_url(account, "/{container}", container=container),
+        method="GET",
+        params=dict(comp="list", restype="container", prefix=prefix, **params),
+    )
+    for result in it:
+        for entry in _get_entries(ctx, account, container, result):
+            yield entry
+
+
+def entry_from_dirpath(path: str) -> DirEntry:
+    if path.endswith("/"):
+        path = path[:-1]
+    _, _, obj = split_path(path)
+    name = obj.split("/")[-1]
+    return DirEntry(name=name, path=path, is_dir=True, is_file=False, stat=None)
+
+
+def entry_from_path_stat(path: str, stat: Stat) -> DirEntry:
+    assert not path.endswith("/")
+    _, _, obj = split_path(path)
+    name = obj.split("/")[-1]
+    return DirEntry(name=name, path=path, is_dir=False, is_file=True, stat=stat)
+
+
+def _get_entries(
+    ctx: Context, account: str, container: str, result: Mapping[str, Any]
+) -> Iterator[DirEntry]:
+    blobs = result["Blobs"]
+    if blobs is None:
+        return
+    if "BlobPrefix" in blobs:
+        if isinstance(blobs["BlobPrefix"], dict):
+            blobs["BlobPrefix"] = [blobs["BlobPrefix"]]
+        for bp in blobs["BlobPrefix"]:
+            path = combine_path(ctx, account, container, bp["Name"])
+            yield entry_from_dirpath(path)
+    if "Blob" in blobs:
+        if isinstance(blobs["Blob"], dict):
+            blobs["Blob"] = [blobs["Blob"]]
+        for b in blobs["Blob"]:
+            path = combine_path(ctx, account, container, b["Name"])
+            if b["Name"].endswith("/"):
+                yield entry_from_dirpath(path)
+            else:
+                props = b["Properties"]
+                yield entry_from_path_stat(path, make_stat(props))
 
 
 access_token_manager = TokenManager(_get_access_token)

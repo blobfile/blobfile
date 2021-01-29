@@ -52,6 +52,7 @@ from blobfile._common import (
     DirEntry,
     Context,
     CHUNK_SIZE,
+    get_log_threshold_for_error,
 )
 
 # https://cloud.google.com/storage/docs/naming
@@ -285,7 +286,7 @@ def copy(
             if _context.retry_limit is not None and attempt >= _context.retry_limit:
                 raise
 
-            if attempt >= _context.retry_log_threshold:
+            if attempt >= get_log_threshold_for_error(_context, str(err)):
                 _context.log_callback(
                     f"error {err} when executing a streaming write to {dst} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
                 )

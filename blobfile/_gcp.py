@@ -776,7 +776,7 @@ def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[
         params["rewriteToken"] = result["rewriteToken"]
 
 
-def join_paths(ctx: Context, a: str, b:str) -> str:
+def join_paths(ctx: Context, a: str, b: str) -> str:
     if not a.endswith("/"):
         a += "/"
 
@@ -785,5 +785,6 @@ def join_paths(ctx: Context, a: str, b:str) -> str:
     if obj.startswith("/"):
         obj = obj[1:]
     return combine_path(bucket, obj)
+
 
 access_token_manager = TokenManager(_get_access_token)

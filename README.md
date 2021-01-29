@@ -73,6 +73,7 @@ There are a few bonus functions:
     * `azure_write_chunk_size=8 * 2 ** 20`: the size of blocks to write to Azure Storage blobs in bytes, can be set to a maximum of 100MB.  This determines both the unit of request retries as well as the maximum file size, which is `50,000 * azure_write_chunk_size`.
     * `google_write_chunk_size=8 * 2 ** 20`: the size of blocks to write to Google Cloud Storage blobs in bytes, this only determines the unit of request retries.
     * `retry_log_threshold=0`: set a retry count threshold above which to log failures to the log callback function
+    * `retry_common_log_threshold=2`: set a retry count threshold above which to log very common failures to the log callback function
     * `connect_timeout=10`: the maximum amount of time (in seconds) to wait for a connection attempt to a server to succeed, set to None to wait forever
     * `read_timeout=30`: the maximum amount of time (in seconds) to wait between consecutive read operations for a response from the server, set to None to wait forever
     * `output_az_paths=False`: output `az://` paths instead of using the `https://` for azure

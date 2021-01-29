@@ -1396,7 +1396,7 @@ def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[
     return
 
 
-def join_paths(ctx: Context, a: str, b:str) -> str:
+def join_paths(ctx: Context, a: str, b: str) -> str:
     if not a.endswith("/"):
         a += "/"
 

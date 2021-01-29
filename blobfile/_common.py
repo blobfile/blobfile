@@ -40,6 +40,7 @@ DEFAULT_MAX_CONNECTION_POOL_COUNT = 10
 DEFAULT_AZURE_WRITE_CHUNK_SIZE = 8 * 2 ** 20
 DEFAULT_GOOGLE_WRITE_CHUNK_SIZE = 8 * 2 ** 20
 DEFAULT_RETRY_LOG_THRESHOLD = 0
+DEFAULT_RETRY_COMMON_LOG_THRESHOLD = 2
 DEFAULT_CONNECT_TIMEOUT = 10
 DEFAULT_READ_TIMEOUT = 30
 
@@ -61,6 +62,8 @@ def exponential_sleep_generator(
     maximum: float = BACKOFF_MAX,
     multiplier: float = 2,
 ) -> Iterator[float]:
+    # retry once immediately in case it's a transient error
+    yield 0
     base = initial
     while True:
         # https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
@@ -247,6 +250,7 @@ class Context:
         azure_write_chunk_size: int = DEFAULT_AZURE_WRITE_CHUNK_SIZE,
         google_write_chunk_size: int = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
         retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
+        retry_common_log_threshold: int = DEFAULT_RETRY_COMMON_LOG_THRESHOLD,
         retry_limit: Optional[int] = None,
         connect_timeout: Optional[int] = DEFAULT_CONNECT_TIMEOUT,
         read_timeout: Optional[int] = DEFAULT_READ_TIMEOUT,
@@ -258,6 +262,7 @@ class Context:
         self.max_connection_pool_count = max_connection_pool_count
         self.azure_write_chunk_size = azure_write_chunk_size
         self.retry_log_threshold = retry_log_threshold
+        self.retry_common_log_threshold = retry_common_log_threshold
         self.retry_limit = retry_limit
         self.google_write_chunk_size = google_write_chunk_size
         self.connect_timeout = connect_timeout
@@ -482,7 +487,7 @@ def execute_request(
         if ctx.retry_limit is not None and attempt >= ctx.retry_limit:
             raise err
 
-        if attempt >= ctx.retry_log_threshold:
+        if attempt >= get_log_threshold_for_error(ctx, str(err)):
             ctx.log_callback(
                 f"error {err} when executing http request {req} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
             )
@@ -666,7 +671,7 @@ class BaseStreamingReadFile(io.RawIOBase):
                 ):
                     raise err
 
-                if attempt >= self._ctx.retry_log_threshold:
+                if attempt >= get_log_threshold_for_error(self._ctx, str(err)):
                     self._ctx.log_callback(
                         f"error {err} when executing readinto({len(b)}) at offset {self._offset} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
                     )
@@ -770,3 +775,17 @@ def safe_urljoin(a: str, b: str) -> str:
     escaped_b = b.replace(":", ESCAPED_COLON)
     joined = urllib.parse.urljoin(a, escaped_b)
     return joined.replace(ESCAPED_COLON, ":")
+
+
+# https://github.com/christopher-hesse/blobfile/issues/153
+COMMON_ERROR_SUBSTRINGS = [
+    "[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]",
+    "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
+]
+
+
+def get_log_threshold_for_error(ctx: Context, err: str) -> int:
+    if any(substr in err for substr in COMMON_ERROR_SUBSTRINGS):
+        return ctx.retry_common_log_threshold
+    else:
+        return ctx.retry_log_threshold

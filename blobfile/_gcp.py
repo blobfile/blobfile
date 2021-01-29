@@ -32,6 +32,7 @@ from blobfile._common import (
     FileBody,
     DirEntry,
     strip_slashes,
+    safe_urljoin,
 )
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
@@ -310,10 +311,7 @@ def isdir(ctx: Context, path: str) -> bool:
         return "items" in result or "prefixes" in result
 
 
-def makedirs(ctx: Context, path: str) -> None:
-    """
-    Make any directories necessary to ensure that path is a directory
-    """
+def mkdirfile(ctx: Context, path: str) -> None:
     if not path.endswith("/"):
         path += "/"
     bucket, blob = split_path(path)
@@ -777,5 +775,15 @@ def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[
                 return
         params["rewriteToken"] = result["rewriteToken"]
 
+
+def join_paths(ctx: Context, a: str, b:str) -> str:
+    if not a.endswith("/"):
+        a += "/"
+
+    bucket, obj = split_path(a)
+    obj = safe_urljoin(obj, b)
+    if obj.startswith("/"):
+        obj = obj[1:]
+    return combine_path(bucket, obj)
 
 access_token_manager = TokenManager(_get_access_token)

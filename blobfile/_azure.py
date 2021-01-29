@@ -32,6 +32,7 @@ from blobfile._common import (
     FileBody,
     DirEntry,
     strip_slashes,
+    safe_urljoin,
 )
 
 SHARED_KEY = "shared_key"
@@ -338,10 +339,7 @@ def combine_path(ctx: Context, account: str, container: str, obj: str) -> str:
         return combine_https_path(account, container, obj)
 
 
-def makedirs(ctx: Context, path: str) -> None:
-    """
-    Make any directories necessary to ensure that path is a directory
-    """
+def mkdirfile(ctx: Context, path: str) -> None:
     if not path.endswith("/"):
         path += "/"
     account, container, blob = split_path(path)
@@ -1396,6 +1394,17 @@ def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[
         if st is not None and st.version == etag:
             return st.md5
     return
+
+
+def join_paths(ctx: Context, a: str, b:str) -> str:
+    if not a.endswith("/"):
+        a += "/"
+
+    account, container, obj = split_path(a)
+    obj = safe_urljoin(obj, b)
+    if obj.startswith("/"):
+        obj = obj[1:]
+    return combine_path(ctx, account, container, obj)
 
 
 access_token_manager = TokenManager(_get_access_token)

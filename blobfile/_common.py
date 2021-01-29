@@ -53,6 +53,8 @@ HOSTNAME_STATUS_UNKNOWN = 2
 
 GCP_BASE_URL = "https://storage.googleapis.com"
 
+ESCAPED_COLON = "___COLON___"
+
 
 def exponential_sleep_generator(
     initial: float = BACKOFF_INITIAL,
@@ -757,3 +759,14 @@ def strip_slashes(path: str) -> str:
     while path.endswith("/"):
         path = path[:-1]
     return path
+
+
+def safe_urljoin(a: str, b: str) -> str:
+    # a ":" symbol in a relative url path will be interpreted as a fully qualified path
+    # escape the ":" to avoid this
+    # https://stackoverflow.com/questions/55202875/python-urllib-parse-urljoin-on-path-starting-with-numbers-and-colon
+    if ESCAPED_COLON in b:
+        raise Error(f"url cannot contain string '{ESCAPED_COLON}'")
+    escaped_b = b.replace(":", ESCAPED_COLON)
+    joined = urllib.parse.urljoin(a, escaped_b)
+    return joined.replace(ESCAPED_COLON, ":")

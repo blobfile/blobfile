@@ -7,7 +7,6 @@ import hashlib
 import io
 import urllib.parse
 import time
-import json
 import binascii
 import stat as stat_module
 import glob as local_glob
@@ -60,8 +59,6 @@ from blobfile._common import (
 INVALID_CHARS = (
     set().union(range(0x0, 0x9)).union(range(0xB, 0xE)).union(range(0xE, 0x20))
 )
-
-ESCAPED_COLON = "___COLON___"
 
 
 _context = Context()
@@ -791,9 +788,9 @@ def makedirs(path: str) -> None:
     if _is_local_path(path):
         os.makedirs(path, exist_ok=True)
     elif _is_gcp_path(path):
-        gcp.makedirs(_context, path)
+        gcp.mkdirfile(_context, path)
     elif _is_azure_path(path):
-        azure.makedirs(_context, path)
+        azure.mkdirfile(_context, path)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -1105,38 +1102,13 @@ def join(a: str, *args: str) -> str:
     return out
 
 
-def _safe_urljoin(a: str, b: str) -> str:
-    # a ":" symbol in a relative url path will be interpreted as a fully qualified path
-    # escape the ":" to avoid this
-    # https://stackoverflow.com/questions/55202875/python-urllib-parse-urljoin-on-path-starting-with-numbers-and-colon
-    if ESCAPED_COLON in b:
-        raise Error(f"url cannot contain string '{ESCAPED_COLON}'")
-    escaped_b = b.replace(":", ESCAPED_COLON)
-    joined = urllib.parse.urljoin(a, escaped_b)
-    return joined.replace(ESCAPED_COLON, ":")
-
-
 def _join2(a: str, b: str) -> str:
     if _is_local_path(a):
         return os.path.join(a, b)
-    elif _is_gcp_path(a) or _is_azure_path(a):
-        if not a.endswith("/"):
-            a += "/"
-
-        if _is_gcp_path(a):
-            bucket, obj = gcp.split_path(a)
-            obj = _safe_urljoin(obj, b)
-            if obj.startswith("/"):
-                obj = obj[1:]
-            return gcp.combine_path(bucket, obj)
-        elif _is_azure_path(a):
-            account, container, obj = azure.split_path(a)
-            obj = _safe_urljoin(obj, b)
-            if obj.startswith("/"):
-                obj = obj[1:]
-            return azure.combine_path(_context, account, container, obj)
-        else:
-            raise Error(f"Unrecognized path: '{a}'")
+    elif _is_gcp_path(a):
+        return gcp.join_paths(_context, a, b)
+    elif _is_azure_path(a):
+        return azure.join_paths(_context, a, b)
     else:
         raise Error(f"Unrecognized path: '{a}'")
 

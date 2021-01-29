@@ -307,6 +307,8 @@ def split_az_path(path: str) -> Tuple[str, str, str]:
         raise Error(f"Invalid path: '{path}'")
     account = parts[0]
     container = parts[1]
+    if container == "":
+        raise Error(f"Invalid path: '{path}'")
     obj = "/".join(parts[2:])
     return account, container, obj
 

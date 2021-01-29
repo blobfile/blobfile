@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 
 import filelock
 
-from blobfile import _gcp as gcp, _azure as azure, _common as common, _aws as aws
+from blobfile import _gcp as gcp, _azure as azure, _common as common
 from blobfile._common import (
     Request,
     Error,
@@ -126,18 +126,9 @@ def _is_azure_path(path: str) -> bool:
     ) or url.scheme == "az"
 
 
-def _is_aws_path(path: str) -> bool:
-    url = urllib.parse.urlparse(path)
-    return (
-        url.scheme == "https" and url.netloc.endswith(".amazonaws.com")
-    ) or url.scheme == "s3"
-
-
 def _get_module(path: str) -> Optional[ModuleType]:
     if _is_gcp_path(path):
         return gcp
-    elif _is_aws_path(path):
-        return aws
     elif _is_azure_path(path):
         return azure
     else:
@@ -276,9 +267,6 @@ def copy(
                     return
             params["rewriteToken"] = result["rewriteToken"]
 
-    if _is_aws_path(src) and _is_aws_path(dst):
-        raise NotImplementedError()
-
     if _is_azure_path(src) and _is_azure_path(dst):
         # https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob
         dst_account, dst_container, dst_blob = azure.split_path(dst)
@@ -359,7 +347,7 @@ def copy(
     if parallel:
         copy_fn = None
         if (
-            _is_azure_path(src) or _is_gcp_path(src) or _is_aws_path(src)
+            _is_azure_path(src) or _is_gcp_path(src)
         ) and _is_local_path(dst):
             copy_fn = _parallel_download
 
@@ -368,9 +356,6 @@ def copy(
 
         if _is_local_path(src) and _is_gcp_path(dst):
             copy_fn = gcp.parallel_upload
-
-        if _is_local_path(src) and _is_aws_path(dst):
-            copy_fn = aws.parallel_upload
 
         if copy_fn is not None:
             if parallel_executor is None:
@@ -480,11 +465,6 @@ def exists(path: str) -> bool:
         if st is not None:
             return True
         return isdir(path)
-    elif _is_aws_path(path):
-        st = aws.maybe_stat(_context, path)
-        if st is not None:
-            return True
-        return isdir(path)
     elif _is_azure_path(path):
         st = azure.maybe_stat(_context, path)
         if st is not None:
@@ -502,9 +482,6 @@ def basename(path: str) -> str:
     """
     if _is_gcp_path(path):
         _, obj = gcp.split_path(path)
-        return obj.split("/")[-1]
-    if _is_aws_path(path):
-        _, obj = aws.split_path(path)
         return obj.split("/")[-1]
     elif _is_azure_path(path):
         _, _, obj = azure.split_path(path)
@@ -723,7 +700,7 @@ def scanglob(pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
                     version=None,
                 ),
             )
-    elif _is_gcp_path(pattern) or _is_azure_path(pattern) or _is_aws_path(pattern):
+    elif _is_gcp_path(pattern) or _is_azure_path(pattern):
         if "*" not in pattern:
             entry = _get_entry(pattern)
             if entry is not None:
@@ -735,11 +712,6 @@ def scanglob(pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
             if "*" in bucket:
                 raise Error("Wildcards cannot be used in bucket name")
             root = gcp.combine_path(bucket, "")
-        elif _is_aws_path(pattern):
-            bucket, blob_prefix = aws.split_path(pattern)
-            if "*" in bucket:
-                raise Error("Wildcards cannot be used in bucket name")
-            root = aws.combine_path(bucket, "")
         else:
             account, container, blob_prefix = azure.split_path(pattern)
             if "*" in account or "*" in container:
@@ -815,14 +787,10 @@ def _guess_isdir(path: str) -> bool:
     if _is_local_path(path) and os.path.isdir(path):
         return True
     elif (
-        _is_gcp_path(path) or _is_azure_path(path) or _is_aws_path(path)
+        _is_gcp_path(path) or _is_azure_path(path)
     ) and path.endswith("/"):
         return True
     return False
-
-
-def _aws_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
-    raise NotImplementedError()
 
 
 def _gcp_list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
@@ -865,8 +833,6 @@ def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry
 
     if _is_gcp_path(path):
         yield from _gcp_list_blobs(path, delimiter=delimiter)
-    elif _is_aws_path(path):
-        yield from _aws_list_blobs(path, delimiter=delimiter)
     elif _is_azure_path(path):
         yield from _azure_list_blobs(path, delimiter=delimiter)
     else:
@@ -913,7 +879,7 @@ def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
     Same as `listdir`, but returns `DirEntry` objects instead of strings
     """
     if (
-        _is_gcp_path(path) or _is_azure_path(path) or _is_aws_path(path)
+        _is_gcp_path(path) or _is_azure_path(path)
     ) and not path.endswith("/"):
         path += "/"
     if not exists(path):
@@ -945,7 +911,7 @@ def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
                         version=None,
                     ),
                 )
-    elif _is_gcp_path(path) or _is_azure_path(path) or _is_aws_path(path):
+    elif _is_gcp_path(path) or _is_azure_path(path):
         if shard_prefix_length == 0:
             yield from _list_blobs_in_dir(path, exclude_prefix=True)
         else:
@@ -993,13 +959,6 @@ def _get_entry(path: str) -> Optional[DirEntry]:
                 return _entry_from_dirpath(path)
             else:
                 return _entry_from_path_stat(path, st)
-    elif _is_aws_path(path):
-        st = aws.maybe_stat(_context, path)
-        if st is not None:
-            if path.endswith("/"):
-                return _entry_from_dirpath(path)
-            else:
-                return _entry_from_path_stat(path, st)
     elif _is_azure_path(path):
         st = azure.maybe_stat(_context, path)
         if st is not None:
@@ -1040,8 +999,6 @@ def makedirs(path: str) -> None:
         os.makedirs(path, exist_ok=True)
     elif _is_gcp_path(path):
         gcp.makedirs(_context, path)
-    elif _is_aws_path(path):
-        aws.makedirs(_context, path)
     elif _is_azure_path(path):
         azure.makedirs(_context, path)
     else:
@@ -1058,14 +1015,6 @@ def remove(path: str) -> None:
         if path.endswith("/"):
             raise IsADirectoryError(f"Is a directory: '{path}'")
         ok = gcp.remove(_context, path)
-        if not ok:
-            raise FileNotFoundError(
-                f"The system cannot find the path specified: '{path}'"
-            )
-    elif _is_aws_path(path):
-        if path.endswith("/"):
-            raise IsADirectoryError(f"Is a directory: '{path}'")
-        ok = aws.remove(_context, path)
         if not ok:
             raise FileNotFoundError(
                 f"The system cannot find the path specified: '{path}'"
@@ -1133,8 +1082,6 @@ def rmdir(path: str) -> None:
             success_codes=(204,),
         )
         gcp.execute_api_request(_context, req)
-    elif _is_aws_path(path):
-        raise NotImplementedError()
     elif _is_azure_path(path):
         account, container, blob = azure.split_path(path)
         req = Request(
@@ -1160,11 +1107,6 @@ def stat(path: str) -> Stat:
         )
     elif _is_gcp_path(path):
         st = gcp.maybe_stat(_context, path)
-        if st is None:
-            raise FileNotFoundError(f"No such file: '{path}'")
-        return st
-    elif _is_aws_path(path):
-        st = aws.maybe_stat(_context, path)
         if st is None:
             raise FileNotFoundError(f"No such file: '{path}'")
         return st
@@ -1206,8 +1148,6 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
         if resp.status == 404:
             raise FileNotFoundError(f"No such file: '{path}'")
         return resp.status == 200
-    elif _is_aws_path(path):
-        raise NotImplementedError()
     elif _is_azure_path(path):
         account, container, blob = azure.split_path(path)
         headers = {}
@@ -1278,8 +1218,6 @@ def rmtree(path: str) -> None:
                 success_codes=(204, 404),
             )
             gcp.execute_api_request(_context, req)
-    elif _is_aws_path(path):
-        raise NotImplementedError()
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
@@ -1326,7 +1264,7 @@ def walk(
             if root.endswith(os.sep):
                 root = root[:-1]
             yield (root, sorted(dirnames), sorted(filenames))
-    elif _is_gcp_path(top) or _is_azure_path(top) or _is_aws_path(top):
+    elif _is_gcp_path(top) or _is_azure_path(top):
         top = _normalize_path(top)
         if not top.endswith("/"):
             top += "/"
@@ -1338,8 +1276,6 @@ def walk(
                 assert cur.endswith("/")
                 if _is_gcp_path(top):
                     it = _gcp_list_blobs(cur, delimiter="/")
-                elif _is_aws_path(top):
-                    it = _aws_list_blobs(cur, delimiter="/")
                 elif _is_azure_path(top):
                     it = _azure_list_blobs(cur, delimiter="/")
                 else:
@@ -1359,8 +1295,6 @@ def walk(
         else:
             if _is_gcp_path(top):
                 it = _gcp_list_blobs(top)
-            elif _is_aws_path(top):
-                it = _aws_list_blobs(top)
             elif _is_azure_path(top):
                 it = _azure_list_blobs(top)
             else:
@@ -1419,14 +1353,6 @@ def dirname(path: str) -> str:
             return gcp.combine_path(bucket, obj)
         else:
             return gcp.combine_path(bucket, "")[:-1]
-    if _is_aws_path(path):
-        bucket, obj = aws.split_path(path)
-        obj = _strip_slashes(obj)
-        if "/" in obj:
-            obj = "/".join(obj.split("/")[:-1])
-            return aws.combine_path(bucket, obj)
-        else:
-            return aws.combine_path(bucket, "")[:-1]
     elif _is_azure_path(path):
         account, container, obj = azure.split_path(path)
         obj = _strip_slashes(obj)
@@ -1463,7 +1389,7 @@ def _safe_urljoin(a: str, b: str) -> str:
 def _join2(a: str, b: str) -> str:
     if _is_local_path(a):
         return os.path.join(a, b)
-    elif _is_gcp_path(a) or _is_azure_path(a) or _is_aws_path(a):
+    elif _is_gcp_path(a) or _is_azure_path(a):
         if not a.endswith("/"):
             a += "/"
 
@@ -1473,12 +1399,6 @@ def _join2(a: str, b: str) -> str:
             if obj.startswith("/"):
                 obj = obj[1:]
             return gcp.combine_path(bucket, obj)
-        elif _is_aws_path(a):
-            bucket, obj = aws.split_path(a)
-            obj = _safe_urljoin(obj, b)
-            if obj.startswith("/"):
-                obj = obj[1:]
-            return aws.combine_path(bucket, obj)
         elif _is_azure_path(a):
             account, container, obj = azure.split_path(a)
             obj = _safe_urljoin(obj, b)
@@ -1498,8 +1418,6 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
     if _is_gcp_path(path):
         bucket, blob = gcp.split_path(path)
         return gcp.generate_signed_url(bucket, blob, expiration=gcp.MAX_EXPIRATION)
-    elif _is_aws_path(path):
-        raise NotImplementedError()
     elif _is_azure_path(path):
         account, container, blob = azure.split_path(path)
         url = azure.build_url(
@@ -1543,8 +1461,6 @@ def md5(path: str) -> str:
         assert st.version is not None
         gcp.maybe_update_md5(_context, path, st.version, result)
         return result
-    elif _is_aws_path(path):
-        raise NotImplementedError()
     elif _is_azure_path(path):
         st = azure.maybe_stat(_context, path)
         if st is None:
@@ -1645,14 +1561,6 @@ def BlobFile(
                 f = io.BufferedReader(f, buffer_size=buffer_size)
             else:
                 raise Error(f"Unsupported mode: '{mode}'")
-        elif _is_aws_path(path):
-            if mode in ("w", "wb"):
-                f = aws.StreamingWriteFile(_context, path)
-            elif mode in ("r", "rb"):
-                f = aws.StreamingReadFile(_context, path)
-                f = io.BufferedReader(f, buffer_size=buffer_size)
-            else:
-                raise Error(f"Unsupported mode: '{mode}'")
         elif _is_azure_path(path):
             if mode in ("w", "wb"):
                 f = azure.StreamingWriteFile(_context, path)
@@ -1695,7 +1603,7 @@ def BlobFile(
         local_filename = basename(path)
         if local_filename == "":
             local_filename = "local.tmp"
-        if _is_gcp_path(path) or _is_azure_path(path) or _is_aws_path(path):
+        if _is_gcp_path(path) or _is_azure_path(path):
             remote_path = path
             if mode in ("a", "ab"):
                 tmp_dir = tempfile.mkdtemp()
@@ -1719,13 +1627,6 @@ def BlobFile(
                         # get some sort of consistent remote hash so we can check for a local file
                         if _is_gcp_path(path):
                             st = gcp.maybe_stat(_context, path)
-                            if st is None:
-                                raise FileNotFoundError(f"No such file: '{path}'")
-                            assert st.version is not None
-                            remote_version = st.version
-                            remote_hash = st.md5
-                        elif _is_aws_path(path):
-                            st = aws.maybe_stat(_context, path)
                             if st is None:
                                 raise FileNotFoundError(f"No such file: '{path}'")
                             assert st.version is not None
@@ -1779,10 +1680,6 @@ def BlobFile(
                                     )
                                 elif _is_gcp_path(path):
                                     gcp.maybe_update_md5(
-                                        _context, path, remote_version, local_hexdigest
-                                    )
-                                elif _is_aws_path(path):
-                                    aws.maybe_update_md5(
                                         _context, path, remote_version, local_hexdigest
                                     )
                         else:

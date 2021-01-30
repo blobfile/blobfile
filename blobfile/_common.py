@@ -57,6 +57,15 @@ GCP_BASE_URL = "https://storage.googleapis.com"
 ESCAPED_COLON = "___COLON___"
 
 
+# https://github.com/christopher-hesse/blobfile/issues/153
+# https://github.com/christopher-hesse/blobfile/issues/156
+COMMON_ERROR_SUBSTRINGS = [
+    "[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]",
+    "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
+    "('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer'))",
+]
+
+
 def exponential_sleep_generator(
     initial: float = BACKOFF_INITIAL,
     maximum: float = BACKOFF_MAX,
@@ -775,13 +784,6 @@ def safe_urljoin(a: str, b: str) -> str:
     escaped_b = b.replace(":", ESCAPED_COLON)
     joined = urllib.parse.urljoin(a, escaped_b)
     return joined.replace(ESCAPED_COLON, ":")
-
-
-# https://github.com/christopher-hesse/blobfile/issues/153
-COMMON_ERROR_SUBSTRINGS = [
-    "[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]",
-    "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
-]
 
 
 def get_log_threshold_for_error(ctx: Context, err: str) -> int:

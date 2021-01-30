@@ -4,6 +4,7 @@
 
 * Remove `BLOBFILE_BACKENDS` environment variable
 * Various internal refactorings
+* By default, common errors will not be logged unless a request has been retried enough times
 
 ## 1.0.7
 

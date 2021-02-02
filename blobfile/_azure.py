@@ -1352,7 +1352,7 @@ def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[
             ),
             method="PUT",
             headers={"x-ms-copy-source": src_url},
-            success_codes=(202, 404),
+            success_codes=(202, 404, 409),
         )
         return create_api_request(
             req,
@@ -1361,9 +1361,25 @@ def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[
             ),
         )
 
-    resp = common.execute_request(ctx, build_req)
-    if resp.status == 404:
-        raise FileNotFoundError(f"Source file not found: '{src}'")
+    # start the copy, waiting for any existing copies to finish
+    backoff_generator = common.exponential_sleep_generator()
+    for backoff in backoff_generator:
+        resp = common.execute_request(ctx, build_req)
+        if resp.status == 202:
+            break
+        if resp.status == 404:
+            raise FileNotFoundError(f"Source file not found: '{src}'")
+        elif resp.status == 409:
+            result = xmltodict.parse(resp.data)
+            if result["Error"]["Code"] != "PendingCopyOperation":
+                raise RequestFailure.create_from_request_response(
+                    message=f"unexpected status {resp.status}", request=build_req(), response=resp
+                )
+            # if we got a pending copy operation, continue to wait
+        else:
+            raise Error(f"unhandled status {resp.status}")
+        time.sleep(backoff)
+
     copy_id = resp.headers["x-ms-copy-id"]
     copy_status = resp.headers["x-ms-copy-status"]
     etag = resp.headers["etag"]
@@ -1371,9 +1387,9 @@ def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[
     # wait for potentially async copy operation to finish
     # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob
     # pending, success, aborted, failed
-    backoff = common.exponential_sleep_generator()
+    backoff_generator = common.exponential_sleep_generator()
     while copy_status == "pending":
-        time.sleep(next(backoff))
+        time.sleep(next(backoff_generator))
         req = Request(
             url=build_url(
                 dst_account,

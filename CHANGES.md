@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1
+
+* Retry azure remote copy if a copy is already in progress
+* Fix bug in parallel azure upload
+
 ## 1.1.0
 
 * Remove `BLOBFILE_BACKENDS` environment variable

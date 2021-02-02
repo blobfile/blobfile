@@ -1126,7 +1126,7 @@ def parallel_upload(
             ctx,
             src,
             start,
-            min(ctx.azure_write_chunk_size, s.st_size - start),
+            min(part_size, s.st_size - start),
             dst_url,
             block_id,
         )

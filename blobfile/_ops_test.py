@@ -804,6 +804,26 @@ def test_copy(parallel):
             assert _read_contents(dst) == contents
 
 
+# the tests already take awhile and this adds like a minute
+@pytest.mark.slow
+@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])
+def test_parallel_copy_large_file(ctx):
+    contents = b"meow!" * common.PARALLEL_COPY_MINIMUM_PART_SIZE + b"meow???"
+    with ctx() as remote_path:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_path = os.path.join(tmpdir, "test.txt")
+            with open(local_path, "wb") as f:
+                f.write(contents)
+            bf.copy(local_path, remote_path, parallel=True)
+
+        assert _read_contents(remote_path) == contents
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_path = os.path.join(tmpdir, "test.txt")
+            bf.copy(remote_path, local_path, parallel=True)
+            assert _read_contents(local_path) == contents
+
+
 def test_copy_azure_public():
     with _get_temp_as_path() as dst:
         bf.copy(AZURE_PUBLIC_URL, dst)

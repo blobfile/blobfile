@@ -63,6 +63,7 @@ COMMON_ERROR_SUBSTRINGS = [
     "[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]",
     "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
     "('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer'))",
+    "('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))",
 ]
 
 

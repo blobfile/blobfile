@@ -35,15 +35,6 @@ EARLY_EXPIRATION_SECONDS = 5 * 60
 
 INVALID_HOSTNAME_STATUS = 600  # fake status for invalid hostname
 
-DEFAULT_CONNECTION_POOL_MAX_SIZE = 32
-DEFAULT_MAX_CONNECTION_POOL_COUNT = 10
-DEFAULT_AZURE_WRITE_CHUNK_SIZE = 8 * 2 ** 20
-DEFAULT_GOOGLE_WRITE_CHUNK_SIZE = 8 * 2 ** 20
-DEFAULT_RETRY_LOG_THRESHOLD = 0
-DEFAULT_RETRY_COMMON_LOG_THRESHOLD = 2
-DEFAULT_CONNECT_TIMEOUT = 10
-DEFAULT_READ_TIMEOUT = 30
-
 BACKOFF_INITIAL = 0.1
 BACKOFF_MAX = 60.0
 BACKOFF_JITTER_FRACTION = 0.5
@@ -245,10 +236,6 @@ class DirEntry(NamedTuple):
     stat: Optional[Stat]
 
 
-def default_log_fn(msg: str) -> None:
-    print(f"blobfile: {msg}")
-
-
 class PoolDirector:
     def __init__(
         self, connection_pool_max_size: int, max_connection_pool_count: int
@@ -320,21 +307,19 @@ class PoolDirector:
 class Config:
     def __init__(
         self,
-        log_callback: Callable[[str], None] = default_log_fn,
-        connection_pool_max_size: int = DEFAULT_CONNECTION_POOL_MAX_SIZE,
-        max_connection_pool_count: int = DEFAULT_MAX_CONNECTION_POOL_COUNT,
-        # https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-block-blobs
-        # the chunk size determines the maximum size of an individual blob
-        azure_write_chunk_size: int = DEFAULT_AZURE_WRITE_CHUNK_SIZE,
-        google_write_chunk_size: int = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
-        retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
-        retry_common_log_threshold: int = DEFAULT_RETRY_COMMON_LOG_THRESHOLD,
-        retry_limit: Optional[int] = None,
-        connect_timeout: Optional[int] = DEFAULT_CONNECT_TIMEOUT,
-        read_timeout: Optional[int] = DEFAULT_READ_TIMEOUT,
-        output_az_paths: bool = False,
-        use_azure_storage_account_key_fallback: bool = True,
-        get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
+        log_callback: Callable[[str], None],
+        connection_pool_max_size: int,
+        max_connection_pool_count: int,
+        azure_write_chunk_size: int,
+        google_write_chunk_size: int,
+        retry_log_threshold: int,
+        retry_common_log_threshold: int,
+        retry_limit: Optional[int],
+        connect_timeout: Optional[int],
+        read_timeout: Optional[int],
+        output_az_paths: bool,
+        use_azure_storage_account_key_fallback: bool,
+        get_http_pool: Optional[Callable[[], urllib3.PoolManager]],
     ) -> None:
         self.log_callback = log_callback
         self.connection_pool_max_size = connection_pool_max_size

@@ -1407,7 +1407,8 @@ def test_windowed_file():
 
 
 def test_pickle_config():
-    c = common.Config()
+    ctx = ops.create_context()
+    c = ctx.conf
     pickle.dumps(c)
     c.get_http_pool()
     c2 = pickle.loads(pickle.dumps(c))

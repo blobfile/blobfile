@@ -67,7 +67,7 @@ There are a few bonus functions:
 * `md5` - get the md5 hash for a path, for GCS this is often fast, but for other backends this may be slow.  On Azure, if the md5 of a file is calculated and is missing from the file, the file will be updated with the calculated md5.
 * `set_mtime` - set the modified timestamp for a file
 * `configure` - set global configuration options for blobfile
-    * `log_callback=_default_log_fn`: a log callback function `log(msg: string)` to use instead of printing to stdout.  If you use `parallel=True`, you probably want to use a log callback function that is pickleable.
+    * `log_callback=default_log_fn`: a log callback function `log(msg: string)` to use instead of printing to stdout.  If you use `parallel=True`, you probably want to use a log callback function that is pickleable.
     * `connection_pool_max_size=32`: the max size for each per-host connection pool
     * `max_connection_pool_count=10`: the maximum count of per-host connection pools
     * `azure_write_chunk_size=8 * 2 ** 20`: the size of blocks to write to Azure Storage blobs in bytes, can be set to a maximum of 100MB.  This determines both the unit of request retries as well as the maximum file size, which is `50,000 * azure_write_chunk_size`.
@@ -78,6 +78,7 @@ There are a few bonus functions:
     * `read_timeout=30`: the maximum amount of time (in seconds) to wait between consecutive read operations for a response from the server, set to None to wait forever
     * `output_az_paths=False`: output `az://` paths instead of using the `https://` for azure
     * `use_azure_storage_account_key_fallback=True`: fallback to storage account keys for azure containers, having this enabled (the default) requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
+    * `get_http_pool=None`: a function that returns a `urllib3.PoolManager` to be used for requests
 
 ## Authentication
 

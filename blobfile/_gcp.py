@@ -23,7 +23,7 @@ from blobfile._common import (
     Error,
     Stat,
     GCP_BASE_URL,
-    Context,
+    Config,
     TokenManager,
     RequestFailure,
     RestartableStreamingWriteFailure,
@@ -285,7 +285,7 @@ def generate_signed_url(
     return signed_url, expiration
 
 
-def isdir(ctx: Context, path: str) -> bool:
+def isdir(conf: Config, path: str) -> bool:
     if not path.endswith("/"):
         path += "/"
     bucket, blob = split_path(path)
@@ -295,7 +295,7 @@ def isdir(ctx: Context, path: str) -> bool:
             method="GET",
             success_codes=(200, 404),
         )
-        resp = execute_api_request(ctx, req)
+        resp = execute_api_request(conf, req)
         return resp.status == 200
     else:
         req = Request(
@@ -304,14 +304,14 @@ def isdir(ctx: Context, path: str) -> bool:
             params=dict(prefix=blob, delimiter="/", maxResults="1"),
             success_codes=(200, 404),
         )
-        resp = execute_api_request(ctx, req)
+        resp = execute_api_request(conf, req)
         if resp.status == 404:
             return False
         result = json.loads(resp.data)
         return "items" in result or "prefixes" in result
 
 
-def mkdirfile(ctx: Context, path: str) -> None:
+def mkdirfile(conf: Config, path: str) -> None:
     if not path.endswith("/"):
         path += "/"
     bucket, blob = split_path(path)
@@ -321,7 +321,7 @@ def mkdirfile(ctx: Context, path: str) -> None:
         params=dict(uploadType="media", name=blob),
         success_codes=(200, 400),
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     if resp.status == 400:
         raise Error(f"Unable to create directory, bucket does not exist: '{path}'")
 
@@ -369,7 +369,7 @@ def make_stat(item: Mapping[str, Any]) -> Stat:
     )
 
 
-def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
+def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
     now = time.time()
 
     # https://github.com/googleapis/google-auth-library-java/blob/master/README.md#application-default-credentials
@@ -383,7 +383,7 @@ def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
             req.success_codes = (200, 400)
             return req
 
-        resp = common.execute_request(ctx, build_req)
+        resp = common.execute_request(conf, build_req)
         result = json.loads(resp.data)
         if resp.status == 400:
             error = result["error"]
@@ -408,28 +408,28 @@ def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
                 headers={"Metadata-Flavor": "Google"},
             )
 
-        resp = common.execute_request(ctx, build_req)
+        resp = common.execute_request(conf, build_req)
         result = json.loads(resp.data)
         return result["access_token"], now + float(result["expires_in"])
     else:
         raise Error(err)
 
 
-def execute_api_request(ctx: Context, req: Request) -> urllib3.HTTPResponse:
+def execute_api_request(conf: Config, req: Request) -> urllib3.HTTPResponse:
     def build_req() -> Request:
         return create_api_request(
-            req, access_token=access_token_manager.get_token(ctx, key="")
+            req, access_token=access_token_manager.get_token(conf, key="")
         )
 
-    return common.execute_request(ctx, build_req)
+    return common.execute_request(conf, build_req)
 
 
 class StreamingReadFile(BaseStreamingReadFile):
-    def __init__(self, ctx: Context, path: str) -> None:
-        st = maybe_stat(ctx, path)
+    def __init__(self, conf: Config, path: str) -> None:
+        st = maybe_stat(conf, path)
         if st is None:
             raise FileNotFoundError(f"No such file or bucket: '{path}'")
-        super().__init__(ctx=ctx, path=path, size=st.size)
+        super().__init__(conf=conf, path=path, size=st.size)
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
@@ -445,11 +445,11 @@ class StreamingReadFile(BaseStreamingReadFile):
             # sure we don't preload it
             preload_content=not streaming,
         )
-        return execute_api_request(self._ctx, req)
+        return execute_api_request(self._conf, req)
 
 
 class StreamingWriteFile(BaseStreamingWriteFile):
-    def __init__(self, ctx: Context, path: str) -> None:
+    def __init__(self, conf: Config, path: str) -> None:
         bucket, name = split_path(path)
         req = Request(
             url=build_url(
@@ -459,13 +459,13 @@ class StreamingWriteFile(BaseStreamingWriteFile):
             data=dict(name=name),
             success_codes=(200, 400, 404),
         )
-        resp = execute_api_request(ctx, req)
+        resp = execute_api_request(conf, req)
         if resp.status in (400, 404):
             raise FileNotFoundError(f"No such file or bucket: '{path}'")
         self._upload_url = resp.headers["Location"]
         # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
-        assert ctx.google_write_chunk_size % (256 * 1024) == 0
-        super().__init__(ctx=ctx, chunk_size=ctx.google_write_chunk_size)
+        assert conf.google_write_chunk_size % (256 * 1024) == 0
+        super().__init__(conf=conf, chunk_size=conf.google_write_chunk_size)
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         start = self._offset
@@ -494,7 +494,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
         )
 
         try:
-            execute_api_request(self._ctx, req)
+            execute_api_request(self._conf, req)
         except RequestFailure as e:
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
             if e.response_status in (404, 410):
@@ -509,7 +509,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 raise
 
 
-def maybe_stat(ctx: Context, path: str) -> Optional[Stat]:
+def maybe_stat(conf: Config, path: str) -> Optional[Stat]:
     bucket, blob = split_path(path)
     if blob == "":
         return None
@@ -518,13 +518,13 @@ def maybe_stat(ctx: Context, path: str) -> Optional[Stat]:
         method="GET",
         success_codes=(200, 404),
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     if resp.status != 200:
         return None
     return make_stat(json.loads(resp.data))
 
 
-def remove(ctx: Context, path: str) -> bool:
+def remove(conf: Config, path: str) -> bool:
     bucket, blob = split_path(path)
     if blob == "":
         raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
@@ -533,11 +533,11 @@ def remove(ctx: Context, path: str) -> bool:
         method="DELETE",
         success_codes=(204, 404),
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     return resp.status == 204
 
 
-def maybe_update_md5(ctx: Context, path: str, generation: str, hexdigest: str) -> bool:
+def maybe_update_md5(conf: Config, path: str, generation: str, hexdigest: str) -> bool:
     bucket, blob = split_path(path)
     req = Request(
         url=build_url("/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob),
@@ -548,11 +548,11 @@ def maybe_update_md5(ctx: Context, path: str, generation: str, hexdigest: str) -
         success_codes=(200, 404, 412),
     )
 
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     return resp.status == 200
 
 
-def _upload_part(ctx: Context, path: str, start: int, size: int, dst: str) -> str:
+def _upload_part(conf: Config, path: str, start: int, size: int, dst: str) -> str:
     bucket, blob = split_path(dst)
     req = Request(
         url=build_url("/upload/storage/v1/b/{bucket}/o", bucket=bucket),
@@ -561,22 +561,22 @@ def _upload_part(ctx: Context, path: str, start: int, size: int, dst: str) -> st
         data=FileBody(path, start=start, end=start + size),
         success_codes=(200,),
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     metadata = json.loads(resp.data)
     return metadata["generation"]
 
 
-def _delete_part(ctx: Context, bucket: str, name: str) -> None:
+def _delete_part(conf: Config, bucket: str, name: str) -> None:
     req = Request(
         url=build_url("/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=name),
         method="DELETE",
         success_codes=(204, 404),
     )
-    execute_api_request(ctx, req)
+    execute_api_request(conf, req)
 
 
 def parallel_upload(
-    ctx: Context,
+    conf: Config,
     executor: concurrent.futures.Executor,
     src: str,
     dst: str,
@@ -601,7 +601,7 @@ def parallel_upload(
         suffix = f".part.{i}"
         future = executor.submit(
             _upload_part,
-            ctx,
+            conf,
             src,
             start,
             min(part_size, s.st_size - start),
@@ -631,15 +631,15 @@ def parallel_upload(
         data={"sourceObjects": source_objects},
         success_codes=(200,),
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     metadata = json.loads(resp.data)
     hexdigest = binascii.hexlify(md5_digest).decode("utf8")
-    maybe_update_md5(ctx, dst, metadata["generation"], hexdigest)
+    maybe_update_md5(conf, dst, metadata["generation"], hexdigest)
 
     # delete parts in parallel
     delete_futures = []
     for name in object_names:
-        future = executor.submit(_delete_part, ctx, dstbucket, name)
+        future = executor.submit(_delete_part, conf, dstbucket, name)
         delete_futures.append(future)
     for future in delete_futures:
         future.result()
@@ -648,13 +648,13 @@ def parallel_upload(
 
 
 def _create_page_iterator(
-    ctx: Context, url: str, method: str, params: Mapping[str, str]
+    conf: Config, url: str, method: str, params: Mapping[str, str]
 ) -> Iterator[Dict[str, Any]]:
     p = dict(params).copy()
 
     while True:
         req = Request(url=url, method=method, params=p, success_codes=(200, 404))
-        resp = execute_api_request(ctx, req)
+        resp = execute_api_request(conf, req)
         if resp.status == 404:
             return
         result = json.loads(resp.data)
@@ -665,7 +665,7 @@ def _create_page_iterator(
 
 
 def list_blobs(
-    ctx: Context, path: str, delimiter: Optional[str] = None
+    conf: Config, path: str, delimiter: Optional[str] = None
 ) -> Iterator[DirEntry]:
     params = {}
     if delimiter is not None:
@@ -673,7 +673,7 @@ def list_blobs(
 
     bucket, prefix = split_path(path)
     it = _create_page_iterator(
-        ctx=ctx,
+        conf=conf,
         url=build_url("/storage/v1/b/{bucket}/o", bucket=bucket),
         method="GET",
         params=dict(prefix=prefix, **params),
@@ -712,13 +712,13 @@ def entry_from_path_stat(path: str, stat: Stat) -> DirEntry:
     return DirEntry(name=name, path=path, is_dir=False, is_file=True, stat=stat)
 
 
-def get_url(ctx: Context, path: str) -> Tuple[str, Optional[float]]:
+def get_url(conf: Config, path: str) -> Tuple[str, Optional[float]]:
     bucket, blob = split_path(path)
     return generate_signed_url(bucket, blob, expiration=MAX_EXPIRATION)
 
 
 def set_mtime(
-    ctx: Context, path: str, mtime: float, version: Optional[str] = None
+    conf: Config, path: str, mtime: float, version: Optional[str] = None
 ) -> bool:
     bucket, blob = split_path(path)
     params = None
@@ -731,13 +731,13 @@ def set_mtime(
         data=dict(metadata={"blobfile-mtime": str(mtime)}),
         success_codes=(200, 404, 412),
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     if resp.status == 404:
         raise FileNotFoundError(f"No such file: '{path}'")
     return resp.status == 200
 
 
-def dirname(ctx: Context, path: str) -> str:
+def dirname(conf: Config, path: str) -> str:
     bucket, obj = split_path(path)
     obj = strip_slashes(obj)
     if "/" in obj:
@@ -747,7 +747,7 @@ def dirname(ctx: Context, path: str) -> str:
         return combine_path(bucket, "")[:-1]
 
 
-def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[str]:
+def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> Optional[str]:
     srcbucket, srcname = split_path(src)
     dstbucket, dstname = split_path(dst)
     params = {}
@@ -764,7 +764,7 @@ def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[
             params=params,
             success_codes=(200, 404),
         )
-        resp = execute_api_request(ctx, req)
+        resp = execute_api_request(conf, req)
         if resp.status == 404:
             raise FileNotFoundError(f"Source file not found: '{src}'")
         result = json.loads(resp.data)
@@ -776,7 +776,7 @@ def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[
         params["rewriteToken"] = result["rewriteToken"]
 
 
-def join_paths(ctx: Context, a: str, b: str) -> str:
+def join_paths(conf: Config, a: str, b: str) -> str:
     if not a.endswith("/"):
         a += "/"
 

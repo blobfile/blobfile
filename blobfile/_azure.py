@@ -22,7 +22,7 @@ from blobfile._common import (
     Request,
     Error,
     Stat,
-    Context,
+    Config,
     INVALID_HOSTNAME_STATUS,
     TokenManager,
     ConcurrentWriteFailure,
@@ -334,14 +334,14 @@ def combine_az_path(account: str, container: str, obj: str) -> str:
     return f"az://{account}/{container}/{obj}"
 
 
-def combine_path(ctx: Context, account: str, container: str, obj: str) -> str:
-    if ctx.output_az_paths:
+def combine_path(conf: Config, account: str, container: str, obj: str) -> str:
+    if conf.output_az_paths:
         return combine_az_path(account, container, obj)
     else:
         return combine_https_path(account, container, obj)
 
 
-def mkdirfile(ctx: Context, path: str) -> None:
+def mkdirfile(conf: Config, path: str) -> None:
     if not path.endswith("/"):
         path += "/"
     account, container, blob = split_path(path)
@@ -351,7 +351,7 @@ def mkdirfile(ctx: Context, path: str) -> None:
         headers={"x-ms-blob-type": "BlockBlob"},
         success_codes=(201, 400),
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     if resp.status == 400:
         raise Error(
             f"Unable to create directory, account/container does not exist: '{path}'"
@@ -448,7 +448,7 @@ def make_stat(item: Mapping[str, str]) -> Stat:
 
 
 def _can_access_container(
-    ctx: Context, account: str, container: str, auth: Tuple[str, str]
+    conf: Config, account: str, container: str, auth: Tuple[str, str]
 ) -> bool:
     # https://myaccount.blob.core.windows.net/mycontainer?restype=container&comp=list
     success_codes = [200, 403, 404, INVALID_HOSTNAME_STATUS]
@@ -465,7 +465,7 @@ def _can_access_container(
         )
         return create_api_request(req, auth=auth)
 
-    resp = common.execute_request(ctx, build_req)
+    resp = common.execute_request(conf, build_req)
     # technically INVALID_HOSTNAME_STATUS means we can't access the account because it
     # doesn't exist, but to be consistent with how we treat this error elsewhere we
     # ignore it here
@@ -480,7 +480,7 @@ def _can_access_container(
 
 
 def _get_storage_account_id(
-    ctx: Context, subscription_id: str, account: str, auth: Tuple[str, str]
+    conf: Config, subscription_id: str, account: str, auth: Tuple[str, str]
 ) -> Optional[str]:
     # get a list of storage accounts
     def build_req() -> Request:
@@ -492,7 +492,7 @@ def _get_storage_account_id(
         )
         return create_api_request(req, auth=auth)
 
-    resp = common.execute_request(ctx, build_req)
+    resp = common.execute_request(conf, build_req)
     if resp.status in (401, 403):
         # we aren't allowed to query this for this subscription, skip it
         return None
@@ -506,7 +506,7 @@ def _get_storage_account_id(
 
 
 def _get_storage_account_key(
-    ctx: Context, account: str, container: str, creds: Mapping[str, Any]
+    conf: Config, account: str, container: str, creds: Mapping[str, Any]
 ) -> Optional[Tuple[Any, float]]:
     # azure resource manager has very low limits on number of requests, so we have
     # to be careful to avoid extra requests here
@@ -521,7 +521,7 @@ def _get_storage_account_key(
             creds=creds, scope="https://management.azure.com/"
         )
 
-    resp = common.execute_request(ctx, build_req)
+    resp = common.execute_request(conf, build_req)
     result = json.loads(resp.data)
     auth = (OAUTH_TOKEN, result["access_token"])
 
@@ -531,7 +531,7 @@ def _get_storage_account_key(
     storage_account_id = None
     for subscription_id in stored_subscription_ids:
         storage_account_id = _get_storage_account_id(
-            ctx, subscription_id, account, auth
+            conf, subscription_id, account, auth
         )
         if storage_account_id is not None:
             break
@@ -546,7 +546,7 @@ def _get_storage_account_key(
             )
             return create_api_request(req, auth=auth)
 
-        resp = common.execute_request(ctx, build_req)
+        resp = common.execute_request(conf, build_req)
         result = json.loads(resp.data)
         unchecked_subscription_ids = [
             item["subscriptionId"]
@@ -556,7 +556,7 @@ def _get_storage_account_key(
 
         for subscription_id in unchecked_subscription_ids:
             storage_account_id = _get_storage_account_id(
-                ctx, subscription_id, account, auth
+                conf, subscription_id, account, auth
             )
             if storage_account_id is not None:
                 break
@@ -572,12 +572,12 @@ def _get_storage_account_key(
         )
         return create_api_request(req, auth=auth)
 
-    resp = common.execute_request(ctx, build_req)
+    resp = common.execute_request(conf, build_req)
     result = json.loads(resp.data)
     for key in result["keys"]:
         if key["permissions"] == "FULL":
             storage_key_auth = (SHARED_KEY, key["value"])
-            if _can_access_container(ctx, account, container, storage_key_auth):
+            if _can_access_container(conf, account, container, storage_key_auth):
                 return storage_key_auth
             else:
                 raise Error(
@@ -588,7 +588,7 @@ def _get_storage_account_key(
     )
 
 
-def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
+def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
     account, container = key
     now = time.time()
     creds = _load_credentials()
@@ -600,7 +600,7 @@ def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
                     f"but needed credentials for account '{account}'"
                 )
         auth = (SHARED_KEY, creds["storageAccountKey"])
-        if _can_access_container(ctx, account, container, auth):
+        if _can_access_container(conf, account, container, auth):
             return (auth, now + SHARED_KEY_EXPIRATION_SECONDS)
     elif "refreshToken" in creds:
         # we have a refresh token, convert it into an access token for this account
@@ -611,7 +611,7 @@ def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
                 success_codes=(200, 400),
             )
 
-        resp = common.execute_request(ctx, build_req)
+        resp = common.execute_request(conf, build_req)
         result = json.loads(resp.data)
         if resp.status == 400:
             if (
@@ -639,13 +639,13 @@ def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
         auth = (OAUTH_TOKEN, result["access_token"])
 
         # for some azure accounts this access token does not work, check if it works
-        if _can_access_container(ctx, account, container, auth):
+        if _can_access_container(conf, account, container, auth):
             return (auth, now + float(result["expires_in"]))
 
-        if ctx.use_azure_storage_account_key_fallback:
+        if conf.use_azure_storage_account_key_fallback:
             # fall back to getting the storage keys
             storage_account_key_auth = _get_storage_account_key(
-                ctx=ctx, account=account, container=container, creds=creds
+                conf=conf, account=account, container=container, creds=creds
             )
             if storage_account_key_auth is not None:
                 return (storage_account_key_auth, now + SHARED_KEY_EXPIRATION_SECONDS)
@@ -656,16 +656,16 @@ def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
                 creds=creds, scope="https://storage.azure.com/"
             )
 
-        resp = common.execute_request(ctx, build_req)
+        resp = common.execute_request(conf, build_req)
         result = json.loads(resp.data)
         auth = (OAUTH_TOKEN, result["access_token"])
-        if _can_access_container(ctx, account, container, auth):
+        if _can_access_container(conf, account, container, auth):
             return (auth, now + float(result["expires_in"]))
 
-        if ctx.use_azure_storage_account_key_fallback:
+        if conf.use_azure_storage_account_key_fallback:
             # fall back to getting the storage keys
             storage_account_key_auth = _get_storage_account_key(
-                ctx=ctx, account=account, container=container, creds=creds
+                conf=conf, account=account, container=container, creds=creds
             )
             if storage_account_key_auth is not None:
                 return (storage_account_key_auth, now + SHARED_KEY_EXPIRATION_SECONDS)
@@ -673,7 +673,7 @@ def _get_access_token(ctx: Context, key: Any) -> Tuple[Any, float]:
     # oddly, it seems that if you request a public container with a valid azure account, you cannot list the bucket
     # but if you list it with no account, that works fine
     anonymous_auth = (ANONYMOUS, "")
-    if _can_access_container(ctx, account, container, anonymous_auth):
+    if _can_access_container(conf, account, container, anonymous_auth):
         return (anonymous_auth, float("inf"))
 
     msg = f"Could not find any credentials that grant access to storage account: '{account}' and container: '{container}'"
@@ -688,8 +688,8 @@ No Azure credentials were found.  If the container is not marked as public, plea
     raise Error(msg)
 
 
-def _get_sas_token(ctx: Context, key: Any) -> Tuple[Any, float]:
-    auth = access_token_manager.get_token(ctx, key=key)
+def _get_sas_token(conf: Config, key: Any) -> Tuple[Any, float]:
+    auth = access_token_manager.get_token(conf, key=key)
     if auth[0] == ANONYMOUS:
         # for public containers, use None as the token so that this will be cached
         # and we can tell when we don't have a real SAS token for a container
@@ -710,7 +710,7 @@ def _get_sas_token(ctx: Context, key: Any) -> Tuple[Any, float]:
             data={"KeyInfo": {"Start": start, "Expiry": expiry}},
             success_codes=(200, 403),
         )
-        auth = access_token_manager.get_token(ctx, key=key)
+        auth = access_token_manager.get_token(conf, key=key)
         if auth[0] != OAUTH_TOKEN:
             raise Error(
                 "Only OAuth tokens can be used to get SAS tokens. You should set the Storage "
@@ -720,7 +720,7 @@ def _get_sas_token(ctx: Context, key: Any) -> Tuple[Any, float]:
             )
         return create_api_request(req, auth=auth)
 
-    resp = common.execute_request(ctx, build_req)
+    resp = common.execute_request(conf, build_req)
     if resp.status == 403:
         raise Error(
             f"You do not have permission to generate an SAS token for account {account}. "
@@ -732,7 +732,7 @@ def _get_sas_token(ctx: Context, key: Any) -> Tuple[Any, float]:
     return out["UserDelegationKey"], t
 
 
-def execute_api_request(ctx: Context, req: Request) -> urllib3.HTTPResponse:
+def execute_api_request(conf: Config, req: Request) -> urllib3.HTTPResponse:
     u = urllib.parse.urlparse(req.url)
     account = u.netloc.split(".")[0]
     path_parts = u.path.split("/")
@@ -742,10 +742,10 @@ def execute_api_request(ctx: Context, req: Request) -> urllib3.HTTPResponse:
 
     def build_req() -> Request:
         return create_api_request(
-            req, auth=access_token_manager.get_token(ctx, key=(account, container))
+            req, auth=access_token_manager.get_token(conf, key=(account, container))
         )
 
-    return common.execute_request(ctx, build_req)
+    return common.execute_request(conf, build_req)
 
 
 def _block_index_to_block_id(index: int, upload_id: int) -> str:
@@ -755,14 +755,14 @@ def _block_index_to_block_id(index: int, upload_id: int) -> str:
     return base64.b64encode(id_plus_index.to_bytes(8, byteorder="big")).decode("utf8")
 
 
-def _clear_uncommitted_blocks(ctx: Context, url: str, metadata: Dict[str, str]) -> None:
+def _clear_uncommitted_blocks(conf: Config, url: str, metadata: Dict[str, str]) -> None:
     # to avoid leaking uncommitted blocks, we can do a Put Block List with
     # all the existing blocks for a file
     # this will change the last-modified timestamp and the etag
     req = Request(
         url=url, params=dict(comp="blocklist"), method="GET", success_codes=(200, 404)
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     if resp.status != 200:
         return
 
@@ -790,11 +790,11 @@ def _clear_uncommitted_blocks(ctx: Context, url: str, metadata: Dict[str, str]) 
         data=body,
         success_codes=(201, 404, 412),
     )
-    execute_api_request(ctx, req)
+    execute_api_request(conf, req)
 
 
 def _finalize_blob(
-    ctx: Context, path: str, url: str, block_ids: List[str], md5_digest: bytes
+    conf: Config, path: str, url: str, block_ids: List[str], md5_digest: bytes
 ) -> None:
     body = {"BlockList": {"Latest": block_ids}}
     req = Request(
@@ -807,7 +807,7 @@ def _finalize_blob(
         data=body,
         success_codes=(201, 400),
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     if resp.status == 400:
         result = xmltodict.parse(resp.data)
         if result["Error"]["Code"] == "InvalidBlockList":
@@ -826,7 +826,7 @@ def _finalize_blob(
             )
 
 
-def isdir(ctx: Context, path: str) -> bool:
+def isdir(conf: Config, path: str) -> bool:
     """
     Return true if a path is an existing directory
     """
@@ -840,13 +840,13 @@ def isdir(ctx: Context, path: str) -> bool:
             params=dict(restype="container"),
             success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
         )
-        resp = execute_api_request(ctx, req)
+        resp = execute_api_request(conf, req)
         return resp.status == 200
     else:
         # even though we're only interested in having one result, we still need to make an
         # iterator. as it happens, azure is perfectly willing to return an empty first page.
         it = create_page_iterator(
-            ctx,
+            conf,
             url=build_url(account, "/{container}", container=container),
             method="GET",
             params=dict(
@@ -864,7 +864,7 @@ def isdir(ctx: Context, path: str) -> bool:
 
 
 def create_page_iterator(
-    ctx: Context,
+    conf: Config,
     url: str,
     method: str,
     data: Optional[Mapping[str, str]] = None,
@@ -886,7 +886,7 @@ def create_page_iterator(
             data=d,
             success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
         )
-        resp = execute_api_request(ctx, req)
+        resp = execute_api_request(conf, req)
         if resp.status in (404, INVALID_HOSTNAME_STATUS):
             return
         result = xmltodict.parse(resp.data)["EnumerationResults"]
@@ -897,11 +897,11 @@ def create_page_iterator(
 
 
 class StreamingReadFile(BaseStreamingReadFile):
-    def __init__(self, ctx: Context, path: str) -> None:
-        st = maybe_stat(ctx, path)
+    def __init__(self, conf: Config, path: str) -> None:
+        st = maybe_stat(conf, path)
         if st is None:
             raise FileNotFoundError(f"No such file or directory: '{path}'")
-        super().__init__(ctx=ctx, path=path, size=st.size)
+        super().__init__(conf=conf, path=path, size=st.size)
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
@@ -918,12 +918,12 @@ class StreamingReadFile(BaseStreamingReadFile):
             # sure we don't preload it
             preload_content=not streaming,
         )
-        resp = execute_api_request(self._ctx, req)
+        resp = execute_api_request(self._conf, req)
         return resp
 
 
 class StreamingWriteFile(BaseStreamingWriteFile):
-    def __init__(self, ctx: Context, path: str) -> None:
+    def __init__(self, conf: Config, path: str) -> None:
         self._path = path
         account, container, blob = split_path(path)
         self._url = build_url(
@@ -1011,7 +1011,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
             method="HEAD",
             success_codes=(200, 400, 404, INVALID_HOSTNAME_STATUS),
         )
-        resp = execute_api_request(ctx, req)
+        resp = execute_api_request(conf, req)
         if resp.status == 200:
             if resp.headers["x-ms-blob-type"] == "BlockBlob":
                 # because we delete all the uncommitted blocks, any concurrent writers will fail
@@ -1019,12 +1019,12 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 # deleting all uncommitted blocks
                 # this means that the last writer to start is likely to win, the others should fail
                 # with ConcurrentWriteFailure
-                _clear_uncommitted_blocks(ctx, self._url, resp.headers)
+                _clear_uncommitted_blocks(conf, self._url, resp.headers)
             else:
                 # if the existing blob type is not compatible with the block blob we are about to write
                 # we have to delete the file before writing our block blob or else we will get a 409
                 # error when putting the first block
-                remove(ctx, path)
+                remove(conf, path)
         elif resp.status in (400, INVALID_HOSTNAME_STATUS) or (
             resp.status == 404
             and resp.headers["x-ms-error-code"] == "ContainerNotFound"
@@ -1033,7 +1033,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 f"No such file or container/account does not exist: '{path}'"
             )
         self._md5 = hashlib.md5()
-        super().__init__(ctx=ctx, chunk_size=ctx.azure_write_chunk_size)
+        super().__init__(conf=conf, chunk_size=conf.azure_write_chunk_size)
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         start = 0
@@ -1042,7 +1042,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
             # https://azure.microsoft.com/en-us/blog/azure-premium-block-blob-storage-is-now-generally-available/
             # we use block blobs because they are compatible with WASB:
             # https://docs.microsoft.com/en-us/azure/databricks/kb/data-sources/wasb-check-blob-types
-            end = start + self._ctx.azure_write_chunk_size
+            end = start + self._conf.azure_write_chunk_size
             data = chunk[start:end]
             self._md5.update(data)
             req = Request(
@@ -1057,14 +1057,14 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 data=data,
                 success_codes=(201,),
             )
-            execute_api_request(self._ctx, req)
+            execute_api_request(self._conf, req)
             self._block_index += 1
             if self._block_index >= BLOCK_COUNT_LIMIT:
                 raise Error(
                     f"Exceeded block count limit of {BLOCK_COUNT_LIMIT} for Azure Storage.  Increase `azure_write_chunk_size` so that {BLOCK_COUNT_LIMIT} * `azure_write_chunk_size` exceeds the size of the file you are writing."
                 )
 
-            start += self._ctx.azure_write_chunk_size
+            start += self._conf.azure_write_chunk_size
 
         if finalize:
             block_ids = [
@@ -1072,7 +1072,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 for i in range(self._block_index)
             ]
             _finalize_blob(
-                ctx=self._ctx,
+                conf=self._conf,
                 path=self._path,
                 url=self._url,
                 block_ids=block_ids,
@@ -1081,7 +1081,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
 
 
 def _upload_chunk(
-    ctx: Context, path: str, start: int, size: int, url: str, block_id: str
+    conf: Config, path: str, start: int, size: int, url: str, block_id: str
 ) -> None:
     req = Request(
         url=url,
@@ -1092,11 +1092,11 @@ def _upload_chunk(
         data=FileBody(path, start=start, end=start + size),
         success_codes=(201,),
     )
-    execute_api_request(ctx, req)
+    execute_api_request(conf, req)
 
 
 def parallel_upload(
-    ctx: Context,
+    conf: Config,
     executor: concurrent.futures.Executor,
     src: str,
     dst: str,
@@ -1123,7 +1123,7 @@ def parallel_upload(
         block_id = _block_index_to_block_id(i, upload_id)
         future = executor.submit(
             _upload_chunk,
-            ctx,
+            conf,
             src,
             start,
             min(part_size, s.st_size - start),
@@ -1138,12 +1138,12 @@ def parallel_upload(
         future.result()
 
     _finalize_blob(
-        ctx=ctx, path=dst, url=dst_url, block_ids=block_ids, md5_digest=md5_digest
+        conf=conf, path=dst, url=dst_url, block_ids=block_ids, md5_digest=md5_digest
     )
     return binascii.hexlify(md5_digest).decode("utf8") if return_md5 else None
 
 
-def maybe_stat(ctx: Context, path: str) -> Optional[Stat]:
+def maybe_stat(conf: Config, path: str) -> Optional[Stat]:
     account, container, blob = split_path(path)
     if blob == "":
         return None
@@ -1152,13 +1152,13 @@ def maybe_stat(ctx: Context, path: str) -> Optional[Stat]:
         method="HEAD",
         success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     if resp.status != 200:
         return None
     return make_stat(resp.headers)
 
 
-def remove(ctx: Context, path: str) -> bool:
+def remove(conf: Config, path: str) -> bool:
     account, container, blob = split_path(path)
     if blob == "":
         raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
@@ -1167,11 +1167,11 @@ def remove(ctx: Context, path: str) -> bool:
         method="DELETE",
         success_codes=(202, 404, INVALID_HOSTNAME_STATUS),
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     return resp.status == 202
 
 
-def maybe_update_md5(ctx: Context, path: str, etag: str, hexdigest: str) -> bool:
+def maybe_update_md5(conf: Config, path: str, etag: str, hexdigest: str) -> bool:
     account, container, blob = split_path(path)
     req = Request(
         url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
@@ -1179,7 +1179,7 @@ def maybe_update_md5(ctx: Context, path: str, etag: str, hexdigest: str) -> bool
         headers={"If-Match": etag},
         success_codes=(200, 404, 412),
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     if resp.status in (404, 412):
         return False
 
@@ -1204,12 +1204,12 @@ def maybe_update_md5(ctx: Context, path: str, etag: str, hexdigest: str) -> bool
         },
         success_codes=(200, 404, 412),
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     return resp.status == 200
 
 
 def list_blobs(
-    ctx: Context, path: str, delimiter: Optional[str] = None
+    conf: Config, path: str, delimiter: Optional[str] = None
 ) -> Iterator[DirEntry]:
     params = {}
     if delimiter is not None:
@@ -1217,13 +1217,13 @@ def list_blobs(
 
     account, container, prefix = split_path(path)
     it = create_page_iterator(
-        ctx,
+        conf,
         url=build_url(account, "/{container}", container=container),
         method="GET",
         params=dict(comp="list", restype="container", prefix=prefix, **params),
     )
     for result in it:
-        for entry in _get_entries(ctx, account, container, result):
+        for entry in _get_entries(conf, account, container, result):
             yield entry
 
 
@@ -1243,7 +1243,7 @@ def entry_from_path_stat(path: str, stat: Stat) -> DirEntry:
 
 
 def _get_entries(
-    ctx: Context, account: str, container: str, result: Mapping[str, Any]
+    conf: Config, account: str, container: str, result: Mapping[str, Any]
 ) -> Iterator[DirEntry]:
     blobs = result["Blobs"]
     if blobs is None:
@@ -1252,13 +1252,13 @@ def _get_entries(
         if isinstance(blobs["BlobPrefix"], dict):
             blobs["BlobPrefix"] = [blobs["BlobPrefix"]]
         for bp in blobs["BlobPrefix"]:
-            path = combine_path(ctx, account, container, bp["Name"])
+            path = combine_path(conf, account, container, bp["Name"])
             yield entry_from_dirpath(path)
     if "Blob" in blobs:
         if isinstance(blobs["Blob"], dict):
             blobs["Blob"] = [blobs["Blob"]]
         for b in blobs["Blob"]:
-            path = combine_path(ctx, account, container, b["Name"])
+            path = combine_path(conf, account, container, b["Name"])
             if b["Name"].endswith("/"):
                 yield entry_from_dirpath(path)
             else:
@@ -1266,10 +1266,10 @@ def _get_entries(
                 yield entry_from_path_stat(path, make_stat(props))
 
 
-def get_url(ctx: Context, path: str) -> Tuple[str, Optional[float]]:
+def get_url(conf: Config, path: str) -> Tuple[str, Optional[float]]:
     account, container, blob = split_path(path)
     url = build_url(account, "/{container}/{blob}", container=container, blob=blob)
-    token = sas_token_manager.get_token(ctx=ctx, key=(account, container))
+    token = sas_token_manager.get_token(conf=conf, key=(account, container))
     if token is None:
         # the container has public access
         return url, float("inf")
@@ -1277,7 +1277,7 @@ def get_url(ctx: Context, path: str) -> Tuple[str, Optional[float]]:
 
 
 def set_mtime(
-    ctx: Context, path: str, mtime: float, version: Optional[str] = None
+    conf: Config, path: str, mtime: float, version: Optional[str] = None
 ) -> bool:
     account, container, blob = split_path(path)
     headers = {}
@@ -1290,7 +1290,7 @@ def set_mtime(
         headers=headers,
         success_codes=(200, 404, 412),
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     if resp.status == 404:
         raise FileNotFoundError(f"No such file: '{path}'")
     if resp.status == 412:
@@ -1307,23 +1307,23 @@ def set_mtime(
         headers=headers,
         success_codes=(200, 404, 412),
     )
-    resp = execute_api_request(ctx, req)
+    resp = execute_api_request(conf, req)
     if resp.status == 404:
         raise FileNotFoundError(f"No such file: '{path}'")
     return resp.status == 200
 
 
-def dirname(ctx: Context, path: str) -> str:
+def dirname(conf: Config, path: str) -> str:
     account, container, obj = split_path(path)
     obj = strip_slashes(obj)
     if "/" in obj:
         obj = "/".join(obj.split("/")[:-1])
-        return combine_path(ctx, account, container, obj)
+        return combine_path(conf, account, container, obj)
     else:
-        return combine_path(ctx, account, container, "")[:-1]
+        return combine_path(conf, account, container, "")[:-1]
 
 
-def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[str]:
+def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> Optional[str]:
     # https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob
     dst_account, dst_container, dst_blob = split_path(dst)
     src_account, src_container, src_blob = split_path(src)
@@ -1336,7 +1336,7 @@ def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[
             # the signed url can expire, so technically we should get the sas_token and build the signed url
             # each time we build a new request
             sas_token = sas_token_manager.get_token(
-                ctx=ctx, key=(src_account, src_container)
+                conf=conf, key=(src_account, src_container)
             )
             # if we don't get a token, it's likely we have anonymous access to the container
             # if we do get a token, the container is likely private and we need to use
@@ -1357,15 +1357,22 @@ def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[
         return create_api_request(
             req,
             auth=access_token_manager.get_token(
-                ctx=ctx, key=(dst_account, dst_container)
+                conf=conf, key=(dst_account, dst_container)
             ),
         )
+
+    copy_id = None
+    copy_status = None
+    etag = None
 
     # start the copy, waiting for any existing copies to finish
     backoff_generator = common.exponential_sleep_generator()
     for backoff in backoff_generator:
-        resp = common.execute_request(ctx, build_req)
+        resp = common.execute_request(conf, build_req)
         if resp.status == 202:
+            copy_id = resp.headers["x-ms-copy-id"]
+            copy_status = resp.headers["x-ms-copy-status"]
+            etag = resp.headers["etag"]
             break
         if resp.status == 404:
             raise FileNotFoundError(f"Source file not found: '{src}'")
@@ -1373,16 +1380,14 @@ def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[
             result = xmltodict.parse(resp.data)
             if result["Error"]["Code"] != "PendingCopyOperation":
                 raise RequestFailure.create_from_request_response(
-                    message=f"unexpected status {resp.status}", request=build_req(), response=resp
+                    message=f"unexpected status {resp.status}",
+                    request=build_req(),
+                    response=resp,
                 )
             # if we got a pending copy operation, continue to wait
         else:
             raise Error(f"unhandled status {resp.status}")
         time.sleep(backoff)
-
-    copy_id = resp.headers["x-ms-copy-id"]
-    copy_status = resp.headers["x-ms-copy-status"]
-    etag = resp.headers["etag"]
 
     # wait for potentially async copy operation to finish
     # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob
@@ -1399,7 +1404,7 @@ def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[
             ),
             method="GET",
         )
-        resp = execute_api_request(ctx, req)
+        resp = execute_api_request(conf, req)
         if resp.headers["x-ms-copy-id"] != copy_id:
             raise Error("Copy id mismatch")
         etag = resp.headers["etag"]
@@ -1408,13 +1413,13 @@ def remote_copy(ctx: Context, src: str, dst: str, return_md5: bool) -> Optional[
         raise Error(f"Invalid copy status: '{copy_status}'")
     if return_md5:
         # if the file is the same one that we just copied, return the stored MD5
-        st = maybe_stat(ctx, dst)
+        st = maybe_stat(conf, dst)
         if st is not None and st.version == etag:
             return st.md5
     return
 
 
-def join_paths(ctx: Context, a: str, b: str) -> str:
+def join_paths(conf: Config, a: str, b: str) -> str:
     if not a.endswith("/"):
         a += "/"
 
@@ -1422,7 +1427,7 @@ def join_paths(ctx: Context, a: str, b: str) -> str:
     obj = safe_urljoin(obj, b)
     if obj.startswith("/"):
         obj = obj[1:]
-    return combine_path(ctx, account, container, obj)
+    return combine_path(conf, account, container, obj)
 
 
 access_token_manager = TokenManager(_get_access_token)

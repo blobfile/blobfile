@@ -50,7 +50,7 @@ from blobfile._common import (
     RestartableStreamingWriteFailure,
     Stat,
     DirEntry,
-    Context,
+    Config,
     CHUNK_SIZE,
     get_log_threshold_for_error,
 )
@@ -62,7 +62,7 @@ INVALID_CHARS = (
 )
 
 
-_context = Context()
+_config = Config()
 
 
 def configure(
@@ -93,8 +93,8 @@ def configure(
     output_az_paths: output `az://` paths instead of using the `https://` for azure
     use_azure_storage_account_key_fallback: fallback to storage account keys for azure containers, having this enabled (the default) requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
     """
-    global _context
-    _context = Context(
+    global _config
+    _config = Config(
         log_callback=log_callback,
         connection_pool_max_size=connection_pool_max_size,
         max_connection_pool_count=max_connection_pool_count,
@@ -163,7 +163,7 @@ def _download_chunk(src: str, dst: str, start: int, size: int) -> None:
 
 
 def _parallel_download(
-    ctx: Context,
+    conf: Config,
     executor: concurrent.futures.Executor,
     src: str,
     dst: str,
@@ -235,10 +235,10 @@ def copy(
 
     # special case cloud to cloud copy, don't download the file
     if _is_gcp_path(src) and _is_gcp_path(dst):
-        return gcp.remote_copy(_context, src=src, dst=dst, return_md5=return_md5)
+        return gcp.remote_copy(_config, src=src, dst=dst, return_md5=return_md5)
 
     if _is_azure_path(src) and _is_azure_path(dst):
-        return azure.remote_copy(_context, src=src, dst=dst, return_md5=return_md5)
+        return azure.remote_copy(_config, src=src, dst=dst, return_md5=return_md5)
 
     if parallel:
         copy_fn = None
@@ -254,10 +254,10 @@ def copy(
         if copy_fn is not None:
             if parallel_executor is None:
                 with concurrent.futures.ProcessPoolExecutor() as executor:
-                    return copy_fn(_context, executor, src, dst, return_md5=return_md5)
+                    return copy_fn(_config, executor, src, dst, return_md5=return_md5)
             else:
                 return copy_fn(
-                    _context, parallel_executor, src, dst, return_md5=return_md5
+                    _config, parallel_executor, src, dst, return_md5=return_md5
                 )
 
     for attempt, backoff in enumerate(common.exponential_sleep_generator()):
@@ -283,11 +283,11 @@ def copy(
             # if this failure occurs, the upload must be restarted from the beginning
             # https://cloud.google.com/storage/docs/resumable-uploads#practices
             # https://github.com/googleapis/gcs-resumable-upload/issues/15#issuecomment-249324122
-            if _context.retry_limit is not None and attempt >= _context.retry_limit:
+            if _config.retry_limit is not None and attempt >= _config.retry_limit:
                 raise
 
-            if attempt >= get_log_threshold_for_error(_context, str(err)):
-                _context.log_callback(
+            if attempt >= get_log_threshold_for_error(_config, str(err)):
+                _config.log_callback(
                     f"error {err} when executing a streaming write to {dst} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
                 )
             time.sleep(backoff)
@@ -300,12 +300,12 @@ def exists(path: str) -> bool:
     if _is_local_path(path):
         return os.path.exists(path)
     elif _is_gcp_path(path):
-        st = gcp.maybe_stat(_context, path)
+        st = gcp.maybe_stat(_config, path)
         if st is not None:
             return True
         return isdir(path)
     elif _is_azure_path(path):
-        st = azure.maybe_stat(_context, path)
+        st = azure.maybe_stat(_config, path)
         if st is not None:
             return True
         return isdir(path)
@@ -548,7 +548,7 @@ def scanglob(pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
             account, container, blob_prefix = azure.split_path(pattern)
             if "*" in account or "*" in container:
                 raise Error("Wildcards cannot be used in account or container")
-            root = azure.combine_path(_context, account, container, "")
+            root = azure.combine_path(_config, account, container, "")
 
         initial_task = _GlobTask("", _split_path(blob_prefix))
 
@@ -599,9 +599,9 @@ def isdir(path: str) -> bool:
     if _is_local_path(path):
         return os.path.isdir(path)
     elif _is_gcp_path(path):
-        return gcp.isdir(_context, path)
+        return gcp.isdir(_config, path)
     elif _is_azure_path(path):
-        return azure.isdir(_context, path)
+        return azure.isdir(_config, path)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -623,9 +623,9 @@ def _list_blobs(path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry
         params["delimiter"] = delimiter
 
     if _is_gcp_path(path):
-        yield from gcp.list_blobs(_context, path, delimiter=delimiter)
+        yield from gcp.list_blobs(_config, path, delimiter=delimiter)
     elif _is_azure_path(path):
-        yield from azure.list_blobs(_context, path, delimiter=delimiter)
+        yield from azure.list_blobs(_config, path, delimiter=delimiter)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -637,7 +637,7 @@ def _get_slash_path(entry: DirEntry) -> str:
 def _normalize_path(path: str) -> str:
     # convert paths to the canonical format
     if _is_azure_path(path):
-        return azure.combine_path(_context, *azure.split_path(path))
+        return azure.combine_path(_config, *azure.split_path(path))
     return path
 
 
@@ -742,7 +742,7 @@ def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
 
 def _get_entry(path: str) -> Optional[DirEntry]:
     if _is_gcp_path(path):
-        st = gcp.maybe_stat(_context, path)
+        st = gcp.maybe_stat(_config, path)
         if st is not None:
             if path.endswith("/"):
                 return gcp.entry_from_dirpath(path)
@@ -751,7 +751,7 @@ def _get_entry(path: str) -> Optional[DirEntry]:
         if isdir(path):
             return gcp.entry_from_dirpath(path)
     elif _is_azure_path(path):
-        st = azure.maybe_stat(_context, path)
+        st = azure.maybe_stat(_config, path)
         if st is not None:
             if path.endswith("/"):
                 return azure.entry_from_dirpath(path)
@@ -789,9 +789,9 @@ def makedirs(path: str) -> None:
     if _is_local_path(path):
         os.makedirs(path, exist_ok=True)
     elif _is_gcp_path(path):
-        gcp.mkdirfile(_context, path)
+        gcp.mkdirfile(_config, path)
     elif _is_azure_path(path):
-        azure.mkdirfile(_context, path)
+        azure.mkdirfile(_config, path)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -805,7 +805,7 @@ def remove(path: str) -> None:
     elif _is_gcp_path(path):
         if path.endswith("/"):
             raise IsADirectoryError(f"Is a directory: '{path}'")
-        ok = gcp.remove(_context, path)
+        ok = gcp.remove(_config, path)
         if not ok:
             raise FileNotFoundError(
                 f"The system cannot find the path specified: '{path}'"
@@ -813,7 +813,7 @@ def remove(path: str) -> None:
     elif _is_azure_path(path):
         if path.endswith("/"):
             raise IsADirectoryError(f"Is a directory: '{path}'")
-        ok = azure.remove(_context, path)
+        ok = azure.remove(_config, path)
         if not ok:
             raise FileNotFoundError(
                 f"The system cannot find the path specified: '{path}'"
@@ -872,7 +872,7 @@ def rmdir(path: str) -> None:
             method="DELETE",
             success_codes=(204,),
         )
-        gcp.execute_api_request(_context, req)
+        gcp.execute_api_request(_config, req)
     elif _is_azure_path(path):
         account, container, blob = azure.split_path(path)
         req = Request(
@@ -882,7 +882,7 @@ def rmdir(path: str) -> None:
             method="DELETE",
             success_codes=(202,),
         )
-        azure.execute_api_request(_context, req)
+        azure.execute_api_request(_config, req)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -897,12 +897,12 @@ def stat(path: str) -> Stat:
             size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None, version=None
         )
     elif _is_gcp_path(path):
-        st = gcp.maybe_stat(_context, path)
+        st = gcp.maybe_stat(_config, path)
         if st is None:
             raise FileNotFoundError(f"No such file: '{path}'")
         return st
     elif _is_azure_path(path):
-        st = azure.maybe_stat(_context, path)
+        st = azure.maybe_stat(_config, path)
         if st is None:
             raise FileNotFoundError(f"No such file: '{path}'")
         return st
@@ -922,9 +922,9 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
         os.utime(path, times=(mtime, mtime))
         return True
     elif _is_gcp_path(path):
-        return gcp.set_mtime(_context, path=path, mtime=mtime, version=version)
+        return gcp.set_mtime(_config, path=path, mtime=mtime, version=version)
     elif _is_azure_path(path):
-        return azure.set_mtime(_context, path=path, mtime=mtime, version=version)
+        return azure.set_mtime(_config, path=path, mtime=mtime, version=version)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -942,7 +942,7 @@ def rmtree(path: str) -> None:
         if not path.endswith("/"):
             path += "/"
         bucket, blob = gcp.split_path(path)
-        for entry in gcp.list_blobs(_context, path):
+        for entry in gcp.list_blobs(_config, path):
             entry_slash_path = _get_slash_path(entry)
             entry_bucket, entry_blob = gcp.split_path(entry_slash_path)
             assert entry_bucket == bucket and entry_blob.startswith(blob)
@@ -957,12 +957,12 @@ def rmtree(path: str) -> None:
                 # before erroring out
                 success_codes=(204, 404),
             )
-            gcp.execute_api_request(_context, req)
+            gcp.execute_api_request(_config, req)
     elif _is_azure_path(path):
         if not path.endswith("/"):
             path += "/"
         account, container, blob = azure.split_path(path)
-        for entry in azure.list_blobs(_context, path):
+        for entry in azure.list_blobs(_config, path):
             entry_slash_path = _get_slash_path(entry)
             entry_account, entry_container, entry_blob = azure.split_path(
                 entry_slash_path
@@ -981,7 +981,7 @@ def rmtree(path: str) -> None:
                 # before erroring out
                 success_codes=(202, 404),
             )
-            azure.execute_api_request(_context, req)
+            azure.execute_api_request(_config, req)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -1015,9 +1015,9 @@ def walk(
                 cur = dq.popleft()
                 assert cur.endswith("/")
                 if _is_gcp_path(top):
-                    it = gcp.list_blobs(_context, cur, delimiter="/")
+                    it = gcp.list_blobs(_config, cur, delimiter="/")
                 elif _is_azure_path(top):
-                    it = azure.list_blobs(_context, cur, delimiter="/")
+                    it = azure.list_blobs(_config, cur, delimiter="/")
                 else:
                     raise Error(f"Unrecognized path: '{top}'")
                 dirnames = []
@@ -1034,9 +1034,9 @@ def walk(
                 dq.extend(join(cur, dirname) + "/" for dirname in dirnames)
         else:
             if _is_gcp_path(top):
-                it = gcp.list_blobs(_context, top)
+                it = gcp.list_blobs(_config, top)
             elif _is_azure_path(top):
-                it = azure.list_blobs(_context, top)
+                it = azure.list_blobs(_config, top)
             else:
                 raise Error(f"Unrecognized path: '{top}'")
 
@@ -1086,9 +1086,9 @@ def dirname(path: str) -> str:
     On Azure Storage, the root directory is https://<account>.blob.core.windows.net/<container>/
     """
     if _is_gcp_path(path):
-        return gcp.dirname(_context, path)
+        return gcp.dirname(_config, path)
     elif _is_azure_path(path):
-        return azure.dirname(_context, path)
+        return azure.dirname(_config, path)
     else:
         return os.path.dirname(path)
 
@@ -1107,9 +1107,9 @@ def _join2(a: str, b: str) -> str:
     if _is_local_path(a):
         return os.path.join(a, b)
     elif _is_gcp_path(a):
-        return gcp.join_paths(_context, a, b)
+        return gcp.join_paths(_config, a, b)
     elif _is_azure_path(a):
-        return azure.join_paths(_context, a, b)
+        return azure.join_paths(_config, a, b)
     else:
         raise Error(f"Unrecognized path: '{a}'")
 
@@ -1119,9 +1119,9 @@ def get_url(path: str) -> Tuple[str, Optional[float]]:
     Get a URL for the given path that a browser could open
     """
     if _is_gcp_path(path):
-        return gcp.get_url(_context, path)
+        return gcp.get_url(_config, path)
     elif _is_azure_path(path):
-        return azure.get_url(_context, path)
+        return azure.get_url(_config, path)
     elif _is_local_path(path):
         return f"file://{path}", None
     else:
@@ -1138,7 +1138,7 @@ def md5(path: str) -> str:
     For local paths, this must always calculate the MD5.
     """
     if _is_gcp_path(path):
-        st = gcp.maybe_stat(_context, path)
+        st = gcp.maybe_stat(_config, path)
         if st is None:
             raise FileNotFoundError(f"No such file: '{path}'")
 
@@ -1151,10 +1151,10 @@ def md5(path: str) -> str:
             result = common.block_md5(f).hex()
 
         assert st.version is not None
-        gcp.maybe_update_md5(_context, path, st.version, result)
+        gcp.maybe_update_md5(_config, path, st.version, result)
         return result
     elif _is_azure_path(path):
-        st = azure.maybe_stat(_context, path)
+        st = azure.maybe_stat(_config, path)
         if st is None:
             raise FileNotFoundError(f"No such file: '{path}'")
         # https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties
@@ -1164,7 +1164,7 @@ def md5(path: str) -> str:
             with BlobFile(path, "rb") as f:
                 h = common.block_md5(f).hex()
             assert st.version is not None
-            azure.maybe_update_md5(_context, path, st.version, h)
+            azure.maybe_update_md5(_config, path, st.version, h)
         return h
     else:
         with BlobFile(path, "rb") as f:
@@ -1247,17 +1247,17 @@ def BlobFile(
                 f = io.BufferedWriter(f, buffer_size=buffer_size)
         elif _is_gcp_path(path):
             if mode in ("w", "wb"):
-                f = gcp.StreamingWriteFile(_context, path)
+                f = gcp.StreamingWriteFile(_config, path)
             elif mode in ("r", "rb"):
-                f = gcp.StreamingReadFile(_context, path)
+                f = gcp.StreamingReadFile(_config, path)
                 f = io.BufferedReader(f, buffer_size=buffer_size)
             else:
                 raise Error(f"Unsupported mode: '{mode}'")
         elif _is_azure_path(path):
             if mode in ("w", "wb"):
-                f = azure.StreamingWriteFile(_context, path)
+                f = azure.StreamingWriteFile(_config, path)
             elif mode in ("r", "rb"):
-                f = azure.StreamingReadFile(_context, path)
+                f = azure.StreamingReadFile(_config, path)
                 f = io.BufferedReader(f, buffer_size=buffer_size)
             else:
                 raise Error(f"Unsupported mode: '{mode}'")
@@ -1318,7 +1318,7 @@ def BlobFile(
                         remote_version = ""
                         # get some sort of consistent remote hash so we can check for a local file
                         if _is_gcp_path(path):
-                            st = gcp.maybe_stat(_context, path)
+                            st = gcp.maybe_stat(_config, path)
                             if st is None:
                                 raise FileNotFoundError(f"No such file: '{path}'")
                             assert st.version is not None
@@ -1327,7 +1327,7 @@ def BlobFile(
                         elif _is_azure_path(path):
                             # in the azure case the remote md5 may not exist
                             # this duplicates some of md5() because we want more control
-                            st = azure.maybe_stat(_context, path)
+                            st = azure.maybe_stat(_config, path)
                             if st is None:
                                 raise FileNotFoundError(f"No such file: '{path}'")
                             assert st.version is not None
@@ -1368,11 +1368,11 @@ def BlobFile(
                             if remote_hash is None:
                                 if _is_azure_path(path):
                                     azure.maybe_update_md5(
-                                        _context, path, remote_version, local_hexdigest
+                                        _config, path, remote_version, local_hexdigest
                                     )
                                 elif _is_gcp_path(path):
                                     gcp.maybe_update_md5(
-                                        _context, path, remote_version, local_hexdigest
+                                        _config, path, remote_version, local_hexdigest
                                     )
                         else:
                             assert remote_hash is not None

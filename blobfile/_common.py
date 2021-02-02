@@ -249,49 +249,22 @@ def default_log_fn(msg: str) -> None:
     print(f"blobfile: {msg}")
 
 
-class Context:
+class PoolDirector:
     def __init__(
-        self,
-        log_callback: Callable[[str], None] = default_log_fn,
-        connection_pool_max_size: int = DEFAULT_CONNECTION_POOL_MAX_SIZE,
-        max_connection_pool_count: int = DEFAULT_MAX_CONNECTION_POOL_COUNT,
-        # https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-block-blobs
-        # the chunk size determines the maximum size of an individual blob
-        azure_write_chunk_size: int = DEFAULT_AZURE_WRITE_CHUNK_SIZE,
-        google_write_chunk_size: int = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
-        retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
-        retry_common_log_threshold: int = DEFAULT_RETRY_COMMON_LOG_THRESHOLD,
-        retry_limit: Optional[int] = None,
-        connect_timeout: Optional[int] = DEFAULT_CONNECT_TIMEOUT,
-        read_timeout: Optional[int] = DEFAULT_READ_TIMEOUT,
-        output_az_paths: bool = False,
-        use_azure_storage_account_key_fallback: bool = True,
+        self, connection_pool_max_size: int, max_connection_pool_count: int
     ) -> None:
-        self.log_callback = log_callback
         self.connection_pool_max_size = connection_pool_max_size
         self.max_connection_pool_count = max_connection_pool_count
-        self.azure_write_chunk_size = azure_write_chunk_size
-        self.retry_log_threshold = retry_log_threshold
-        self.retry_common_log_threshold = retry_common_log_threshold
-        self.retry_limit = retry_limit
-        self.google_write_chunk_size = google_write_chunk_size
-        self.connect_timeout = connect_timeout
-        self.read_timeout = read_timeout
-        self.output_az_paths = output_az_paths
-        self.use_azure_storage_account_key_fallback = (
-            use_azure_storage_account_key_fallback
-        )
-
-        self.http = None
-        self.http_pid = None
-        self.http_lock = threading.Lock()
+        self.pool_manager = None
+        self.creation_pid = None
+        self.lock = threading.Lock()
 
     def get_http_pool(self) -> urllib3.PoolManager:
         # ssl is not fork safe https://docs.python.org/2/library/ssl.html#multi-processing
         # urllib3 may not be fork safe https://github.com/urllib3/urllib3/issues/1179
         # both are supposedly threadsafe though, so we shouldn't need a thread-local pool
-        with self.http_lock:
-            if self.http is None or self.http_pid != os.getpid():
+        with self.lock:
+            if self.pool_manager is None or self.creation_pid != os.getpid():
                 # tensorflow imports requests which calls
                 #   import urllib3.contrib.pyopenssl
                 #   urllib3.contrib.pyopenssl.inject_into_urllib3()
@@ -319,24 +292,73 @@ class Context:
                     ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_COMPRESSION
                 )
                 context.load_default_certs()
-                self.http_pid = os.getpid()
-                self.http = urllib3.PoolManager(
+                self.creation_pid = os.getpid()
+                self.pool_manager = urllib3.PoolManager(
                     ssl_context=context,
                     maxsize=self.connection_pool_max_size,
                     num_pools=self.max_connection_pool_count,
                 )
                 # for debugging with mitmproxy
                 # self.http = urllib3.ProxyManager('http://localhost:8080/', ssl_context=context)
-        return self.http
+            return self.pool_manager
 
     # we don't want to serialize locks or other unpicklable objects
     # when this object is passed to concurrent.futures executors
     def __getstate__(self) -> Dict[str, Any]:
-        return {k: v for k, v in self.__dict__.items() if not k.startswith("http")}
+        return {
+            k: v for k, v in self.__dict__.items() if k not in ["lock", "pool_manager"]
+        }
 
     def __setstate__(self, state: Any) -> None:
-        self.__init__()
+        self.__init__(
+            connection_pool_max_size=state["connection_pool_max_size"],
+            max_connection_pool_count=state["max_connection_pool_count"],
+        )
         self.__dict__.update(state)
+
+
+class Config:
+    def __init__(
+        self,
+        log_callback: Callable[[str], None] = default_log_fn,
+        connection_pool_max_size: int = DEFAULT_CONNECTION_POOL_MAX_SIZE,
+        max_connection_pool_count: int = DEFAULT_MAX_CONNECTION_POOL_COUNT,
+        # https://docs.microsoft.com/en-us/rest/api/storageservices/understanding-block-blobs--append-blobs--and-page-blobs#about-block-blobs
+        # the chunk size determines the maximum size of an individual blob
+        azure_write_chunk_size: int = DEFAULT_AZURE_WRITE_CHUNK_SIZE,
+        google_write_chunk_size: int = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
+        retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
+        retry_common_log_threshold: int = DEFAULT_RETRY_COMMON_LOG_THRESHOLD,
+        retry_limit: Optional[int] = None,
+        connect_timeout: Optional[int] = DEFAULT_CONNECT_TIMEOUT,
+        read_timeout: Optional[int] = DEFAULT_READ_TIMEOUT,
+        output_az_paths: bool = False,
+        use_azure_storage_account_key_fallback: bool = True,
+        get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
+    ) -> None:
+        self.log_callback = log_callback
+        self.connection_pool_max_size = connection_pool_max_size
+        self.max_connection_pool_count = max_connection_pool_count
+        self.azure_write_chunk_size = azure_write_chunk_size
+        self.retry_log_threshold = retry_log_threshold
+        self.retry_common_log_threshold = retry_common_log_threshold
+        self.retry_limit = retry_limit
+        self.google_write_chunk_size = google_write_chunk_size
+        self.connect_timeout = connect_timeout
+        self.read_timeout = read_timeout
+        self.output_az_paths = output_az_paths
+        self.use_azure_storage_account_key_fallback = (
+            use_azure_storage_account_key_fallback
+        )
+
+        if get_http_pool is None:
+            pd = PoolDirector(
+                connection_pool_max_size=self.connection_pool_max_size,
+                max_connection_pool_count=self.max_connection_pool_count,
+            )
+            self.get_http_pool = pd.get_http_pool
+        else:
+            self.get_http_pool = get_http_pool
 
 
 class WindowedFile:
@@ -405,7 +427,7 @@ def _check_hostname(hostname: str) -> int:
 
 
 def execute_request(
-    ctx: Context, build_req: Callable[[], Request]
+    conf: Config, build_req: Callable[[], Request]
 ) -> urllib3.HTTPResponse:
     for attempt, backoff in enumerate(exponential_sleep_generator()):
         req = build_req()
@@ -423,13 +445,14 @@ def execute_request(
 
         err = None
         try:
-            resp = ctx.get_http_pool().request(
+            # TODO: seems weird to have http pool on conf, and yet everything needs it
+            resp = conf.get_http_pool().request(
                 method=req.method,
                 url=url,
                 headers=req.headers,
                 body=body,
                 timeout=urllib3.Timeout(
-                    connect=ctx.connect_timeout, read=ctx.read_timeout
+                    connect=conf.connect_timeout, read=conf.read_timeout
                 ),
                 preload_content=req.preload_content,
                 retries=False,
@@ -494,11 +517,11 @@ def execute_request(
             if f is not None:
                 f.close()
 
-        if ctx.retry_limit is not None and attempt >= ctx.retry_limit:
+        if conf.retry_limit is not None and attempt >= conf.retry_limit:
             raise err
 
-        if attempt >= get_log_threshold_for_error(ctx, str(err)):
-            ctx.log_callback(
+        if attempt >= get_log_threshold_for_error(conf, str(err)):
+            conf.log_callback(
                 f"error {err} when executing http request {req} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
             )
         time.sleep(backoff)
@@ -511,19 +534,21 @@ class TokenManager:
     """
 
     def __init__(
-        self, get_token_fn: Callable[[Context, Any], Tuple[Any, float]]
+        self, get_token_fn: Callable[[Config, Any], Tuple[Any, float]]
     ) -> None:
         self._get_token_fn = get_token_fn
         self._tokens = {}
         self._expirations = {}
         self._lock = threading.Lock()
 
-    def get_token(self, ctx: Context, key: Any) -> Any:
+    def get_token(self, conf: Config, key: Any) -> Any:
         with self._lock:
             now = time.time()
             expiration = self._expirations.get(key)
             if expiration is None or (now + EARLY_EXPIRATION_SECONDS) > expiration:
-                self._tokens[key], self._expirations[key] = self._get_token_fn(ctx, key)
+                self._tokens[key], self._expirations[key] = self._get_token_fn(
+                    conf, key
+                )
                 assert self._expirations[key] is not None
 
             assert key in self._tokens
@@ -531,13 +556,13 @@ class TokenManager:
 
 
 class BaseStreamingWriteFile(io.BufferedIOBase):
-    def __init__(self, ctx: Context, chunk_size: int) -> None:
+    def __init__(self, conf: Config, chunk_size: int) -> None:
         # current writing byte offset in the file
         self._offset = 0
         # contents waiting to be uploaded
         self._buf = b""
         self._chunk_size = chunk_size
-        self._ctx = ctx
+        self._conf = conf
 
     def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
         raise NotImplementedError
@@ -588,9 +613,9 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
 
 
 class BaseStreamingReadFile(io.RawIOBase):
-    def __init__(self, ctx: Context, path: str, size: int) -> None:
+    def __init__(self, conf: Config, path: str, size: int) -> None:
         super().__init__()
-        self._ctx = ctx
+        self._conf = conf
         self._size = size
         self._path = path
         # current reading byte offset in the file
@@ -676,13 +701,13 @@ class BaseStreamingReadFile(io.RawIOBase):
                 self.failures += 1
 
                 if (
-                    self._ctx.retry_limit is not None
-                    and attempt >= self._ctx.retry_limit
+                    self._conf.retry_limit is not None
+                    and attempt >= self._conf.retry_limit
                 ):
                     raise err
 
-                if attempt >= get_log_threshold_for_error(self._ctx, str(err)):
-                    self._ctx.log_callback(
+                if attempt >= get_log_threshold_for_error(self._conf, str(err)):
+                    self._conf.log_callback(
                         f"error {err} when executing readinto({len(b)}) at offset {self._offset} attempt {attempt}, sleeping for {backoff:.1f} seconds before retrying"
                     )
                 time.sleep(backoff)
@@ -787,8 +812,8 @@ def safe_urljoin(a: str, b: str) -> str:
     return joined.replace(ESCAPED_COLON, ":")
 
 
-def get_log_threshold_for_error(ctx: Context, err: str) -> int:
+def get_log_threshold_for_error(conf: Config, err: str) -> int:
     if any(substr in err for substr in COMMON_ERROR_SUBSTRINGS):
-        return ctx.retry_common_log_threshold
+        return conf.retry_common_log_threshold
     else:
-        return ctx.retry_log_threshold
+        return conf.retry_log_threshold

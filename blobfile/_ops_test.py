@@ -16,7 +16,7 @@ import time
 import subprocess as sp
 import multiprocessing as mp
 import platform
-import base64
+import pickle
 
 import av
 import pytest
@@ -1317,30 +1317,30 @@ def test_azure_maybe_update_md5(ctx):
 
     with ctx() as path:
         _write_contents(path, contents)
-        st = ops.azure.maybe_stat(ops._context, path)
-        assert ops.azure.maybe_update_md5(ops._context, path, st.version, meow_hash)
+        st = ops.azure.maybe_stat(ops._config, path)
+        assert ops.azure.maybe_update_md5(ops._config, path, st.version, meow_hash)
         _write_contents(path, alternative_contents)
-        assert not ops.azure.maybe_update_md5(ops._context, path, st.version, meow_hash)
-        st = ops.azure.maybe_stat(ops._context, path)
+        assert not ops.azure.maybe_update_md5(ops._config, path, st.version, meow_hash)
+        st = ops.azure.maybe_stat(ops._config, path)
         assert st.md5 == purr_hash
         bf.remove(path)
-        assert not ops.azure.maybe_update_md5(ops._context, path, st.version, meow_hash)
+        assert not ops.azure.maybe_update_md5(ops._config, path, st.version, meow_hash)
 
 
 def _get_http_pool_id(q):
-    q.put(id(ops._context.get_http_pool()))
+    q.put(id(ops._config.get_http_pool()))
 
 
 def test_fork():
     q = mp.Queue()
     # this reference should keep the old http client alive in the child process
     # to ensure that a new one does not recycle the memory address
-    http1 = ops._context.get_http_pool()
+    http1 = ops._config.get_http_pool()
     parent1 = id(http1)
     p = mp.Process(target=_get_http_pool_id, args=(q,))
     p.start()
     p.join()
-    http2 = ops._context.get_http_pool()
+    http2 = ops._config.get_http_pool()
     parent2 = id(http2)
 
     child = q.get()
@@ -1404,3 +1404,11 @@ def test_windowed_file():
 
             with pytest.raises(AssertionError):
                 f2.seek(2)
+
+
+def test_pickle_config():
+    c = common.Config()
+    pickle.dumps(c)
+    c.get_http_pool()
+    c2 = pickle.loads(pickle.dumps(c))
+    c2.get_http_pool()

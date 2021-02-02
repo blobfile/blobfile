@@ -1486,7 +1486,7 @@ def join(a: str, *args: str) -> str:
     """
     Join file paths, if a path is an absolute path, it will replace the entire path component of previous paths
     """
-    return _context.join(a=a, *args)
+    return _context.join(a, *args)
 
 
 def get_url(path: str) -> Tuple[str, Optional[float]]:

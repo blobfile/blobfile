@@ -2,6 +2,7 @@
 
 ## 1.1.1
 
+* Add `create_context()` function to create `blobfile` instances with different configurations
 * Retry azure remote copy if a copy is already in progress
 * Fix bug in parallel azure upload
 

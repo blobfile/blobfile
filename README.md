@@ -79,7 +79,7 @@ There are a few bonus functions:
     * `output_az_paths=False`: output `az://` paths instead of using the `https://` for azure
     * `use_azure_storage_account_key_fallback=True`: fallback to storage account keys for azure containers, having this enabled (the default) requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
     * `get_http_pool=None`: a function that returns a `urllib3.PoolManager` to be used for requests
-* `create_context` - (same arguments as `configure`, creates a new instance of `blobfile` with a custom configuration instead of modifying the global configuration
+* `create_context` - (same arguments as `configure`), creates a new instance of `blobfile` with a custom configuration instead of modifying the global configuration
 
 ## Authentication
 

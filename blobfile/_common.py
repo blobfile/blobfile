@@ -37,7 +37,6 @@ INVALID_HOSTNAME_STATUS = 600  # fake status for invalid hostname
 
 BACKOFF_INITIAL = 0.1
 BACKOFF_MAX = 60.0
-BACKOFF_JITTER_FRACTION = 0.5
 
 HOSTNAME_EXISTS = 0
 HOSTNAME_DOES_NOT_EXIST = 1
@@ -66,11 +65,7 @@ def exponential_sleep_generator(
     base = initial
     while True:
         # https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
-        sleep = (
-            base * (1 - BACKOFF_JITTER_FRACTION)
-            + base * random.random() * BACKOFF_JITTER_FRACTION
-        )
-        yield sleep
+        yield base * random.random()
         base *= multiplier
         if base > maximum:
             base = maximum

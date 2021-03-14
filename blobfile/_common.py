@@ -573,8 +573,9 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
 
     def write(self, b: bytes) -> int:
         self._buf += b
-        while len(self._buf) > self._chunk_size:
+        if len(self._buf) >= self._chunk_size:
             self._upload_buf()
+            assert len(self._buf) < self._chunk_size
         return len(b)
 
     def readinto(self, b: Any) -> int:

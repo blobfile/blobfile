@@ -538,7 +538,7 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         # current writing byte offset in the file
         self._offset = 0
         # contents waiting to be uploaded
-        self._buf = bytearray()
+        self._buf = b""
         self._chunk_size = chunk_size
         self._conf = conf
 
@@ -552,7 +552,7 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
             size = (len(self._buf) // self._chunk_size) * self._chunk_size
             assert size > 0
         chunk = self._buf[:size]
-        del self._buf[:size]
+        self._buf = self._buf[size:]
 
         self._upload_chunk(chunk, finalize)
         self._offset += len(chunk)

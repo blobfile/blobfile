@@ -131,7 +131,8 @@ def load_subscription_ids() -> List[str]:
     with open(default_profile_path, "rb") as f:
         # this file has a UTF-8 BOM
         profile = json.loads(f.read().decode("utf-8-sig"))
-    subscriptions = profile["subscriptions"]
+
+    subscriptions = profile.get("subscriptions", [])
 
     def key_fn(x: Mapping[str, Any]) -> bool:
         return x["isDefault"]

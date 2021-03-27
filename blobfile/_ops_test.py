@@ -17,6 +17,7 @@ import subprocess as sp
 import multiprocessing as mp
 import platform
 import pickle
+import zipfile
 
 import av
 import pytest
@@ -361,11 +362,28 @@ def test_read_write(ctx, streaming):
         bf.makedirs(bf.dirname(path))
         with bf.BlobFile(path, "wb", streaming=streaming) as w:
             w.write(contents)
+            assert w.tell() == len(contents)
         with bf.BlobFile(path, "rb", streaming=streaming) as r:
             assert r.read() == contents
+            assert r.tell() == len(contents)
         with bf.BlobFile(path, "rb", streaming=streaming) as r:
             lines = list(r)
             assert b"".join(lines) == contents
+
+
+@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])
+def test_zipfile(ctx):
+    contents = b"meow!\npurr\n"
+    with ctx() as path:
+        with bf.BlobFile(path, "wb", streaming=True) as f:
+            with zipfile.ZipFile(f, "w") as zf:
+                with zf.open("eggs.txt", "w") as myfile:
+                    myfile.write(contents)
+
+        with bf.BlobFile(path, "rb", streaming=True) as f:
+            with zipfile.ZipFile(f, "r") as zf:
+                with zf.open("eggs.txt", "r") as myfile:
+                    assert myfile.read() == contents
 
 
 def test_az_path():

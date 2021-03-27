@@ -565,7 +565,7 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         super().close()
 
     def tell(self) -> int:
-        return self._offset
+        return self._offset + len(self._buf)
 
     def writable(self) -> bool:
         return True

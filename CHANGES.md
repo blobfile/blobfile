@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2
+
+* Fix `tell()` for streaming write files, this fixes a bug where zip files would not be written correctly when written to a `streaming=True` file while using the `zipfile` library.
+
 ## 1.1.1
 
 * Add `create_context()` function to create `blobfile` instances with different configurations

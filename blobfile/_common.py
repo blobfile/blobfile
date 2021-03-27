@@ -423,7 +423,6 @@ def execute_request(
 
         err = None
         try:
-            # TODO: seems weird to have http pool on conf, and yet everything needs it
             resp = conf.get_http_pool().request(
                 method=req.method,
                 url=url,

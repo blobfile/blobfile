@@ -2,6 +2,8 @@
 
 ## 1.1.2
 
+* Don't log connection aborted errors on first try.
+* Use slightly different backoff jitter algorithm
 * Fix `tell()` for streaming write files, this fixes a bug where zip files would not be written correctly when written to a `streaming=True` file while using the `zipfile` library.
 
 ## 1.1.1

@@ -534,7 +534,6 @@ class TokenManager:
 
 class BaseStreamingWriteFile(io.BufferedIOBase):
     def __init__(self, conf: Config, chunk_size: int) -> None:
-        # current writing byte offset in the file
         self._offset = 0
         # contents waiting to be uploaded
         self._buf = b""

@@ -484,26 +484,50 @@ def _get_storage_account_id(
     conf: Config, subscription_id: str, account: str, auth: Tuple[str, str]
 ) -> Optional[str]:
     # get a list of storage accounts
-    def build_req() -> Request:
-        req = Request(
-            method="GET",
-            url=f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.Storage/storageAccounts",
-            params={"api-version": "2019-04-01"},
-            success_codes=(200, 401, 403),
-        )
-        return create_api_request(req, auth=auth)
+    url = f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.Storage/storageAccounts"
+    while True:
 
-    resp = common.execute_request(conf, build_req)
-    if resp.status in (401, 403):
-        # we aren't allowed to query this for this subscription, skip it
-        return None
+        def build_req() -> Request:
+            req = Request(
+                method="GET",
+                url=url,
+                params={"api-version": "2019-04-01"},
+                success_codes=(200, 401, 403),
+            )
+            return create_api_request(req, auth=auth)
 
-    out = json.loads(resp.data)
-    # check if we found the storage account we are looking for
-    for obj in out["value"]:
-        if obj["name"] == account:
-            return obj["id"]
-    return None
+        resp = common.execute_request(conf, build_req)
+        if resp.status in (401, 403):
+            # we aren't allowed to query this for this subscription, skip it
+            return None
+
+        out = json.loads(resp.data)
+        # check if we found the storage account we are looking for
+        for obj in out["value"]:
+            if obj["name"] == account:
+                return obj["id"]
+
+        if "nextLink" not in out:
+            return None
+
+        url = out["nextLink"]
+
+
+def _get_subscription_ids(conf: Config, auth: Tuple[str, str]) -> List[str]:
+    url = "https://management.azure.com/subscriptions"
+    result = []
+    while True:
+
+        def build_req() -> Request:
+            req = Request(method="GET", url=url, params={"api-version": "2020-01-01"})
+            return create_api_request(req, auth=auth)
+
+        resp = common.execute_request(conf, build_req)
+        data = json.loads(resp.data)
+        result.extend([item["subscriptionId"] for item in data["value"]])
+        if "nextLink" not in data:
+            return result
+        url = data["nextLink"]
 
 
 def _get_storage_account_key(
@@ -527,7 +551,7 @@ def _get_storage_account_key(
     auth = (OAUTH_TOKEN, result["access_token"])
 
     # attempt to use list of subscriptions from the azure cli tool
-    stored_subscription_ids = load_subscription_ids()
+    stored_subscription_ids = []  # load_subscription_ids()
 
     storage_account_id = None
     for subscription_id in stored_subscription_ids:
@@ -539,20 +563,9 @@ def _get_storage_account_key(
     else:
         # if we didn't find the storage account we are looking for, check to see if there
         # are any subscriptions that we did not query
-        def build_req() -> Request:
-            req = Request(
-                method="GET",
-                url="https://management.azure.com/subscriptions",
-                params={"api-version": "2020-01-01"},
-            )
-            return create_api_request(req, auth=auth)
-
-        resp = common.execute_request(conf, build_req)
-        result = json.loads(resp.data)
+        subscription_ids = _get_subscription_ids(conf, auth)
         unchecked_subscription_ids = [
-            item["subscriptionId"]
-            for item in result["value"]
-            if item["subscriptionId"] not in stored_subscription_ids
+            id for id in subscription_ids if id not in stored_subscription_ids
         ]
 
         for subscription_id in unchecked_subscription_ids:

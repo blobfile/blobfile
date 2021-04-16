@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.3
+
+* Support pagination of azure management pages.
+
 ## 1.1.2
 
 * Don't log connection aborted errors on first try.

@@ -485,13 +485,14 @@ def _get_storage_account_id(
 ) -> Optional[str]:
     # get a list of storage accounts
     url = f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.Storage/storageAccounts"
+    params = {"api-version": "2019-04-01"}
     while True:
 
         def build_req() -> Request:
             req = Request(
                 method="GET",
                 url=url,
-                params={"api-version": "2019-04-01"},
+                params=params,
                 success_codes=(200, 401, 403),
             )
             return create_api_request(req, auth=auth)
@@ -511,15 +512,17 @@ def _get_storage_account_id(
             return None
 
         url = out["nextLink"]
+        params = None  # the url will already have params on it
 
 
 def _get_subscription_ids(conf: Config, auth: Tuple[str, str]) -> List[str]:
     url = "https://management.azure.com/subscriptions"
+    params = {"api-version": "2020-01-01"}
     result = []
     while True:
 
         def build_req() -> Request:
-            req = Request(method="GET", url=url, params={"api-version": "2020-01-01"})
+            req = Request(method="GET", url=url, params=params)
             return create_api_request(req, auth=auth)
 
         resp = common.execute_request(conf, build_req)
@@ -528,6 +531,7 @@ def _get_subscription_ids(conf: Config, auth: Tuple[str, str]) -> List[str]:
         if "nextLink" not in data:
             return result
         url = data["nextLink"]
+        params = None  # the url will already have params on it
 
 
 def _get_storage_account_key(

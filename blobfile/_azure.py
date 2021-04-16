@@ -551,7 +551,7 @@ def _get_storage_account_key(
     auth = (OAUTH_TOKEN, result["access_token"])
 
     # attempt to use list of subscriptions from the azure cli tool
-    stored_subscription_ids = []  # load_subscription_ids()
+    stored_subscription_ids = load_subscription_ids()
 
     storage_account_id = None
     for subscription_id in stored_subscription_ids:

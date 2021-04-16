@@ -490,10 +490,7 @@ def _get_storage_account_id(
 
         def build_req() -> Request:
             req = Request(
-                method="GET",
-                url=url,
-                params=params,
-                success_codes=(200, 401, 403),
+                method="GET", url=url, params=params, success_codes=(200, 401, 403)
             )
             return create_api_request(req, auth=auth)
 

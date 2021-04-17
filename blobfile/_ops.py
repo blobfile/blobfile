@@ -1585,7 +1585,7 @@ def create_context(
     connect_timeout: Optional[int] = DEFAULT_CONNECT_TIMEOUT,
     read_timeout: Optional[int] = DEFAULT_READ_TIMEOUT,
     output_az_paths: bool = False,
-    use_azure_storage_account_key_fallback: bool = True,
+    use_azure_storage_account_key_fallback: bool = False,
     get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
 ):
     """

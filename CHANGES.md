@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.0
+
+* Set `use_azure_storage_account_key_fallback` to `False` by default.  This is a backwards breaking change if you rely on storage account keys.  To go back to the previous behavior, call `bf.configure(use_azure_storage_account_key_fallback=True)`.
+
 ## 1.1.3
 
 * Support pagination of azure management pages.

@@ -549,7 +549,7 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         else:
             size = (len(buf) // self._chunk_size) * self._chunk_size
             assert size > 0
-        
+
         chunk = buf[:size]
         self._upload_chunk(chunk, finalize)
         self._offset += len(chunk)

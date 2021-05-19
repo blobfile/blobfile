@@ -474,7 +474,6 @@ class StreamingWriteFile(BaseStreamingWriteFile):
         total_size = "*"
         if finalize:
             total_size = self._offset + len(chunk)
-            assert len(self._buf) == 0
 
         headers = {
             "Content-Type": "application/octet-stream",

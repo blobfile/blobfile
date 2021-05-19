@@ -536,32 +536,33 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
     def __init__(self, conf: Config, chunk_size: int) -> None:
         self._offset = 0
         # contents waiting to be uploaded
-        self._buf = b""
+        self._buf = bytearray()
         self._chunk_size = chunk_size
         self._conf = conf
 
     def _upload_chunk(self, chunk: memoryview, finalize: bool) -> None:
         raise NotImplementedError
 
-    def _upload_buf(self, finalize: bool = False):
+    def _upload_buf(self, buf: memoryview, finalize: bool = False) -> int:
         if finalize:
-            size = len(self._buf)
+            size = len(buf)
         else:
-            size = (len(self._buf) // self._chunk_size) * self._chunk_size
+            size = (len(buf) // self._chunk_size) * self._chunk_size
             assert size > 0
         
-        chunk = memoryview(self._buf)[:size]
-        self._buf = self._buf[size:]
-
+        chunk = buf[:size]
         self._upload_chunk(chunk, finalize)
         self._offset += len(chunk)
+        return size
 
     def close(self) -> None:
         if self.closed:
             return
 
-        # we will have a partial remaining buffer at this point
-        self._upload_buf(finalize=True)
+        # we will have a partial remaining buffer at this point, upload it
+        size = self._upload_buf(memoryview(self._buf), finalize=True)
+        assert size == len(self._buf)
+        self._buf = bytearray()
         super().close()
 
     def tell(self) -> int:
@@ -571,10 +572,18 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         return True
 
     def write(self, b: bytes) -> int:
-        self._buf += b
-        if len(self._buf) >= self._chunk_size:
-            self._upload_buf()
-            assert len(self._buf) < self._chunk_size
+        if len(self._buf) == 0 and len(b) >= self._chunk_size:
+            # optimization for when we want to do a single large f.write()
+            mv = memoryview(b)
+            size = self._upload_buf(mv)
+            # only append the part we were not able to upload
+            self._buf = bytearray(mv[size:])
+        else:
+            self._buf += b
+            if len(self._buf) >= self._chunk_size:
+                size = self._upload_buf(memoryview(self._buf))
+                del self._buf[:size]
+        assert len(self._buf) < self._chunk_size
         return len(b)
 
     def readinto(self, b: Any) -> int:

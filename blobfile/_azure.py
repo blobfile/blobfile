@@ -1050,7 +1050,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
         self._md5 = hashlib.md5()
         super().__init__(conf=conf, chunk_size=conf.azure_write_chunk_size)
 
-    def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
+    def _upload_chunk(self, chunk: memoryview, finalize: bool) -> None:
         start = 0
         while start < len(chunk):
             # premium block blob storage supports block blobs and append blobs

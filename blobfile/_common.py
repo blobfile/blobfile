@@ -540,7 +540,7 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         self._chunk_size = chunk_size
         self._conf = conf
 
-    def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
+    def _upload_chunk(self, chunk: memoryview, finalize: bool) -> None:
         raise NotImplementedError
 
     def _upload_buf(self, finalize: bool = False):
@@ -549,7 +549,8 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         else:
             size = (len(self._buf) // self._chunk_size) * self._chunk_size
             assert size > 0
-        chunk = self._buf[:size]
+        
+        chunk = memoryview(self._buf)[:size]
         self._buf = self._buf[size:]
 
         self._upload_chunk(chunk, finalize)

@@ -467,7 +467,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
         assert conf.google_write_chunk_size % (256 * 1024) == 0
         super().__init__(conf=conf, chunk_size=conf.google_write_chunk_size)
 
-    def _upload_chunk(self, chunk: bytes, finalize: bool) -> None:
+    def _upload_chunk(self, chunk: memoryview, finalize: bool) -> None:
         start = self._offset
         end = self._offset + len(chunk) - 1
 

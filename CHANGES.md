@@ -1,5 +1,7 @@
 # Changelog
 
+## 1.2.2
+
 ## 1.2.1
 
 * When uploading to a file with `streaming=True` (not the default), avoid an extra copy of the data being uploaded.  This is mostly an optimization for when you do a single large `f.write()`.

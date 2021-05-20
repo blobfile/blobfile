@@ -36,10 +36,12 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    # only supported in python 3.8+
-    # this works because we postponed evaluation of type annotations with PEP 563,
-    # and because we don't use Literal as a base class or for casting
-    from typing import Literal
+    # Literal is only in the stdlib in Python 3.8+
+    # this works without having a runtime installation of typing_extensions because
+    # a) we postponed evaluation of type annotations with PEP 563,
+    # b) we don't use Literal as a base class or for casting,
+    # c) type checkers always know what typing_extensions is
+    from typing_extensions import Literal
 
 
 import filelock

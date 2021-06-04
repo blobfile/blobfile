@@ -2,6 +2,9 @@
 
 ## 1.2.2
 
+* Added an option to disable streaming reads since azure doesn't handle it well, `use_streaming_reads=False`
+* Added an option to set the default buffer size, `default_buffer_size`, which is important to set if you disable streaming reads.
+
 ## 1.2.1
 
 * When uploading to a file with `streaming=True` (not the default), avoid an extra copy of the data being uploaded.  This is mostly an optimization for when you do a single large `f.write()`.

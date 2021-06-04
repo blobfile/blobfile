@@ -1102,7 +1102,7 @@ class Context:
         path: str,
         mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r",
         streaming: Optional[bool] = None,
-        buffer_size: int = io.DEFAULT_BUFFER_SIZE,
+        buffer_size: Optional[int] = None,
         cache_dir: Optional[str] = None,
     ):
         """
@@ -1114,7 +1114,7 @@ class Context:
             streaming: the default for `streaming` is `True` when `mode` is in `"r", "rb"` and `False` when `mode` is in `"w", "wb", "a", "ab"`.
                 * `streaming=True`:
                     * Reading is done without downloading the entire remote file.
-                    * Writing is done to the remote file directly, but only in chunks of a few MB in size.  `flush()` will not cause an early write.
+                    * Writing is done to the remote file directly, but only in chunks of a few MB in size. `flush()` will not cause an early write.
                     * Appending is not implemented.
                 * `streaming=False`:
                     * Reading is done by downloading the remote file to a local file during the constructor.
@@ -1138,6 +1138,9 @@ class Context:
             # for consistency, automatically create local intermediate directories
             if dirname(path) != "":
                 makedirs(dirname(path))
+
+        if buffer_size is None:
+            buffer_size = self._conf.default_buffer_size
 
         if streaming:
             if mode not in ("w", "wb", "r", "rb"):
@@ -1539,7 +1542,7 @@ def BlobFile(
     path: str,
     mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r",
     streaming: Optional[bool] = None,
-    buffer_size: int = io.DEFAULT_BUFFER_SIZE,
+    buffer_size: Optional[int] = None,
     cache_dir: Optional[str] = None,
 ):
     """
@@ -1589,6 +1592,8 @@ def create_context(
     output_az_paths: bool = False,
     use_azure_storage_account_key_fallback: bool = False,
     get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
+    use_streaming_read: bool = False,
+    default_buffer_size: int = io.DEFAULT_BUFFER_SIZE,
 ):
     """
     Same argument as configure(), but returns a Context object that has all the blobfile methods on it.
@@ -1607,6 +1612,8 @@ def create_context(
         output_az_paths=output_az_paths,
         use_azure_storage_account_key_fallback=use_azure_storage_account_key_fallback,
         get_http_pool=get_http_pool,
+        use_streaming_read=use_streaming_read,
+        default_buffer_size=default_buffer_size,
     )
     return Context(conf=conf)
 

@@ -24,9 +24,6 @@ from typing import (
 import urllib3
 import xmltodict
 
-# feature flags
-USE_STREAMING_READ_REQUEST = True
-
 CHUNK_SIZE = 2 ** 20
 
 PARALLEL_COPY_MINIMUM_PART_SIZE = 32 * 2 ** 20
@@ -313,6 +310,8 @@ class Config:
         output_az_paths: bool,
         use_azure_storage_account_key_fallback: bool,
         get_http_pool: Optional[Callable[[], urllib3.PoolManager]],
+        use_streaming_read: bool,
+        default_buffer_size: int,
     ) -> None:
         self.log_callback = log_callback
         self.connection_pool_max_size = connection_pool_max_size
@@ -328,6 +327,8 @@ class Config:
         self.use_azure_storage_account_key_fallback = (
             use_azure_storage_account_key_fallback
         )
+        self.use_streaming_read = use_streaming_read
+        self.default_buffer_size = default_buffer_size
 
         if get_http_pool is None:
             pd = PoolDirector(
@@ -647,7 +648,7 @@ class BaseStreamingReadFile(io.RawIOBase):
             b = b[:bytes_remaining]
 
         n = 0  # for pyright
-        if USE_STREAMING_READ_REQUEST:
+        if self._conf.use_streaming_read:
             for attempt, backoff in enumerate(exponential_sleep_generator()):
                 if self._f is None:
                     resp = self._request_chunk(streaming=True, start=self._offset)

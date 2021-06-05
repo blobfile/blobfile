@@ -4,7 +4,6 @@ import argparse
 import multiprocessing as mp
 
 import blobfile as bf
-from blobfile import ops
 
 
 @contextlib.contextmanager
@@ -24,12 +23,12 @@ def read_worker(path: str) -> None:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--path", required=True)
-    parser.add_argument("--no-streaming-read-request", action="store_true")
-    parser.add_argument("--buffer-size", default=8192, type=int)
+    parser.add_argument("--streaming-read-request", action="store_true")
+    parser.add_argument("--buffer-size", default=8 * 2 ** 20, type=int)
     parser.add_argument("--size", default=1_000_000_000, type=int)
     args = parser.parse_args()
 
-    bf.configure(use_streaming_read_request=not args.no_streaming_read_request)
+    bf.configure(use_streaming_read=args.streaming_read_request)
 
     path = bf.join(args.path, "large.bin")
     data = (b"meow" * 249 + b"mew\n") * (args.size // 1000)

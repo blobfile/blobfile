@@ -72,6 +72,7 @@ DEFAULT_RETRY_LOG_THRESHOLD = 0
 DEFAULT_RETRY_COMMON_LOG_THRESHOLD = 2
 DEFAULT_CONNECT_TIMEOUT = 10
 DEFAULT_READ_TIMEOUT = 30
+DEFAULT_BUFFER_SIZE = 8 * 2 ** 20
 
 
 def default_log_fn(msg: str) -> None:
@@ -1593,7 +1594,7 @@ def create_context(
     use_azure_storage_account_key_fallback: bool = False,
     get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
     use_streaming_read: bool = False,
-    default_buffer_size: int = io.DEFAULT_BUFFER_SIZE,
+    default_buffer_size: int = DEFAULT_BUFFER_SIZE,
 ):
     """
     Same argument as configure(), but returns a Context object that has all the blobfile methods on it.
@@ -1639,7 +1640,7 @@ def configure(
     use_azure_storage_account_key_fallback: bool = True,
     get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
     use_streaming_read: bool = False,
-    default_buffer_size: int = io.DEFAULT_BUFFER_SIZE,
+    default_buffer_size: int = DEFAULT_BUFFER_SIZE,
 ) -> None:
     """
     log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout

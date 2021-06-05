@@ -1055,7 +1055,7 @@ def test_cache_dir(ctx):
 )
 @pytest.mark.parametrize("use_random", [False, True])
 def test_change_file_size(ctx, use_random):
-    chunk_size = 2 ** 20
+    chunk_size = 8 * 2 ** 20
     long_contents = b"\x00" * chunk_size * 3
     short_contents = b"\xFF" * chunk_size * 2
     if use_random:
@@ -1103,7 +1103,7 @@ def test_change_file_size(ctx, use_random):
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
 def test_overwrite_while_reading(ctx):
-    chunk_size = 2 ** 20
+    chunk_size = 8 * 2 ** 20
     contents = b"\x00" * chunk_size * 2
     alternative_contents = b"\xFF" * chunk_size * 4
     with ctx() as path:

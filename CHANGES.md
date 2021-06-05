@@ -1,8 +1,13 @@
 # Changelog
 
+## 1.2.3
+
+* Change `default_buffer_size` to `8 * 2**20`
+* Increased the chunk size for `readall()` to `8 * 2**20`
+
 ## 1.2.2
 
-* Added an option to disable streaming reads since azure doesn't handle it well, `use_streaming_reads=False`
+* Added an option to disable streaming reads since azure doesn't handle it well, `use_streaming_read=False`.  These are now disabled by default.
 * Added an option to set the default buffer size, `default_buffer_size`, which is important to set if you disable streaming reads.
 
 ## 1.2.1

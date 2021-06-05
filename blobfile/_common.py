@@ -24,7 +24,7 @@ from typing import (
 import urllib3
 import xmltodict
 
-CHUNK_SIZE = 2 ** 20
+CHUNK_SIZE = 8 * 2 ** 20
 
 PARALLEL_COPY_MINIMUM_PART_SIZE = 32 * 2 ** 20
 
@@ -640,7 +640,7 @@ class BaseStreamingReadFile(io.RawIOBase):
     # https://bugs.python.org/issue27501
     def readinto(self, b: Any) -> Optional[int]:
         bytes_remaining = self._size - self._offset
-        if bytes_remaining <= 0:
+        if bytes_remaining <= 0 or len(b) == 0:
             return 0
 
         if len(b) > bytes_remaining:

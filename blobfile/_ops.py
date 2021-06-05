@@ -1638,6 +1638,8 @@ def configure(
     output_az_paths: bool = False,
     use_azure_storage_account_key_fallback: bool = True,
     get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
+    use_streaming_read: bool = False,
+    default_buffer_size: int = io.DEFAULT_BUFFER_SIZE,
 ) -> None:
     """
     log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout
@@ -1667,4 +1669,6 @@ def configure(
         output_az_paths=output_az_paths,
         use_azure_storage_account_key_fallback=use_azure_storage_account_key_fallback,
         get_http_pool=get_http_pool,
+        use_streaming_read=use_streaming_read,
+        default_buffer_size=default_buffer_size,
     )

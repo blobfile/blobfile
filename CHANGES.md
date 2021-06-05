@@ -4,6 +4,7 @@
 
 * Change `default_buffer_size` to `8 * 2**20`
 * Increased the chunk size for `readall()` to `8 * 2**20`
+* Fix GCS write file to respect `google_write_chunk_size`
 
 ## 1.2.2
 

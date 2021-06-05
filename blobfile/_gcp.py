@@ -468,25 +468,41 @@ class StreamingWriteFile(BaseStreamingWriteFile):
         super().__init__(conf=conf, chunk_size=conf.google_write_chunk_size)
 
     def _upload_chunk(self, chunk: memoryview, finalize: bool) -> None:
-        start = self._offset
-        end = self._offset + len(chunk) - 1
+        offset = self._offset
+
+        if len(chunk) == 0 and finalize:
+            self._upload_piece(offset, chunk, finalize)
+            return
+
+        start = 0
+        while start < len(chunk):
+            end = start + self._conf.google_write_chunk_size
+            last_piece = end >= len(chunk)
+            piece = chunk[start:end]
+            self._upload_piece(offset, piece, finalize and last_piece)
+            start = end
+            offset += len(piece)
+
+    def _upload_piece(self, offset: int, piece: memoryview, finalize: bool) -> None:
+        start = offset
+        end = offset + len(piece) - 1
 
         total_size = "*"
         if finalize:
-            total_size = self._offset + len(chunk)
+            total_size = offset + len(piece)
 
         headers = {
             "Content-Type": "application/octet-stream",
             "Content-Range": f"bytes {start}-{end}/{total_size}",
         }
-        if len(chunk) == 0 and finalize:
+        if len(piece) == 0 and finalize:
             # this is not mentioned in the docs but appears to be allowed
             # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
             headers["Content-Range"] = f"bytes */{total_size}"
 
         req = Request(
             url=self._upload_url,
-            data=chunk,
+            data=piece,
             headers=headers,
             method="PUT",
             success_codes=(200, 201) if finalize else (308,),

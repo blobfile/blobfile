@@ -1079,7 +1079,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                     f"Exceeded block count limit of {BLOCK_COUNT_LIMIT} for Azure Storage.  Increase `azure_write_chunk_size` so that {BLOCK_COUNT_LIMIT} * `azure_write_chunk_size` exceeds the size of the file you are writing."
                 )
 
-            start += self._conf.azure_write_chunk_size
+            start = end
 
         if finalize:
             block_ids = [

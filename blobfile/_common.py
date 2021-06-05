@@ -624,20 +624,18 @@ class BaseStreamingReadFile(io.RawIOBase):
         # reading a huge file in a single request is probably a bad idea anyway since the request
         # cannot be retried without re-reading the entire requested amount
         # instead, read into a buffer and return the buffer
-        buf = bytearray(self._size - self._offset)
-        mv = memoryview(buf)
-        offset = 0
+        pieces = []
         while True:
             bytes_remaining = self._size - self._offset
             assert bytes_remaining >= 0, "read more bytes than expected"
             # if a user doesn't like this value, it is easy to use .read(size) directly
-            chunk_size = min(CHUNK_SIZE, bytes_remaining)
-            n_bytes = self.readinto(mv[offset : offset + chunk_size])
-            assert n_bytes is not None, "file is in non-blocking mode"
-            if n_bytes == 0:
+            opt_piece = self.read(min(CHUNK_SIZE, bytes_remaining))
+            assert opt_piece is not None, "file is in non-blocking mode"
+            piece = opt_piece
+            if len(piece) == 0:
                 break
-            offset += n_bytes
-        return bytes(mv[:offset])
+            pieces.append(piece)
+        return b"".join(pieces)
 
     # https://bugs.python.org/issue27501
     def readinto(self, b: Any) -> Optional[int]:

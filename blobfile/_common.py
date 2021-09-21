@@ -643,6 +643,10 @@ class BaseStreamingReadFile(io.RawIOBase):
         if bytes_remaining <= 0 or len(b) == 0:
             return 0
 
+        # make sure we can slice the memoryview below
+        if not isinstance(b, memoryview):
+            b = memoryview(b)
+
         if len(b) > bytes_remaining:
             # if we get a file that was larger than we expected, don't read the extra data
             b = b[:bytes_remaining]

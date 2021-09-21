@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.4
+
+* `connection_pool_max_size` and `max_connection_pool_count` are no longer supported due to issues with `ProcessPoolExecutor`, instead you may specify `get_http_pool` if you need to control these settings.
+
 ## 1.2.3
 
 * Change `default_buffer_size` to `8 * 2**20`

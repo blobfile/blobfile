@@ -25,9 +25,8 @@ from blobfile._ops import (
     set_mtime as set_mtime,
     configure as configure,
     BlobFile as BlobFile,
-    Context as Context,
-    create_context as create_context,
 )
+from blobfile._context import Context as Context, create_context as create_context
 from blobfile._common import (
     Request as Request,
     Error as Error,

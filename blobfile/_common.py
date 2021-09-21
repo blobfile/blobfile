@@ -26,6 +26,9 @@ import xmltodict
 
 CHUNK_SIZE = 8 * 2 ** 20
 
+DEFAULT_CONNECTION_POOL_MAX_SIZE = 32
+DEFAULT_MAX_CONNECTION_POOL_COUNT = 10
+
 PARALLEL_COPY_MINIMUM_PART_SIZE = 32 * 2 ** 20
 
 EARLY_EXPIRATION_SECONDS = 5 * 60
@@ -294,6 +297,15 @@ class PoolDirector:
         self.__dict__.update(state)
 
 
+# we used to have a per-config instance of this class, but that is a bit annoying when using ProcessPoolExecutor
+# as the pool will be reset when the config is passed to the executor
+# so instead, default to this global director
+global_pool_director = PoolDirector(
+    connection_pool_max_size=DEFAULT_CONNECTION_POOL_MAX_SIZE,
+    max_connection_pool_count=DEFAULT_MAX_CONNECTION_POOL_COUNT,
+)
+
+
 class Config:
     def __init__(
         self,
@@ -331,13 +343,20 @@ class Config:
         self.default_buffer_size = default_buffer_size
 
         if get_http_pool is None:
-            pd = PoolDirector(
-                connection_pool_max_size=self.connection_pool_max_size,
-                max_connection_pool_count=self.max_connection_pool_count,
-            )
-            self.get_http_pool = pd.get_http_pool
+            if (
+                max_connection_pool_count != DEFAULT_MAX_CONNECTION_POOL_COUNT
+                or connection_pool_max_size != DEFAULT_CONNECTION_POOL_MAX_SIZE
+            ):
+                log_callback(
+                    "warning: max_connection_pool_count and connection_pool_max_size are no longer supported, set get_http_pool instead if you want to control http pooling"
+                )
+        self._get_http_pool = get_http_pool
+
+    def get_http_pool(self) -> urllib3.PoolManager:
+        if self._get_http_pool is None:
+            return global_pool_director.get_http_pool()
         else:
-            self.get_http_pool = get_http_pool
+            return self._get_http_pool()
 
 
 class WindowedFile:

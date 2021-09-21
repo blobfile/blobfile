@@ -142,6 +142,8 @@ def _parallel_download(
     s = stat(src)
 
     # pre-allocate output file
+    if os.path.dirname(dst) != "":
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
     with open(dst, "wb") as f:
         f.seek(s.size - 1)
         f.write(b"\0")

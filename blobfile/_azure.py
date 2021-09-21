@@ -912,11 +912,13 @@ def create_page_iterator(
 
 
 class StreamingReadFile(BaseStreamingReadFile):
-    def __init__(self, conf: Config, path: str) -> None:
-        st = maybe_stat(conf, path)
-        if st is None:
-            raise FileNotFoundError(f"No such file or directory: '{path}'")
-        super().__init__(conf=conf, path=path, size=st.size)
+    def __init__(self, conf: Config, path: str, size: Optional[int]) -> None:
+        if size is None:
+            st = maybe_stat(conf, path)
+            if st is None:
+                raise FileNotFoundError(f"No such file or directory: '{path}'")
+            size = st.size
+        super().__init__(conf=conf, path=path, size=size)
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None

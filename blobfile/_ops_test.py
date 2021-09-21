@@ -1335,18 +1335,18 @@ def test_azure_maybe_update_md5(ctx):
 
     with ctx() as path:
         _write_contents(path, contents)
-        st = ops.azure.maybe_stat(ops.default_context._conf, path)
-        assert ops.azure.maybe_update_md5(
+        st = azure.maybe_stat(ops.default_context._conf, path)
+        assert azure.maybe_update_md5(
             ops.default_context._conf, path, st.version, meow_hash
         )
         _write_contents(path, alternative_contents)
-        assert not ops.azure.maybe_update_md5(
+        assert not azure.maybe_update_md5(
             ops.default_context._conf, path, st.version, meow_hash
         )
-        st = ops.azure.maybe_stat(ops.default_context._conf, path)
+        st = azure.maybe_stat(ops.default_context._conf, path)
         assert st.md5 == purr_hash
         bf.remove(path)
-        assert not ops.azure.maybe_update_md5(
+        assert not azure.maybe_update_md5(
             ops.default_context._conf, path, st.version, meow_hash
         )
 
@@ -1437,3 +1437,16 @@ def test_pickle_config():
     c.get_http_pool()
     c2 = pickle.loads(pickle.dumps(c))
     c2.get_http_pool()
+
+
+@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])
+def test_read_with_size(ctx):
+    contents = b"meow!\npurr\n"
+    with ctx() as path:
+        path = bf.join(path, "a folder", "a.file")
+        bf.makedirs(bf.dirname(path))
+        with bf.BlobFile(path, "wb") as w:
+            w.write(contents)
+        with bf.BlobFile(path, "rb", file_size=1) as r:
+            assert r.read() == contents[:1]
+            assert r.tell() == 1

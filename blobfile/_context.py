@@ -720,6 +720,7 @@ class Context:
         streaming: Optional[bool] = None,
         buffer_size: Optional[int] = None,
         cache_dir: Optional[str] = None,
+        file_size: Optional[int] = None,
     ):
         """
         Open a local or remote file for reading or writing
@@ -738,6 +739,7 @@ class Context:
                     * Appending is done by downloading the file during construction and uploading on `close()` or during destruction.
             buffer_size: number of bytes to buffer, this can potentially make reading more efficient.
             cache_dir: a directory in which to cache files for reading, only valid if `streaming=False` and `mode` is in `"r", "rb"`.   You are reponsible for cleaning up the cache directory.
+            file_size: size of the file being opened, can be specified directly to avoid checking the file size when opening the file.  While this will avoid a network request, it also means that you may get an error when first reading a file that does not exist rather than when opening it.  Only valid for modes "r" and "rb".  This valid will be ignored for local files.
 
         Returns:
             A file-like object
@@ -747,6 +749,9 @@ class Context:
 
         if streaming is None:
             streaming = mode in ("r", "rb")
+
+        if file_size is not None:
+            assert mode in ("r", "rb"), "Can only specify file_size when reading"
 
         if _is_local_path(path) and "w" in mode:
             # local filesystems require that intermediate directories exist, but this is not required by the
@@ -773,7 +778,7 @@ class Context:
                 if mode in ("w", "wb"):
                     f = gcp.StreamingWriteFile(self._conf, path)
                 elif mode in ("r", "rb"):
-                    f = gcp.StreamingReadFile(self._conf, path)
+                    f = gcp.StreamingReadFile(self._conf, path, size=file_size)
                     f = io.BufferedReader(f, buffer_size=buffer_size)
                 else:
                     raise Error(f"Unsupported mode: '{mode}'")
@@ -781,7 +786,7 @@ class Context:
                 if mode in ("w", "wb"):
                     f = azure.StreamingWriteFile(self._conf, path)
                 elif mode in ("r", "rb"):
-                    f = azure.StreamingReadFile(self._conf, path)
+                    f = azure.StreamingReadFile(self._conf, path, size=file_size)
                     f = io.BufferedReader(f, buffer_size=buffer_size)
                 else:
                     raise Error(f"Unsupported mode: '{mode}'")

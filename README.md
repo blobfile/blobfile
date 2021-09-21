@@ -43,6 +43,7 @@ Here are the functions in `blobfile`:
             * Appending is done by downloading the file during construction and uploading on `close()`.
     * `buffer_size`: number of bytes to buffer, this can potentially make reading more efficient.
     * `cache_dir`: a directory in which to cache files for reading, only valid if `streaming=False` and `mode` is in `"r", "rb"`.   You are reponsible for cleaning up the cache directory.
+    * `file_size`: size of the file being opened, can be specified directly to avoid checking the file size when opening the file.  While this will avoid a network request, it also means that you may get an error when first reading a file that does not exist rather than when opening it.  Only valid for modes "r" and "rb".  This valid will be ignored for local files.
 
 Some are inspired by existing `os.path` and `shutil` functions:
 

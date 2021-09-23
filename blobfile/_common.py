@@ -601,8 +601,9 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         else:
             self._buf += b
             if len(self._buf) >= self._chunk_size:
-                size = self._upload_buf(memoryview(self._buf))
-                del self._buf[:size]
+                mv = memoryview(self._buf)
+                size = self._upload_buf(mv)
+                self._buf = bytearray(mv[size:])
         assert len(self._buf) < self._chunk_size
         return len(b)
 

@@ -731,6 +731,13 @@ def test_scanglob(ctx):
         assert entries[1].name == "bb" and entries[1].is_file
         assert entries[2].name == "subdir" and entries[2].is_dir
 
+        if "://" in path:
+            # ** behaves a bit differently on local paths, so don't check those
+            entries = sorted(list(bf.scanglob(bf.join(dirpath, "**"))))
+            assert entries[0].name == "ab" and entries[0].is_file
+            assert entries[1].name == "bb" and entries[1].is_file
+            assert entries[2].name == "subdir" and entries[2].is_dir
+
 
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]

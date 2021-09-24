@@ -1089,12 +1089,10 @@ def _expand_implicit_dirs(root: str, it: Iterator[DirEntry]) -> Iterator[DirEntr
         offset = _string_overlap(previous_path, entry_slash_path)
         relpath = entry_slash_path[offset:]
         cur = entry_slash_path[:offset]
-        if len(relpath) == 0:
+        for part in _split_path(relpath)[:-1]:
+            cur += part
             yield entry_from_dirpath(cur)
-        else:
-            for part in _split_path(relpath):
-                cur += part
-                yield entry_from_dirpath(cur)
+        yield entry
         assert entry_slash_path >= previous_path
         previous_path = entry_slash_path
 

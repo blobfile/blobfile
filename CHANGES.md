@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.5
+
+* Fix bug in `scanglob` that marked files as directories, thanks @jacobhilton for fixing this
+* Fix rare crash when writing files, thanks @unixpickle for fixing this
+
 ## 1.2.4
 
 * `connection_pool_max_size` and `max_connection_pool_count` are no longer supported due to issues with `ProcessPoolExecutor`, instead you may specify `get_http_pool` if you need to control these settings.

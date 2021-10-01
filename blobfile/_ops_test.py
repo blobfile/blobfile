@@ -1437,6 +1437,36 @@ def test_windowed_file():
                 f2.seek(2)
 
 
+class Deadline:
+    def __init__(self):
+        self._deadline = None
+
+    def set_deadline(self, deadline: float) -> None:
+        self._deadline = deadline
+
+    def get_deadline(self) -> float:
+        return self._deadline
+
+
+@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])
+def test_deadline(ctx):
+    contents = b"meow"
+    with ctx() as path:
+        _write_contents(path, contents)
+        deadline = Deadline()
+        ctx = bf.create_context(get_deadline=deadline.get_deadline)
+        deadline.set_deadline(time.time() + 5)
+        with ctx.BlobFile(path, "rb") as f:
+            f.read()
+        time.sleep(5)
+        with pytest.raises(bf.DeadlineExceeded):
+            with ctx.BlobFile(path, "rb") as f:
+                f.read()
+        deadline.set_deadline(None)
+        with ctx.BlobFile(path, "rb") as f:
+            f.read()
+
+
 def test_pickle_config():
     ctx = ops.create_context()
     c = ctx._conf

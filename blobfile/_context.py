@@ -1357,6 +1357,7 @@ def create_context(
     get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
     use_streaming_read: bool = False,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
+    get_deadline: Optional[Callable[[], float]] = None,
 ):
     """
     Same argument as configure(), but returns a Context object that has all the blobfile methods on it.
@@ -1377,5 +1378,6 @@ def create_context(
         get_http_pool=get_http_pool,
         use_streaming_read=use_streaming_read,
         default_buffer_size=default_buffer_size,
+        get_deadline=get_deadline,
     )
     return Context(conf=conf)

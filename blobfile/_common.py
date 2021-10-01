@@ -213,6 +213,14 @@ class ConcurrentWriteFailure(RequestFailure):
     pass
 
 
+class DeadlineExceeded(RequestFailure):
+    """
+    A read failed after the deadline was exceeded
+    """
+
+    pass
+
+
 class Stat(NamedTuple):
     size: int
     mtime: float
@@ -324,6 +332,7 @@ class Config:
         get_http_pool: Optional[Callable[[], urllib3.PoolManager]],
         use_streaming_read: bool,
         default_buffer_size: int,
+        get_deadline: Optional[Callable[[], float]],
     ) -> None:
         self.log_callback = log_callback
         self.connection_pool_max_size = connection_pool_max_size
@@ -341,6 +350,7 @@ class Config:
         )
         self.use_streaming_read = use_streaming_read
         self.default_buffer_size = default_buffer_size
+        self.get_deadline = get_deadline
 
         if get_http_pool is None:
             if (
@@ -424,6 +434,40 @@ def _check_hostname(hostname: str) -> int:
     return HOSTNAME_EXISTS
 
 
+class Timeout(Exception):
+    pass
+
+
+def _read_with_deadline(
+    fp: Any, sock: socket.socket, nbytes_to_read: int, deadline: float
+) -> bytes:
+    timeout = deadline - time.time()
+    if timeout <= 0:
+        raise Timeout("Did not read enough bytes before deadline expired")
+    sock.settimeout(timeout)
+    try:
+        # the peek is done with the hopes that this will get any buffered data
+        initial_data = fp.peek()
+    except socket.timeout:
+        raise Timeout("Timed out waiting for read")
+
+    buf = bytearray(nbytes_to_read)
+    mv = memoryview(buf)
+    mv[: len(initial_data)] = initial_data
+    nbytes_read = len(initial_data)
+    while nbytes_read < nbytes_to_read:
+        timeout = deadline - time.time()
+        if timeout <= 0:
+            raise Timeout("Did not read enough bytes before deadline expired")
+        sock.settimeout(timeout)
+        try:
+            n = sock.recv_into(mv[nbytes_read:])
+        except socket.timeout:
+            raise Timeout("Timed out waiting for read")
+        nbytes_read += n
+    return bytes(buf)
+
+
 def execute_request(
     conf: Config, build_req: Callable[[], Request]
 ) -> urllib3.HTTPResponse:
@@ -441,6 +485,18 @@ def execute_request(
         else:
             body = req.data
 
+        preload_content = req.preload_content
+        deadline = None
+
+        if conf.get_deadline is not None and req.method != "HEAD":
+            # HEAD requests don't have a body which is the only part the deadline applies to anyway
+            deadline = conf.get_deadline()
+            if deadline is not None:
+                assert (
+                    preload_content
+                ), "preload_content must be set to True when using a deadline"
+                preload_content = False
+
         err = None
         try:
             resp = conf.get_http_pool().request(
@@ -451,10 +507,41 @@ def execute_request(
                 timeout=urllib3.Timeout(
                     connect=conf.connect_timeout, read=conf.read_timeout
                 ),
-                preload_content=req.preload_content,
+                preload_content=preload_content,
                 retries=False,
                 redirect=False,
             )
+            if deadline is not None:
+                if resp.headers.get("Transfer-Encoding") == "chunked":
+                    # we don't support this, just read the body
+                    resp.data
+                else:
+                    # read the data manually since it's hard to implement a deadline using urllib3
+                    # this is all super hacky
+                    # https://github.com/urllib3/urllib3/issues/1741
+                    # because this is an SSLSocket, we can't easily recreate it from the fileno(), instead find the underlying socket object
+                    fp: Any = resp._fp.fp  # type: ignore
+                    sock: socket.socket = fp.raw._sock  # type: ignore
+                    try:
+                        body = _read_with_deadline(
+                            fp=fp,
+                            sock=sock,
+                            nbytes_to_read=int(resp.headers["Content-Length"]),
+                            deadline=deadline,
+                        )
+                        # since we successfully read the data, release the connection back to the pool
+                        resp.release_conn()
+                        # create a new resp object with the body we read
+                        resp = urllib3.response.HTTPResponse(
+                            status=resp.status, headers=resp.headers, body=body
+                        )
+                    except Timeout as e:
+                        resp.close()
+                        raise DeadlineExceeded.create_from_request_response(
+                            message=f"request failed with exception {e}",
+                            request=req,
+                            response=resp,
+                        )
             if resp.status in req.success_codes:
                 return resp
             else:

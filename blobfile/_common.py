@@ -498,16 +498,18 @@ def execute_request(
                 ), "preload_content must be set to True when using a deadline"
                 preload_content = False
                 now = time.time()
-                if now > deadline:
+                if now >= deadline:
                     raise DeadlineExceeded.create_from_request_response(
                         message=f"refusing to send request due to deadline",
                         request=req,
-                        response=urllib3.response.HTTPResponse(status=0, body=io.BytesIO(b"")),
+                        response=urllib3.response.HTTPResponse(
+                            status=0, body=io.BytesIO(b"")
+                        ),
                     )
                 # this isn't actually sufficient, since the read timeout doesn't work in the way we want
                 # it's still possible for the header to be returned really slowly, but since we mostly
                 # talk to only a few servers, it's possible they all send the header quickly
-                total_timeout = now - deadline
+                total_timeout = deadline - now
 
         err = None
         try:
@@ -517,7 +519,9 @@ def execute_request(
                 headers=req.headers,
                 body=body,
                 timeout=urllib3.Timeout(
-                    connect=conf.connect_timeout, read=conf.read_timeout, total=total_timeout
+                    connect=conf.connect_timeout,
+                    read=conf.read_timeout,
+                    total=total_timeout,
                 ),
                 preload_content=preload_content,
                 retries=False,

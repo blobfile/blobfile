@@ -151,31 +151,24 @@ def _create_access_token_request(
     creds: Mapping[str, str], scope: str, success_codes: Sequence[int] = (200,)
 ) -> Request:
     if "refreshToken" in creds:
-        # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-protocols-oauth-code#refreshing-the-access-tokens
+        # https://docs.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-auth-code-flow#refresh-the-access-token
         data = {
             "grant_type": "refresh_token",
             "refresh_token": creds["refreshToken"],
-            "resource": scope,
+            "scope": scope,
         }
         tenant = "common"
     else:
-        # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-oauth2-client-creds-grant-flow#request-an-access-token
-        # https://docs.microsoft.com/en-us/azure/active-directory/develop/v1-protocols-oauth-code
-        # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory#use-oauth-access-tokens-for-authentication
-        # https://docs.microsoft.com/en-us/rest/api/azure/
-        # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory
-        # az ad sp create-for-rbac --name <name>
-        # az account list
-        # az role assignment create --role "Storage Blob Data Contributor" --assignee <appid> --scope "/subscriptions/<account id>"
+        # https://docs.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-client-creds-grant-flow#first-case-access-token-request-with-a-shared-secret
         data = {
             "grant_type": "client_credentials",
             "client_id": creds["appId"],
             "client_secret": creds["password"],
-            "resource": scope,
+            "scope": scope,
         }
         tenant = creds["tenant"]
     return Request(
-        url=f"https://login.microsoftonline.com/{tenant}/oauth2/token",
+        url=f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
         method="POST",
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data=urllib.parse.urlencode(data).encode("utf8"),
@@ -544,7 +537,7 @@ def _get_storage_account_key(
     # get an access token for the management service
     def build_req() -> Request:
         return _create_access_token_request(
-            creds=creds, scope="https://management.azure.com/"
+            creds=creds, scope="https://management.azure.com/.default"
         )
 
     resp = common.execute_request(conf, build_req)
@@ -622,7 +615,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
         def build_req() -> Request:
             return _create_access_token_request(
                 creds=creds,
-                scope=f"https://{account}.blob.core.windows.net/",
+                scope=f"https://{account}.blob.core.windows.net/.default",
                 success_codes=(200, 400),
             )
 
@@ -668,7 +661,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
         # we have a service principal, get an oauth token
         def build_req() -> Request:
             return _create_access_token_request(
-                creds=creds, scope="https://storage.azure.com/"
+                creds=creds, scope="https://storage.azure.com/.default"
             )
 
         resp = common.execute_request(conf, build_req)

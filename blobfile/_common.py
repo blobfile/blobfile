@@ -147,6 +147,21 @@ def _extract_error(data: bytes) -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+def _extract_error_from_response(
+    response: urllib3.HTTPResponse
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    err = None
+    err_desc = None
+    err_headers = None
+    if response.data is not None:
+        err, err_desc = _extract_error(response.data)
+    if response.headers:
+        err_headers = ", ".join(
+            f"{header}: {value}" for header, value in response.headers.items()
+        )
+    return err, err_desc, err_headers
+
+
 class RequestFailure(Error):
     """
     A request failed, possibly after some number of retries
@@ -159,21 +174,28 @@ class RequestFailure(Error):
         response_status: int,
         error: Optional[str],
         error_description: Optional[str],
+        error_headers: Optional[str] = None,
     ):
         self.request_string: str = request_string
         self.response_status: int = response_status
         self.error: Optional[str] = error
         self.error_description: Optional[str] = error_description
+        self.error_headers: Optional[str] = error_headers
         super().__init__(
             message,
             self.request_string,
             self.response_status,
             self.error,
             self.error_description,
+            self.error_headers,
         )
 
     def __str__(self) -> str:
-        return f"message={self.message}, request={self.request_string}, status={self.response_status}, error={self.error} error_description={self.error_description}"
+        return (
+            f"message={self.message}, request={self.request_string}, "
+            f"status={self.response_status}, error={self.error}, "
+            f"error_description={self.error_description}, error_headers={self.error_headers}"
+        )
 
     @classmethod
     def create_from_request_response(
@@ -181,11 +203,7 @@ class RequestFailure(Error):
     ) -> Any:
         # this helper function exists because if you make a custom Exception subclass it cannot
         # be unpickled easily: https://stackoverflow.com/questions/41808912/cannot-unpickle-exception-subclass
-
-        err = None
-        err_desc = None
-        if response.data is not None:
-            err, err_desc = _extract_error(response.data)
+        err, err_desc, err_headers = _extract_error_from_response(response)
         # use string representation since request may not be serializable
         # exceptions need to be serializable when raised from subprocesses
         return cls(
@@ -194,6 +212,7 @@ class RequestFailure(Error):
             response_status=response.status,
             error=err,
             error_description=err_desc,
+            error_headers=err_headers,
         )
 
 

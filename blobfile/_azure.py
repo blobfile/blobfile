@@ -161,7 +161,7 @@ def _create_access_token_request(
     else:
         # https://docs.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-client-creds-grant-flow#first-case-access-token-request-with-a-shared-secret
         # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory#use-oauth-access-tokens-for-authentication
-        # The following 
+        # The following Azure CLI commands will create an AzureAD service principal with sufficient access to use Azure's `client_credentials` grant type:
         # az ad sp create-for-rbac --name <name>
         # az account list
         # az role assignment create --role "Storage Blob Data Contributor" --assignee <app_id> --scope "/subscriptions/<subscription_id>/resourceGroups/<resource_group_name>/providers/Microsoft.Storage/storageAccounts/<storage_account_name>"

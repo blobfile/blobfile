@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.6
+
+* Change to use oauth v2 for azure, thanks @cjgibson for adding this.
+
 ## 1.2.5
 
 * Fix bug in `scanglob` that marked files as directories, thanks @jacobhilton for fixing this

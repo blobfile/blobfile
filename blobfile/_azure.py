@@ -67,10 +67,23 @@ def _load_credentials() -> Dict[str, Any]:
     # AZURE_STORAGE_ACCOUNT_KEY is mentioned elsewhere on the internet
     for varname in ["AZURE_STORAGE_KEY", "AZURE_STORAGE_ACCOUNT_KEY"]:
         if varname in os.environ:
-            result = dict(storageAccountKey=os.environ[varname])
+            account = {}
             if "AZURE_STORAGE_ACCOUNT" in os.environ:
-                result["account"] = os.environ["AZURE_STORAGE_ACCOUNT"]
-            return result
+                account["account"] = os.environ["AZURE_STORAGE_ACCOUNT"]
+            return {"_azure_auth": "sakey", "storage_account_key": os.environ[varname], **account}
+
+    if "AZURE_STORAGE_CONNECTION_STRING" in os.environ:
+        connection_data = {}
+        # technically this should be parsed according to the rules in
+        # https://www.connectionstrings.com/formating-rules-for-connection-strings/
+        for part in os.environ["AZURE_STORAGE_CONNECTION_STRING"].split(";"):
+            key, _, val = part.partition("=")
+            connection_data[key.lower()] = val
+        return {
+            "_azure_auth": "sakey",
+            "account": connection_data["accountname"],
+            "storage_account_key": connection_data["accountkey"],
+        }
 
     if "AZURE_APPLICATION_CREDENTIALS" in os.environ:
         creds_path = os.environ["AZURE_APPLICATION_CREDENTIALS"]
@@ -79,40 +92,48 @@ def _load_credentials() -> Dict[str, Any]:
                 f"Credentials not found at '{creds_path}' specified by environment variable 'AZURE_APPLICATION_CREDENTIALS'"
             )
         with open(creds_path) as f:
-            return json.load(f)
+            creds = json.load(f)
+            return {
+                "_azure_auth": "svcact",
+                "client_id": creds["appId"],
+                "client_secret": creds["password"],
+                "tenant_id": creds["tenant"],
+            }
 
     if "AZURE_CLIENT_ID" in os.environ:
-        return dict(
-            appId=os.environ["AZURE_CLIENT_ID"],
-            password=os.environ["AZURE_CLIENT_SECRET"],
-            tenant=os.environ["AZURE_TENANT_ID"],
-        )
-
-    if "AZURE_STORAGE_CONNECTION_STRING" in os.environ:
-        connection_data = {}
-        # technically this should be parsed according to the rules in https://www.connectionstrings.com/formating-rules-for-connection-strings/
-        for part in os.environ["AZURE_STORAGE_CONNECTION_STRING"].split(";"):
-            key, _, val = part.partition("=")
-            connection_data[key.lower()] = val
-        return dict(
-            account=connection_data["accountname"],
-            storageAccountKey=connection_data["accountkey"],
-        )
+        return {
+            "_azure_auth": "svcact",
+            "client_id": os.environ["AZURE_CLIENT_ID"],
+            "client_secret": os.environ["AZURE_CLIENT_SECRET"],
+            "tenant_id": os.environ["AZURE_TENANT_ID"],
+        }
 
     # look for a refresh token in the az command line credentials
-    # https://mikhail.io/2019/07/how-azure-cli-manages-access-tokens/
-    default_creds_path = os.path.expanduser("~/.azure/accessTokens.json")
-    if os.path.exists(default_creds_path):
-        with open(default_creds_path) as f:
+    # TODO: we could also try to use any found access tokens
+    msal_tokens_path = os.path.expanduser("~/.azure/msal_token_cache.json")
+    if os.path.exists(msal_tokens_path):
+        with open(msal_tokens_path) as f:
+            tokens = json.load(f)
+            for token in tokens.get("RefreshToken", {}).values():
+                if token['credential_type'] != 'RefreshToken':
+                    continue
+                return {"_azure_auth": "refresh", "refresh_token": token["secret"]}
+
+    access_tokens_path = os.path.expanduser("~/.azure/accessTokens.json")
+    if os.path.exists(access_tokens_path):
+        with open(access_tokens_path) as f:
             tokens = json.load(f)
             best_token = None
             for token in tokens:
+                if "refreshToken" not in token:
+                    continue
+                creds = {"_azure_auth": "refresh", "refresh_token": token["refreshToken"]}
                 if best_token is None:
-                    best_token = token
+                    best_token = creds
                 else:
                     # expiresOn may be missing for tokens from service principals
                     if token.get("expiresOn", "") > best_token.get("expiresOn", ""):
-                        best_token = token
+                        best_token = creds
             if best_token is not None:
                 return best_token
 
@@ -150,15 +171,15 @@ def build_url(account: str, template: str, **data: str) -> str:
 def _create_access_token_request(
     creds: Mapping[str, str], scope: str, success_codes: Sequence[int] = (200,)
 ) -> Request:
-    if "refreshToken" in creds:
+    if creds["_azure_auth"] == "refresh":
         # https://docs.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-auth-code-flow#refresh-the-access-token
         data = {
             "grant_type": "refresh_token",
-            "refresh_token": creds["refreshToken"],
+            "refresh_token": creds["refresh_token"],
             "scope": scope,
         }
         tenant = "common"
-    else:
+    elif creds["_azure_auth"] == "svcact":
         # https://docs.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-client-creds-grant-flow#first-case-access-token-request-with-a-shared-secret
         # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory#use-oauth-access-tokens-for-authentication
         # The following Azure CLI commands will create an AzureAD service principal with sufficient access to use Azure's `client_credentials` grant type:
@@ -167,11 +188,13 @@ def _create_access_token_request(
         # az role assignment create --role "Storage Blob Data Contributor" --assignee <app_id> --scope "/subscriptions/<subscription_id>/resourceGroups/<resource_group_name>/providers/Microsoft.Storage/storageAccounts/<storage_account_name>"
         data = {
             "grant_type": "client_credentials",
-            "client_id": creds["appId"],
-            "client_secret": creds["password"],
+            "client_id": creds["client_id"],
+            "client_secret": creds["client_secret"],
             "scope": scope,
         }
         tenant = creds["tenant"]
+    else:
+        raise AssertionError
     return Request(
         url=f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
         method="POST",
@@ -605,17 +628,17 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
     account, container = key
     now = time.time()
     creds = _load_credentials()
-    if "storageAccountKey" in creds:
+    if creds["_azure_auth"] == "sakey":
         if "account" in creds:
             if creds["account"] != account:
                 raise Error(
                     f"Provided storage account key for account '{creds['account']}' via environment variables, "
                     f"but needed credentials for account '{account}'"
                 )
-        auth = (SHARED_KEY, creds["storageAccountKey"])
+        auth = (SHARED_KEY, creds["storage_account_key"])
         if _can_access_container(conf, account, container, auth):
             return (auth, now + SHARED_KEY_EXPIRATION_SECONDS)
-    elif "refreshToken" in creds:
+    elif creds["_azure_auth"] == "refresh":
         # we have a refresh token, convert it into an access token for this account
         def build_req() -> Request:
             return _create_access_token_request(
@@ -662,7 +685,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
             )
             if storage_account_key_auth is not None:
                 return (storage_account_key_auth, now + SHARED_KEY_EXPIRATION_SECONDS)
-    elif "appId" in creds:
+    elif creds["_azure_auth"] == "svcact":
         # we have a service principal, get an oauth token
         def build_req() -> Request:
             return _create_access_token_request(

@@ -185,7 +185,7 @@ def _create_access_token_request(
             "refresh_token": creds["refresh_token"],
             "scope": scope,
         }
-        tenant = "common"
+        tenant_id = "common"
     elif creds["_azure_auth"] == "svcact":
         # https://docs.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-client-creds-grant-flow#first-case-access-token-request-with-a-shared-secret
         # https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory#use-oauth-access-tokens-for-authentication
@@ -199,11 +199,11 @@ def _create_access_token_request(
             "client_secret": creds["client_secret"],
             "scope": scope,
         }
-        tenant = creds["tenant"]
+        tenant_id = creds["tenant_id"]
     else:
         raise AssertionError
     return Request(
-        url=f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+        url=f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
         method="POST",
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data=urllib.parse.urlencode(data).encode("utf8"),

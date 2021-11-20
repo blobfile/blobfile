@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.7
+
+* Support using access tokens from new versions of azure-cli, thanks @hauntsaninja for adding this.
+
 ## 1.2.6
 
 * Change to use oauth v2 for azure, thanks @cjgibson for adding this.

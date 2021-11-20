@@ -70,7 +70,11 @@ def _load_credentials() -> Dict[str, Any]:
             account = {}
             if "AZURE_STORAGE_ACCOUNT" in os.environ:
                 account["account"] = os.environ["AZURE_STORAGE_ACCOUNT"]
-            return {"_azure_auth": "sakey", "storage_account_key": os.environ[varname], **account}
+            return {
+                "_azure_auth": "sakey",
+                "storage_account_key": os.environ[varname],
+                **account,
+            }
 
     if "AZURE_STORAGE_CONNECTION_STRING" in os.environ:
         connection_data = {}
@@ -115,7 +119,7 @@ def _load_credentials() -> Dict[str, Any]:
         with open(msal_tokens_path) as f:
             tokens = json.load(f)
             for token in tokens.get("RefreshToken", {}).values():
-                if token['credential_type'] != 'RefreshToken':
+                if token["credential_type"] != "RefreshToken":
                     continue
                 return {"_azure_auth": "refresh", "refresh_token": token["secret"]}
 
@@ -127,7 +131,10 @@ def _load_credentials() -> Dict[str, Any]:
             for token in tokens:
                 if "refreshToken" not in token:
                     continue
-                creds = {"_azure_auth": "refresh", "refresh_token": token["refreshToken"]}
+                creds = {
+                    "_azure_auth": "refresh",
+                    "refresh_token": token["refreshToken"],
+                }
                 if best_token is None:
                     best_token = creds
                 else:

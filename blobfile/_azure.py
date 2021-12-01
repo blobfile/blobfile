@@ -635,7 +635,8 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
     account, container = key
     now = time.time()
     creds = _load_credentials()
-    if creds["_azure_auth"] == "sakey":
+    azure_auth = creds.get("_azure_auth")
+    if azure_auth == "sakey":
         if "account" in creds:
             if creds["account"] != account:
                 raise Error(
@@ -645,7 +646,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
         auth = (SHARED_KEY, creds["storage_account_key"])
         if _can_access_container(conf, account, container, auth):
             return (auth, now + SHARED_KEY_EXPIRATION_SECONDS)
-    elif creds["_azure_auth"] == "refresh":
+    elif azure_auth == "refresh":
         # we have a refresh token, convert it into an access token for this account
         def build_req() -> Request:
             return _create_access_token_request(
@@ -692,7 +693,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
             )
             if storage_account_key_auth is not None:
                 return (storage_account_key_auth, now + SHARED_KEY_EXPIRATION_SECONDS)
-    elif creds["_azure_auth"] == "svcact":
+    elif azure_auth == "svcact":
         # we have a service principal, get an oauth token
         def build_req() -> Request:
             return _create_access_token_request(

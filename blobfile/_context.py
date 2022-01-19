@@ -285,12 +285,11 @@ class Context:
                             pat = pattern_prefix + prefix + "*" + pattern_suffix
                         initial_tasks.append(_GlobTask("", _split_path(pat)))
 
-            tasks_enqueued = len(initial_tasks)
-
             if parallel:
                 tasks = mp.Queue()
                 for t in initial_tasks:
                     tasks.put(t)
+                tasks_enqueued = len(initial_tasks)
                 results = mp.Queue()
 
                 tasks_done = 0

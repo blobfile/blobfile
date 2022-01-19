@@ -257,9 +257,6 @@ class Context:
                 assert (
                     parallel
                 ), "You probably want to use parallel=True if you are setting shard_prefix_length > 0"
-                assert (
-                    blob_prefix.count("**") == 1 or blob_prefix.count("*") == 1
-                ), "Only patterns with one wildcard are supported with shard_prefix_length > 0"
                 initial_tasks = []
                 valid_chars = [
                     i

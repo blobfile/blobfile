@@ -732,7 +732,7 @@ def test_scanglob(ctx):
         assert entries[2].name == "subdir" and entries[2].is_dir
 
         for shard_prefix_length in [0, 1]:
-            for pattern in ["*b", "b*", "**", "b**", "**t"]:
+            for pattern in ["*b", "b*", "**", "b**", "**t", "*b*"]:
                 normal_entries = sorted(list(bf.scanglob(bf.join(dirpath, pattern))))
                 parallel_entries = sorted(
                     list(

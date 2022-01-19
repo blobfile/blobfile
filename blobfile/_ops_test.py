@@ -731,6 +731,20 @@ def test_scanglob(ctx):
         assert entries[1].name == "bb" and entries[1].is_file
         assert entries[2].name == "subdir" and entries[2].is_dir
 
+        for shard_prefix_length in [0, 1]:
+            for pattern in ["*b", "b*", "**", "b**", "**t"]:
+                normal_entries = sorted(list(bf.scanglob(bf.join(dirpath, pattern))))
+                parallel_entries = sorted(
+                    list(
+                        bf.scanglob(
+                            bf.join(dirpath, pattern),
+                            parallel=True,
+                            shard_prefix_length=shard_prefix_length,
+                        )
+                    )
+                )
+                assert parallel_entries == normal_entries
+
         if "://" in path:
             # ** behaves a bit differently on local paths, so don't check those
             entries = sorted(list(bf.scanglob(bf.join(dirpath, "**"))))

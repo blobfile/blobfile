@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.8
+
+* Add `shard_prefix_length` to `scanglob`
+
 ## 1.2.7
 
 * Support using access tokens from new versions of azure-cli, thanks @hauntsaninja for adding this.

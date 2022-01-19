@@ -204,7 +204,9 @@ class Context:
             for entry in self.scanglob(pattern=pattern, parallel=parallel):
                 yield entry.path
 
-    def scanglob(self, pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
+    def scanglob(
+        self, pattern: str, parallel: bool = False, shard_prefix_length: int = 0
+    ) -> Iterator[DirEntry]:
         if "?" in pattern or "[" in pattern or "]" in pattern:
             raise Error("Advanced glob queries are not supported")
 
@@ -249,12 +251,46 @@ class Context:
                     raise Error("Wildcards cannot be used in account or container")
                 root = azure.combine_path(self._conf, account, container, "")
 
-            initial_task = _GlobTask("", _split_path(blob_prefix))
+            if shard_prefix_length == 0:
+                initial_tasks = [_GlobTask("", _split_path(blob_prefix))]
+            else:
+                assert (
+                    parallel
+                ), "You probably want to use parallel=True if you are setting shard_prefix_length > 0"
+                assert (
+                    blob_prefix.count("**") == 1 or blob_prefix.count("*") == 1
+                ), "Only patterns with one wildcard are supported with shard_prefix_length > 0"
+                initial_tasks = []
+                valid_chars = [
+                    i
+                    for i in range(256)
+                    if i not in INVALID_CHARS.union([ord("/"), ord("*")])
+                ]
+                pattern_prefix, pattern_suffix = blob_prefix.split("*", maxsplit=1)
+                for repeat in range(1, shard_prefix_length + 1):
+                    for chars in itertools.product(valid_chars, repeat=repeat):
+                        prefix = ""
+                        for c in chars:
+                            prefix += chr(c)
+                        # we need to check for exact matches for shorter prefix lengths
+                        # if we only searched for prefixes of length `shard_prefix_length`
+                        # we would skip shorter names, for instance "a" would be skipped if we
+                        # we had `shard_prefix_length=2`
+                        # instead we check for an exact match for everything shorter than
+                        # our `shard_prefix_length`
+                        exact = repeat != shard_prefix_length
+                        if exact:
+                            pat = pattern_prefix + prefix
+                        else:
+                            pat = pattern_prefix + prefix + "*" + pattern_suffix
+                        initial_tasks.append(_GlobTask("", _split_path(pat)))
+
+            tasks_enqueued = len(initial_tasks)
 
             if parallel:
                 tasks = mp.Queue()
-                tasks.put(initial_task)
-                tasks_enqueued = 1
+                for t in initial_tasks:
+                    tasks.put(t)
                 results = mp.Queue()
 
                 tasks_done = 0
@@ -275,7 +311,8 @@ class Context:
                             raise Error("Invalid result")
             else:
                 dq: collections.deque[_GlobTask] = collections.deque()
-                dq.append(initial_task)
+                for t in initial_tasks:
+                    dq.append(t)
                 while len(dq) > 0:
                     t = dq.popleft()
                     for r in _process_glob_task(conf=self._conf, root=root, t=t):

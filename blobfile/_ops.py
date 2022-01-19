@@ -161,11 +161,15 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
     return default_context.glob(pattern=pattern, parallel=parallel)
 
 
-def scanglob(pattern: str, parallel: bool = False) -> Iterator[DirEntry]:
+def scanglob(
+    pattern: str, parallel: bool = False, shard_prefix_length: int = 0
+) -> Iterator[DirEntry]:
     """
     Same as `glob`, but returns `DirEntry` objects instead of strings
     """
-    return default_context.scanglob(pattern=pattern, parallel=parallel)
+    return default_context.scanglob(
+        pattern=pattern, parallel=parallel, shard_prefix_length=shard_prefix_length
+    )
 
 
 def isdir(path: str) -> bool:

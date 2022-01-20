@@ -32,7 +32,7 @@ from blobfile._common import (
     FileBody,
     DirEntry,
     strip_slashes,
-    safe_urljoin,
+    path_join,
 )
 
 SHARED_KEY = "shared_key"
@@ -1470,7 +1470,7 @@ def join_paths(conf: Config, a: str, b: str) -> str:
         a += "/"
 
     account, container, obj = split_path(a)
-    obj = safe_urljoin(obj, b)
+    obj = path_join(obj, b)
     if obj.startswith("/"):
         obj = obj[1:]
     return combine_path(conf, account, container, obj)

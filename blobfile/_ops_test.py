@@ -263,11 +263,10 @@ def test_join():
         ("a/b/", "c/", "a/b/c/"),
         ("a/b/", "/c/", "/c/"),
         ("", "", ""),
-        # this doesn't work with : in the second path
         (
             "gs://a/b/c",
-            "d0123456789-._~!$&'()*+,;=@",
-            "gs://a/b/c/d0123456789-._~!$&'()*+,;=@",
+            "d0123456789-._~!$&'()*+,:=@;",
+            "gs://a/b/c/d0123456789-._~!$&'()*+,:=@;",
         ),
         ("gs://a", "b", "gs://a/b"),
         ("gs://a/b", "c", "gs://a/b/c"),
@@ -318,6 +317,7 @@ def test_join():
             "https://a.blob.core.windows.net/container/c/",
         ),
         ("gs://test/a/b", "c:d", "gs://test/a/b/c:d"),
+        ("gs://test/a/b", "c:d;", "gs://test/a/b/c:d;"),
     ]
     for input_a, input_b, desired_output in testcases:
         actual_output = bf.join(input_a, input_b)

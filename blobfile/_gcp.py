@@ -32,7 +32,7 @@ from blobfile._common import (
     FileBody,
     DirEntry,
     strip_slashes,
-    safe_urljoin,
+    path_join,
 )
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
@@ -798,7 +798,7 @@ def join_paths(conf: Config, a: str, b: str) -> str:
         a += "/"
 
     bucket, obj = split_path(a)
-    obj = safe_urljoin(obj, b)
+    obj = path_join(obj, b)
     if obj.startswith("/"):
         obj = obj[1:]
     return combine_path(bucket, obj)

@@ -13,6 +13,7 @@ from typing import (
     Callable,
     Dict,
     Iterator,
+    List,
     Mapping,
     NamedTuple,
     Optional,
@@ -43,8 +44,6 @@ HOSTNAME_DOES_NOT_EXIST = 1
 HOSTNAME_STATUS_UNKNOWN = 2
 
 GCP_BASE_URL = "https://storage.googleapis.com"
-
-ESCAPED_COLON = "___COLON___"
 
 
 # https://github.com/christopher-hesse/blobfile/issues/153
@@ -935,15 +934,40 @@ def strip_slashes(path: str) -> str:
     return path
 
 
-def safe_urljoin(a: str, b: str) -> str:
-    # a ":" symbol in a relative url path will be interpreted as a fully qualified path
-    # escape the ":" to avoid this
-    # https://stackoverflow.com/questions/55202875/python-urllib-parse-urljoin-on-path-starting-with-numbers-and-colon
-    if ESCAPED_COLON in b:
-        raise Error(f"url cannot contain string '{ESCAPED_COLON}'")
-    escaped_b = b.replace(":", ESCAPED_COLON)
-    joined = urllib.parse.urljoin(a, escaped_b)
-    return joined.replace(ESCAPED_COLON, ":")
+def path_join(a: str, b: str) -> str:
+    # urljoin has issues with : at any point and ; at the end of a url
+    # instead do the same sort of logic as https://github.com/python/cpython/blob/e6fe10d34096a23be7d26271cf6aba429313b01d/Lib/urllib/parse.py#L514
+    # but without the url stuff
+    assert "://" not in a and "://" not in b
+    if a == "":
+        return b
+    if b == "":
+        return a
+
+    if b[:1] == "/":
+        segments = b.split("/")
+    else:
+        base_parts = a.split("/")
+        if base_parts[-1] != "":
+            del base_parts[-1]
+        segments = base_parts + b.split("/")
+        segments[1:-1] = [s for s in segments[1:-1] if s != ""]
+
+    resolved_path: List[str] = []
+
+    for seg in segments:
+        if seg == "..":
+            if len(resolved_path) > 0:
+                resolved_path.pop()
+        elif seg == ".":
+            continue
+        else:
+            resolved_path.append(seg)
+
+    if segments[-1] in (".", ".."):
+        resolved_path.append("")
+
+    return "/".join(resolved_path)
 
 
 def get_log_threshold_for_error(conf: Config, err: str) -> int:

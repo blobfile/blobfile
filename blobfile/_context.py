@@ -1,5 +1,6 @@
 # https://mypy.readthedocs.io/en/stable/common_issues.html#using-classes-that-are-generic-in-stubs-but-not-at-runtime
 from __future__ import annotations
+import contextlib
 
 import os
 import tempfile
@@ -20,6 +21,7 @@ import concurrent.futures
 import multiprocessing as mp
 from types import ModuleType
 from typing import (
+    Any,
     Optional,
     Tuple,
     Callable,
@@ -72,6 +74,10 @@ DEFAULT_RETRY_COMMON_LOG_THRESHOLD = 2
 DEFAULT_CONNECT_TIMEOUT = 10
 DEFAULT_READ_TIMEOUT = 30
 DEFAULT_BUFFER_SIZE = 8 * 2 ** 20
+
+
+def _execute_fn_and_ignore_result(fn: Callable, *args: Any):
+    fn(*args)
 
 
 class Context:
@@ -537,59 +543,96 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
-    def rmtree(self, path: str) -> None:
+    def rmtree(
+        self,
+        path: str,
+        parallel: bool = False,
+        parallel_executor: Optional[concurrent.futures.Executor] = None,
+    ) -> None:
         if not self.isdir(path):
             raise NotADirectoryError(f"The directory name is invalid: '{path}'")
 
         if _is_local_path(path):
             shutil.rmtree(path)
-        elif _is_gcp_path(path):
+        elif _is_gcp_path(path) or _is_azure_path(path):
             if not path.endswith("/"):
                 path += "/"
-            bucket, blob = gcp.split_path(path)
-            for entry in gcp.list_blobs(self._conf, path):
-                entry_slash_path = _get_slash_path(entry)
-                entry_bucket, entry_blob = gcp.split_path(entry_slash_path)
-                assert entry_bucket == bucket and entry_blob.startswith(blob)
-                req = Request(
-                    url=gcp.build_url(
-                        "/storage/v1/b/{bucket}/o/{object}",
-                        bucket=bucket,
-                        object=entry_blob,
-                    ),
-                    method="DELETE",
-                    # 404 is allowed in case a failed request successfully deleted the file
-                    # before erroring out
-                    success_codes=(204, 404),
-                )
-                gcp.execute_api_request(self._conf, req)
-        elif _is_azure_path(path):
-            if not path.endswith("/"):
-                path += "/"
-            account, container, blob = azure.split_path(path)
-            for entry in azure.list_blobs(self._conf, path):
-                entry_slash_path = _get_slash_path(entry)
-                entry_account, entry_container, entry_blob = azure.split_path(
-                    entry_slash_path
-                )
-                assert (
-                    entry_account == account
-                    and entry_container == container
-                    and entry_blob.startswith(blob)
-                )
-                req = Request(
-                    url=azure.build_url(
-                        account,
-                        "/{container}/{blob}",
-                        container=container,
-                        blob=entry_blob,
-                    ),
-                    method="DELETE",
-                    # 404 is allowed in case a failed request successfully deleted the file
-                    # before erroring out
-                    success_codes=(202, 404),
-                )
-                azure.execute_api_request(self._conf, req)
+
+            if _is_gcp_path(path):
+
+                def request_generator():
+                    bucket, blob = gcp.split_path(path)
+                    for entry in gcp.list_blobs(self._conf, path):
+                        entry_slash_path = _get_slash_path(entry)
+                        entry_bucket, entry_blob = gcp.split_path(entry_slash_path)
+                        assert entry_bucket == bucket and entry_blob.startswith(blob)
+                        req = Request(
+                            url=gcp.build_url(
+                                "/storage/v1/b/{bucket}/o/{object}",
+                                bucket=bucket,
+                                object=entry_blob,
+                            ),
+                            method="DELETE",
+                            # 404 is allowed in case a failed request successfully deleted the file
+                            # before erroring out
+                            success_codes=(204, 404),
+                        )
+                        yield req
+
+                fn = gcp.execute_api_request
+
+            elif _is_azure_path(path):
+
+                def request_generator():
+                    account, container, blob = azure.split_path(path)
+                    for entry in azure.list_blobs(self._conf, path):
+                        entry_slash_path = _get_slash_path(entry)
+                        entry_account, entry_container, entry_blob = azure.split_path(
+                            entry_slash_path
+                        )
+                        assert (
+                            entry_account == account
+                            and entry_container == container
+                            and entry_blob.startswith(blob)
+                        )
+                        req = Request(
+                            url=azure.build_url(
+                                account,
+                                "/{container}/{blob}",
+                                container=container,
+                                blob=entry_blob,
+                            ),
+                            method="DELETE",
+                            # 404 is allowed in case a failed request successfully deleted the file
+                            # before erroring out
+                            success_codes=(202, 404),
+                        )
+                        yield req
+
+                fn = azure.execute_api_request
+            else:
+                raise Error(f"Unrecognized path: '{path}'")
+
+            if parallel:
+                if parallel_executor is None:
+                    executor = concurrent.futures.ProcessPoolExecutor()
+                    context = executor
+                else:
+                    executor = parallel_executor
+                    context = contextlib.nullcontext()
+
+                futures = []
+                with context:
+                    for req in request_generator():
+                        f = executor.submit(
+                            _execute_fn_and_ignore_result, fn, self._conf, req
+                        )
+                        futures.append(f)
+                for f in futures:
+                    f.result()
+            else:
+                for req in request_generator():
+                    fn(self._conf, req)
         else:
             raise Error(f"Unrecognized path: '{path}'")
 

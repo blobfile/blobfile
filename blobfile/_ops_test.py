@@ -756,7 +756,8 @@ def test_scanglob(ctx):
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
-def test_rmtree(ctx):
+@pytest.mark.parametrize("parallel", [False, True])
+def test_rmtree(ctx, parallel):
     contents = b"meow!"
     with ctx() as path:
         root = bf.dirname(path)
@@ -797,7 +798,7 @@ def test_rmtree(ctx):
             ],
         )
 
-        bf.rmtree(destroy_path)
+        bf.rmtree(destroy_path, parallel=parallel)
 
         assert_listing_equal(
             root,

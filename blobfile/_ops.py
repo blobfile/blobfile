@@ -238,11 +238,17 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
     return default_context.set_mtime(path=path, mtime=mtime, version=version)
 
 
-def rmtree(path: str) -> None:
+def rmtree(
+    path: str,
+    parallel: bool = False,
+    parallel_executor: Optional[concurrent.futures.Executor] = None,
+) -> None:
     """
     Delete a directory tree
     """
-    return default_context.rmtree(path=path)
+    return default_context.rmtree(
+        path=path, parallel=parallel, parallel_executor=parallel_executor
+    )
 
 
 def walk(

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.9
+
+* `parallel` option to `rmtree`
+* fix trailing semicolon with `bf.join`
+
 ## 1.2.8
 
 * Add `shard_prefix_length` to `scanglob`

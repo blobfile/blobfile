@@ -35,7 +35,7 @@ def run_tests_docker(name, rest, env):
         "GOOGLE_APPLICATION_CREDENTIALS",
         os.path.expanduser("~/.config/gcloud/application_default_credentials.json"),
     )
-    azure_credentials_path = os.environ.get("AZURE_APPLICATION_CREDENTIALS")
+    azure_credentials_path = os.environ["AZURE_APPLICATION_CREDENTIALS"]
     azure_cli_credentials_path = os.path.expanduser("~/.azure")
 
     aws_credentials_path = os.environ.get(

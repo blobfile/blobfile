@@ -602,7 +602,14 @@ def parallel_upload(
     with open(src, "rb") as f:
         md5_digest = common.block_md5(f)
 
+    hexdigest = binascii.hexlify(md5_digest).decode("utf8")
+
     s = os.stat(src)
+    if s.st_size == 0:
+        # write an empty file, the normal upload requires at least one part
+        with StreamingWriteFile(conf, dst) as f:
+            pass
+        return hexdigest if return_md5 else None
 
     dstbucket, dstname = split_path(dst)
     source_objects = []
@@ -650,7 +657,6 @@ def parallel_upload(
     )
     resp = execute_api_request(conf, req)
     metadata = json.loads(resp.data)
-    hexdigest = binascii.hexlify(md5_digest).decode("utf8")
     maybe_update_md5(conf, dst, metadata["generation"], hexdigest)
 
     # delete parts in parallel

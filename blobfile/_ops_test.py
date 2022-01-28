@@ -812,36 +812,36 @@ def test_rmtree(ctx, parallel):
 
 @pytest.mark.parametrize("parallel", [False, True])
 def test_copy(parallel):
-    contents = b"meow!"
-    with _get_temp_local_path() as local_path1, _get_temp_local_path() as local_path2, _get_temp_local_path() as local_path3, _get_temp_gcs_path() as gcs_path1, _get_temp_gcs_path() as gcs_path2, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2, _get_temp_as_path(
-        account=AS_TEST_ACCOUNT2, container=AS_TEST_CONTAINER2
-    ) as as_path3, _get_temp_as_path() as as_path4:
-        with pytest.raises(FileNotFoundError):
-            bf.copy(gcs_path1, gcs_path2, parallel=parallel)
-        with pytest.raises(FileNotFoundError):
-            bf.copy(as_path1, as_path2, parallel=parallel)
+    for contents in [b"", b"meow!"]:
+        with _get_temp_local_path() as local_path1, _get_temp_local_path() as local_path2, _get_temp_local_path() as local_path3, _get_temp_gcs_path() as gcs_path1, _get_temp_gcs_path() as gcs_path2, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2, _get_temp_as_path(
+            account=AS_TEST_ACCOUNT2, container=AS_TEST_CONTAINER2
+        ) as as_path3, _get_temp_as_path() as as_path4:
+            with pytest.raises(FileNotFoundError):
+                bf.copy(gcs_path1, gcs_path2, parallel=parallel)
+            with pytest.raises(FileNotFoundError):
+                bf.copy(as_path1, as_path2, parallel=parallel)
 
-        _write_contents(local_path1, contents)
+            _write_contents(local_path1, contents)
 
-        testcases = [
-            (local_path1, local_path2),
-            (local_path1, gcs_path1),
-            (gcs_path1, gcs_path2),
-            (gcs_path2, as_path1),
-            (as_path1, as_path2),
-            (as_path2, as_path3),
-            (as_path3, local_path3),
-            (local_path3, as_path4),
-        ]
+            testcases = [
+                (local_path1, local_path2),
+                (local_path1, gcs_path1),
+                (gcs_path1, gcs_path2),
+                (gcs_path2, as_path1),
+                (as_path1, as_path2),
+                (as_path2, as_path3),
+                (as_path3, local_path3),
+                (local_path3, as_path4),
+            ]
 
-        for src, dst in testcases:
-            h = bf.copy(src, dst, return_md5=True, parallel=parallel)
-            assert h == hashlib.md5(contents).hexdigest()
-            assert _read_contents(dst) == contents
-            with pytest.raises(FileExistsError):
-                bf.copy(src, dst, parallel=parallel)
-            bf.copy(src, dst, overwrite=True, parallel=parallel)
-            assert _read_contents(dst) == contents
+            for src, dst in testcases:
+                h = bf.copy(src, dst, return_md5=True, parallel=parallel)
+                assert h == hashlib.md5(contents).hexdigest()
+                assert _read_contents(dst) == contents
+                with pytest.raises(FileExistsError):
+                    bf.copy(src, dst, parallel=parallel)
+                bf.copy(src, dst, overwrite=True, parallel=parallel)
+                assert _read_contents(dst) == contents
 
 
 # the tests already take awhile and this adds like a minute

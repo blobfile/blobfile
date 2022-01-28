@@ -1097,8 +1097,9 @@ def _parallel_download(
     if os.path.dirname(dst) != "":
         os.makedirs(os.path.dirname(dst), exist_ok=True)
     with open(dst, "wb") as f:
-        f.seek(s.size - 1)
-        f.write(b"\0")
+        if s.size > 0:
+            f.seek(s.size - 1)
+            f.write(b"\0")
 
     max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
     part_size = max(

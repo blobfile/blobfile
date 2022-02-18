@@ -45,6 +45,8 @@ HOSTNAME_STATUS_UNKNOWN = 2
 
 GCP_BASE_URL = "https://storage.googleapis.com"
 
+DEFAULT_RETRY_CODES = (408, 429, 500, 502, 503, 504)
+
 
 # https://github.com/christopher-hesse/blobfile/issues/153
 # https://github.com/christopher-hesse/blobfile/issues/156
@@ -85,7 +87,7 @@ class Request:
         preload_content: bool = True,
         success_codes: Sequence[int] = (200,),
         # https://cloud.google.com/storage/docs/resumable-uploads#practices
-        retry_codes: Sequence[int] = (408, 429, 500, 502, 503, 504),
+        retry_codes: Sequence[int] = DEFAULT_RETRY_CODES,
     ) -> None:
         self.method: str = method
         self.url: str = url

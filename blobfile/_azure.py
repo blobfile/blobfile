@@ -33,6 +33,7 @@ from blobfile._common import (
     DirEntry,
     strip_slashes,
     path_join,
+    DEFAULT_RETRY_CODES,
 )
 
 SHARED_KEY = "shared_key"
@@ -845,7 +846,7 @@ def _finalize_blob(
         url=url,
         method="PUT",
         # azure does not calculate md5s for us, we have to do that manually
-        # https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
+        # https://web.archive.org/web/20190118183153/https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
         headers={"x-ms-blob-content-md5": base64.b64encode(md5_digest).decode("utf8")},
         params=dict(comp="blocklist"),
         data=body,
@@ -1091,9 +1092,13 @@ class StreamingWriteFile(BaseStreamingWriteFile):
             end = start + self._conf.azure_write_chunk_size
             data = chunk[start:end]
             self._md5.update(data)
+            block_md5 = hashlib.md5(data)
             req = Request(
                 url=self._url,
                 method="PUT",
+                headers={
+                    "Content-MD5": base64.b64encode(block_md5.digest()).decode("utf8")
+                },
                 params=dict(
                     comp="block",
                     blockid=_block_index_to_block_id(
@@ -1102,6 +1107,9 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 ),
                 data=data,
                 success_codes=(201,),
+                # retry if we get an MD5 mismatch error (unfortunately we are just guessing that it is a mismatch error
+                # from the 400 status code)
+                retry_codes=(400,) + DEFAULT_RETRY_CODES,
             )
             execute_api_request(self._conf, req)
             self._block_index += 1

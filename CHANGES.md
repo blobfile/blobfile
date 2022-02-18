@@ -5,6 +5,8 @@
 * `parallel` option to `rmtree`
 * fix trailing semicolon with `bf.join`
 * add `save_access_token_to_disk` to save local access tokens locally
+* fix bug preventing parallel copy of empty file
+* calculate md5 for individual uploaded blocks
 
 ## 1.2.8
 

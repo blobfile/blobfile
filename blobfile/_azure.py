@@ -1,3 +1,9 @@
+import binascii
+import hashlib
+import urllib.parse
+import os
+import json
+import hmac
 import base64
 import binascii
 import calendar
@@ -34,6 +40,8 @@ from blobfile._common import (
     TokenManager,
     path_join,
     strip_slashes,
+    DEFAULT_RETRY_CODES,
+    rng,
 )
 
 SHARED_KEY = "shared_key"
@@ -1050,7 +1058,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
         #   without automatic expiry, we'd leak temp files
         # we can use the lease system, but then we have to deal with leases
 
-        self._upload_id = random.randint(0, 2 ** 47 - 1)
+        self._upload_id = rng.randint(0, 2 ** 47 - 1)
         self._block_index = 0
         # check to see if there is an existing blob at this location with the wrong type
         req = Request(
@@ -1162,7 +1170,7 @@ def parallel_upload(
     account, container, blob = split_path(dst)
     dst_url = build_url(account, "/{container}/{blob}", container=container, blob=blob)
 
-    upload_id = random.randint(0, 2 ** 47 - 1)
+    upload_id = rng.randint(0, 2 ** 47 - 1)
     s = os.stat(src)
     block_ids = []
     max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)

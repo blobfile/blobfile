@@ -57,6 +57,8 @@ COMMON_ERROR_SUBSTRINGS = [
     "('Connection aborted.',",
 ]
 
+rng = random.SystemRandom()
+
 
 def exponential_sleep_generator(
     initial: float = BACKOFF_INITIAL,
@@ -68,7 +70,7 @@ def exponential_sleep_generator(
     base = initial
     while True:
         # https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
-        yield base * random.random()
+        yield base * rng.random()
         base *= multiplier
         if base > maximum:
             base = maximum

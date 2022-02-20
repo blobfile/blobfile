@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import binascii
+import stat as stat_module
+import re
+import shutil
 import collections
 import concurrent.futures
 import contextlib
@@ -205,7 +208,7 @@ class Context:
         if _is_local_path(pattern):
             # scanglob currently does an os.stat for each matched file
             # until scanglob can be implemented directly on scandir
-            # this code is here to not
+            # this code is here to avoid that
             if "?" in pattern or "[" in pattern or "]" in pattern:
                 raise Error("Advanced glob queries are not supported")
             yield from _local_glob(pattern)
@@ -1201,17 +1204,17 @@ def _expand_implicit_dirs(root: str, it: Iterator[DirEntry]) -> Iterator[DirEntr
         previous_path = entry_slash_path
 
 
-def _compile_pattern(s: str):
+def _compile_pattern(s: str, sep: str = "/"):
     tokens = [t for t in re.split("([*]+)", s) if t != ""]
     regexp = ""
     for tok in tokens:
         if tok == "*":
-            regexp += r"[^/]*"
+            regexp += f"[^{sep}]*"
         elif tok == "**":
-            regexp += r".*"
+            regexp += ".*"
         else:
             regexp += re.escape(tok)
-    return re.compile(regexp + r"/?$")
+    return re.compile(regexp + f"{sep}?$")
 
 
 def _glob_full(conf: Config, pattern: str) -> Iterator[DirEntry]:
@@ -1291,11 +1294,48 @@ def _glob_worker(
 
 
 def _local_glob(pattern: str) -> Iterator[str]:
-    for filepath in local_glob.iglob(pattern, recursive=True):
-        filepath = os.path.normpath(filepath)
-        if filepath.endswith(os.sep):
-            filepath = filepath[:-1]
-        yield filepath
+    normalized_pattern = os.path.normpath(pattern)
+    if pattern.endswith("/") or pattern.endswith("\\"):
+        # normpath will remove a trailing separator
+        # but these affect the output of the glob
+        normalized_pattern += os.sep
+
+    if "*" in normalized_pattern:
+        prefix = normalized_pattern.split("*")[0]
+        if prefix.endswith(os.sep):
+            base_dir = os.path.abspath(prefix)
+            if not base_dir.endswith(os.sep):
+                # if base_dir is the root directory it will already have a separator
+                base_dir += os.sep
+            pattern_suffix = normalized_pattern[len(prefix) :]
+        else:
+            dirpath = os.path.dirname(prefix)
+            base_dir = os.path.abspath(dirpath)
+            # prefix   dirpath  pattern_suffix
+            #   /a/b   /a       /b
+            #   a/c    a        /c
+            #   b      ""       ""
+            #   ""     ""       ""
+            if len(dirpath) == 0:
+                pattern_suffix = os.sep + normalized_pattern
+            else:
+                pattern_suffix = normalized_pattern[len(dirpath) :]
+        full_pattern = base_dir + pattern_suffix
+        regexp = _compile_pattern(full_pattern, sep=os.sep)
+        for root, dirnames, filenames in os.walk(base_dir):
+            paths = [os.path.join(root, dirname + os.sep) for dirname in dirnames]
+            paths += [os.path.join(root, filename) for filename in filenames]
+            for path in paths:
+                if re.match(regexp, path):
+                    if path.endswith(os.sep):
+                        path = path[:-1]
+                    yield path
+    else:
+        path = os.path.abspath(pattern)
+        if os.path.exists(path):
+            if path.endswith(os.sep):
+                path = path[:-1]
+            yield path
 
 
 def _strip_slash(path: str) -> str:

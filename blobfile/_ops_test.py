@@ -641,6 +641,49 @@ def test_walk(ctx, topdown):
         assert list(bf.walk(dirpath, topdown=topdown)) == expected
 
 
+@pytest.mark.parametrize("ctx", [_get_temp_local_path])
+def test_local_glob(ctx):
+    contents = b"meow!"
+    with ctx() as path:
+        dirpath = bf.dirname(path)
+        a_path = bf.join(dirpath, "ab")
+        with bf.BlobFile(a_path, "wb") as w:
+            w.write(contents)
+        b_path = bf.join(dirpath, "bb")
+        with bf.BlobFile(b_path, "wb") as w:
+            w.write(contents)
+
+        def assert_listing_equal(path, desired):
+            desired = sorted([bf.join(dirpath, p) for p in desired])
+            actual = sorted(list(bf.glob(path)))
+            assert actual == desired, f"{actual} != {desired}"
+
+        # example patterns (didn't add tests for all these)
+        # /a/b*c
+        # /a/*b
+        # /a/c*
+        # /a/*
+        # /a/*/
+        # /a/b*c/d
+        # a/b*c
+        # a/*b
+        # a/c*
+        # a/b*c/d
+        # b*c
+        # *c
+        # b*
+        # *
+        # */
+        # */a
+        with chdir(dirpath):
+            assert_listing_equal("ab", ["ab"])
+            assert_listing_equal("*b", ["ab", "bb"])
+            assert_listing_equal("a*", ["ab"])
+            assert_listing_equal("ab*", ["ab"])
+            assert_listing_equal("*", ["ab", "bb"])
+            assert_listing_equal("bb", ["bb"])
+
+
 @pytest.mark.parametrize(
     "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
 )
@@ -683,14 +726,23 @@ def test_glob(ctx, parallel):
 
         assert_listing_equal(bf.join(dirpath, "*/test.txt"), ["subdir/test.txt"])
         assert_listing_equal(bf.join(dirpath, "*/*.txt"), ["subdir/test.txt"])
-        if "://" in path:
-            # local glob doesn't handle ** the same way as remote glob
-            assert_listing_equal(
-                bf.join(dirpath, "**.txt"),
-                ["test.txt", "subdir/test.txt", "subdir/subsubdir/test.txt"],
-            )
-        else:
-            assert_listing_equal(bf.join(dirpath, "**.txt"), ["test.txt"])
+        assert_listing_equal(
+            bf.join(dirpath, "**.txt"),
+            ["test.txt", "subdir/test.txt", "subdir/subsubdir/test.txt"],
+        )
+        assert_listing_equal(
+            bf.join(dirpath, "sub**.txt"),
+            ["subdir/test.txt", "subdir/subsubdir/test.txt"],
+        )
+        assert_listing_equal(
+            bf.join(dirpath, "subdir/**.txt"),
+            ["subdir/test.txt", "subdir/subsubdir/test.txt"],
+        )
+        assert_listing_equal(
+            bf.join(dirpath, "**/*.txt"),
+            ["subdir/test.txt", "subdir/subsubdir/test.txt"],
+        )
+
         assert_listing_equal(bf.join(dirpath, "*/test"), [])
         assert_listing_equal(bf.join(dirpath, "subdir/test.txt"), ["subdir/test.txt"])
 

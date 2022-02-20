@@ -7,6 +7,8 @@
 * add `save_access_token_to_disk` to save local access tokens locally
 * fix bug preventing parallel copy of empty file
 * calculate md5 for individual uploaded blocks
+* more consistent glob behavior on local paths
+* don't use global random state
 
 ## 1.2.8
 

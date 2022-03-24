@@ -30,6 +30,7 @@ from typing import (
     TextIO,
     BinaryIO,
     cast,
+    overload,
     NamedTuple,
     List,
     Union,
@@ -789,6 +790,28 @@ class Context:
             with self.BlobFile(path, "rb") as f:
                 return common.block_md5(f).hex()
 
+    @overload
+    def BlobFile(
+        self,
+        path: str,
+        mode: Literal["rb", "wb", "ab"],
+        streaming: Optional[bool] = ...,
+        buffer_size: int = ...,
+        cache_dir: Optional[str] = ...,
+        file_size: Optional[int] = None,
+    ) -> BinaryIO:
+        ...
+    @overload
+    def BlobFile(
+        self,
+        path: str,
+        mode: Literal["r", "w", "a"] = ...,
+        streaming: Optional[bool] = ...,
+        buffer_size: int = ...,
+        cache_dir: Optional[str] = ...,
+        file_size: Optional[int] = None,
+    ) -> TextIO:
+        ...
     def BlobFile(
         self,
         path: str,

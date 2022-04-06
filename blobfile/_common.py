@@ -1,15 +1,16 @@
 import hashlib
 import io
 import json
+import os
+import platform
 import random
+import socket
+import ssl
+import threading
 import time
 import urllib
-import os
-import threading
-import ssl
-import socket
-import platform
 from typing import (
+    Any,
     Callable,
     Dict,
     Iterator,
@@ -17,11 +18,11 @@ from typing import (
     Mapping,
     NamedTuple,
     Optional,
-    Any,
     Sequence,
     Tuple,
 )
 
+import filelock
 import urllib3
 import xmltodict
 
@@ -54,6 +55,9 @@ COMMON_ERROR_SUBSTRINGS = [
     "[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]",
     "('Connection aborted.',",
 ]
+
+ACCESS_TOKEN_FILE = "~/.blobfile/azure_access_tokens.jsonl"
+ACCESS_TOKEN_LOCK_FILE = "~/.blobfile/azure_access_tokens.lock"
 
 
 def exponential_sleep_generator(
@@ -149,7 +153,7 @@ def _extract_error(data: bytes) -> Tuple[Optional[str], Optional[str]]:
 
 
 def _extract_error_from_response(
-    response: urllib3.HTTPResponse
+    response: urllib3.HTTPResponse,
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     err = None
     err_desc = None
@@ -654,21 +658,68 @@ class TokenManager:
     """
 
     def __init__(
-        self, get_token_fn: Callable[[Config, Any], Tuple[Any, float]]
+        self,
+        get_token_fn: Callable[[Config, Any], Tuple[Any, float]],
+        save_to_disk: bool = True,
     ) -> None:
         self._get_token_fn = get_token_fn
         self._tokens = {}
         self._expirations = {}
         self._lock = threading.Lock()
+        self._save_to_disk = save_to_disk
+
+        if save_to_disk:
+            access_tokens_path = os.path.expanduser(ACCESS_TOKEN_FILE)
+            if os.path.exists(access_tokens_path):
+                with open(access_tokens_path) as f:
+                    tokens = json.load(f)
+                    self._tokens = tokens["keys"]
+                    self._expirations = tokens["expirations"]
 
     def get_token(self, conf: Config, key: Any) -> Any:
         with self._lock:
             now = time.time()
             expiration = self._expirations.get(key)
             if expiration is None or (now + EARLY_EXPIRATION_SECONDS) > expiration:
-                self._tokens[key], self._expirations[key] = self._get_token_fn(
-                    conf, key
-                )
+                if self._save_to_disk:
+                    # Grab the acess file, see if we've already updated
+                    access_tokens_path = os.path.expanduser(ACCESS_TOKEN_FILE)
+                    if os.path.exists(access_tokens_path):
+                        with open(access_tokens_path) as f:
+                            tokens = json.load(f)
+                            self._tokens = tokens["keys"]
+                            self._expirations = tokens["expirations"]
+                    # See if an update already occurred
+                    expiration = self._expirations.get(key)
+                    if (
+                        expiration is None
+                        or (now + EARLY_EXPIRATION_SECONDS) > expiration
+                    ):
+                        # If not, get a new token and update the access file
+                        self._tokens[key], self._expirations[key] = self._get_token_fn(
+                            conf, key
+                        )
+                        lock = filelock.FileLock(
+                            os.path.expanduser(ACCESS_TOKEN_LOCK_FILE), timeout=1
+                        )
+                        try:
+                            with lock.acquire():
+                                with open(access_tokens_path, "w") as f:
+                                    json.dumps(
+                                        {
+                                            "keys": self._tokens,
+                                            "expirations": self._expirations,
+                                        },
+                                        f,
+                                    )
+                        except Timeout:
+                            print(
+                                "Another instance of this application currently holds the lock."
+                            )
+                else:
+                    self._tokens[key], self._expirations[key] = self._get_token_fn(
+                        conf, key
+                    )
                 assert self._expirations[key] is not None
 
             assert key in self._tokens

@@ -652,6 +652,29 @@ def execute_request(
     assert False, "unreachable"
 
 
+class TupleEncoder(json.JSONEncoder):
+    def encode(self, obj):
+        def hint_tuples(item):
+            print(item)
+            if isinstance(item, tuple):
+                return {"__tuple__": True, "items": item}
+            if isinstance(item, list):
+                return [hint_tuples(e) for e in item]
+            if isinstance(item, dict):
+                return {key: hint_tuples(value) for key, value in item.items()}
+            else:
+                return item
+
+        return super(TupleEncoder, self).encode(hint_tuples(obj))
+
+
+def hinted_tuple_hook(obj):
+    if "__tuple__" in obj:
+        return tuple(obj["items"])
+    else:
+        return obj
+
+
 class TokenManager:
     """
     Automatically refresh tokens when they expire
@@ -669,12 +692,48 @@ class TokenManager:
         self._save_to_disk = save_to_disk
 
         if save_to_disk:
-            access_tokens_path = os.path.expanduser(ACCESS_TOKEN_FILE)
-            if os.path.exists(access_tokens_path):
-                with open(access_tokens_path) as f:
-                    tokens = json.load(f)
-                    self._tokens = tokens["keys"]
-                    self._expirations = tokens["expirations"]
+            self._load_token_file()
+
+    def _load_token_file(self):
+        access_tokens_path = os.path.expanduser(ACCESS_TOKEN_FILE)
+        if os.path.exists(access_tokens_path):
+            with open(access_tokens_path) as f:
+                tokens = json.load(f, object_hook=hinted_tuple_hook)
+                for key, value in zip(tokens["token_keys"], tokens["token_values"]):
+                    self._tokens[key] = value
+                for key, value in zip(
+                    tokens["expiration_keys"], tokens["expiration_values"]
+                ):
+                    self._expirations[key] = value
+
+    def _save_token_file(self):
+        access_token_lock_path = os.path.expanduser(ACCESS_TOKEN_LOCK_FILE)
+        access_tokens_path = os.path.expanduser(ACCESS_TOKEN_FILE)
+
+        if not os.path.exists(access_token_lock_path):
+            os.makedirs(os.path.dirname(access_token_lock_path), exist_ok=True)
+            with open(access_token_lock_path, "w") as f:
+                f.write("")
+        lock = filelock.FileLock(access_token_lock_path, timeout=1)
+
+        try:
+            with lock:
+                if not os.path.exists(access_tokens_path):
+                    os.makedirs(os.path.dirname(access_tokens_path), exist_ok=True)
+                with open(access_tokens_path, "w") as f:
+                    f.write(
+                        TupleEncoder().encode(
+                            {
+                                "token_keys": list(self._tokens.keys()),
+                                "token_values": list(self._tokens.values()),
+                                "expiration_keys": list(self._expirations.keys()),
+                                "expiration_values": list(self._expirations.values()),
+                            },
+                        )
+                    )
+
+        except Timeout:
+            print("Another instance of this application currently holds the lock.")
 
     def get_token(self, conf: Config, key: Any) -> Any:
         with self._lock:
@@ -683,12 +742,7 @@ class TokenManager:
             if expiration is None or (now + EARLY_EXPIRATION_SECONDS) > expiration:
                 if self._save_to_disk:
                     # Grab the acess file, see if we've already updated
-                    access_tokens_path = os.path.expanduser(ACCESS_TOKEN_FILE)
-                    if os.path.exists(access_tokens_path):
-                        with open(access_tokens_path) as f:
-                            tokens = json.load(f)
-                            self._tokens = tokens["keys"]
-                            self._expirations = tokens["expirations"]
+                    self._load_token_file()
                     # See if an update already occurred
                     expiration = self._expirations.get(key)
                     if (
@@ -699,23 +753,9 @@ class TokenManager:
                         self._tokens[key], self._expirations[key] = self._get_token_fn(
                             conf, key
                         )
-                        lock = filelock.FileLock(
-                            os.path.expanduser(ACCESS_TOKEN_LOCK_FILE), timeout=1
-                        )
-                        try:
-                            with lock.acquire():
-                                with open(access_tokens_path, "w") as f:
-                                    json.dumps(
-                                        {
-                                            "keys": self._tokens,
-                                            "expirations": self._expirations,
-                                        },
-                                        f,
-                                    )
-                        except Timeout:
-                            print(
-                                "Another instance of this application currently holds the lock."
-                            )
+
+                        self._save_token_file()
+
                 else:
                     self._tokens[key], self._expirations[key] = self._get_token_fn(
                         conf, key

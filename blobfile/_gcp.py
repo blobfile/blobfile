@@ -1,38 +1,38 @@
-import urllib.parse
-import json
 import base64
-import os
-import time
-import platform
+import binascii
+import concurrent.futures
 import datetime
 import hashlib
-import socket
-import binascii
+import json
 import math
-import concurrent.futures
-from typing import Mapping, Dict, Any, Optional, Tuple, List, Iterator
+import os
+import platform
+import socket
+import time
+import urllib.parse
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
-from Cryptodome.Signature import pkcs1_15
+import urllib3
 from Cryptodome.Hash import SHA256
 from Cryptodome.PublicKey import RSA
-import urllib3
+from Cryptodome.Signature import pkcs1_15
 
 from blobfile import _common as common
 from blobfile._common import (
-    Request,
-    Error,
-    Stat,
     GCP_BASE_URL,
-    Config,
-    TokenManager,
-    RequestFailure,
-    RestartableStreamingWriteFailure,
     BaseStreamingReadFile,
     BaseStreamingWriteFile,
-    FileBody,
+    Config,
     DirEntry,
-    strip_slashes,
+    Error,
+    FileBody,
+    Request,
+    RequestFailure,
+    RestartableStreamingWriteFailure,
+    Stat,
+    TokenManager,
     path_join,
+    strip_slashes,
 )
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
@@ -810,4 +810,4 @@ def join_paths(conf: Config, a: str, b: str) -> str:
     return combine_path(bucket, obj)
 
 
-access_token_manager = TokenManager(_get_access_token)
+access_token_manager = TokenManager(_get_access_token, "gcp")

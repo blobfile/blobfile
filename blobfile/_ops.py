@@ -1,19 +1,20 @@
 # https://mypy.readthedocs.io/en/stable/common_issues.html#using-classes-that-are-generic-in-stubs-but-not-at-runtime
 from __future__ import annotations
 
-import urllib3
 import concurrent.futures
 from typing import (
-    overload,
-    Optional,
-    Tuple,
-    Callable,
-    Sequence,
-    Iterator,
-    TextIO,
-    BinaryIO,
     TYPE_CHECKING,
+    BinaryIO,
+    Callable,
+    Iterator,
+    Optional,
+    Sequence,
+    TextIO,
+    Tuple,
+    overload,
 )
+
+import urllib3
 
 if TYPE_CHECKING:
     # Literal is only in the stdlib in Python 3.8+
@@ -23,22 +24,20 @@ if TYPE_CHECKING:
     # c) type checkers always know what typing_extensions is
     from typing_extensions import Literal
 
-
-from blobfile._common import Stat, DirEntry
+from blobfile._common import DirEntry, Stat
 from blobfile._context import (
-    DEFAULT_CONNECTION_POOL_MAX_SIZE,
-    DEFAULT_MAX_CONNECTION_POOL_COUNT,
     DEFAULT_AZURE_WRITE_CHUNK_SIZE,
-    DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
-    DEFAULT_RETRY_LOG_THRESHOLD,
-    DEFAULT_RETRY_COMMON_LOG_THRESHOLD,
-    DEFAULT_CONNECT_TIMEOUT,
-    DEFAULT_READ_TIMEOUT,
     DEFAULT_BUFFER_SIZE,
+    DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_CONNECTION_POOL_MAX_SIZE,
+    DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
+    DEFAULT_MAX_CONNECTION_POOL_COUNT,
+    DEFAULT_READ_TIMEOUT,
+    DEFAULT_RETRY_COMMON_LOG_THRESHOLD,
+    DEFAULT_RETRY_LOG_THRESHOLD,
     create_context,
     default_log_fn,
 )
-
 
 default_context = create_context()
 
@@ -62,6 +61,7 @@ def configure(
     get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
     use_streaming_read: bool = False,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
+    save_access_token_to_disk: bool = True,
 ) -> None:
     """
     log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout
@@ -93,6 +93,7 @@ def configure(
         get_http_pool=get_http_pool,
         use_streaming_read=use_streaming_read,
         default_buffer_size=default_buffer_size,
+        save_access_token_to_disk=save_access_token_to_disk,
     )
 
 

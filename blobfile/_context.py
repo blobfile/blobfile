@@ -1,41 +1,42 @@
 # https://mypy.readthedocs.io/en/stable/common_issues.html#using-classes-that-are-generic-in-stubs-but-not-at-runtime
 from __future__ import annotations
-import contextlib
 
-import os
-import tempfile
+import binascii
+import collections
+import concurrent.futures
+import contextlib
+import glob as local_glob
 import hashlib
 import io
-import urllib.parse
-import time
-import binascii
-import stat as stat_module
-import glob as local_glob
-import re
-import shutil
-import collections
 import itertools
 import math
-import urllib3
-import concurrent.futures
 import multiprocessing as mp
+import os
+import re
+import shutil
+import stat as stat_module
+import tempfile
+import time
+import urllib.parse
 from types import ModuleType
 from typing import (
+    TYPE_CHECKING,
     Any,
-    Optional,
-    Tuple,
-    Callable,
-    Sequence,
-    Iterator,
-    TextIO,
     BinaryIO,
+    Callable,
+    Iterator,
+    List,
+    NamedTuple,
+    Optional,
+    Sequence,
+    TextIO,
+    Tuple,
+    Union,
     cast,
     overload,
-    NamedTuple,
-    List,
-    Union,
-    TYPE_CHECKING,
 )
+
+import urllib3
 
 if TYPE_CHECKING:
     # Literal is only in the stdlib in Python 3.8+
@@ -45,21 +46,22 @@ if TYPE_CHECKING:
     # c) type checkers always know what typing_extensions is
     from typing_extensions import Literal
 
-
 import filelock
 
-from blobfile import _gcp as gcp, _azure as azure, _common as common
+from blobfile import _azure as azure
+from blobfile import _common as common
+from blobfile import _gcp as gcp
 from blobfile._common import (
-    Request,
-    Error,
-    RestartableStreamingWriteFailure,
-    Stat,
-    DirEntry,
-    Config,
     CHUNK_SIZE,
-    get_log_threshold_for_error,
     DEFAULT_CONNECTION_POOL_MAX_SIZE,
     DEFAULT_MAX_CONNECTION_POOL_COUNT,
+    Config,
+    DirEntry,
+    Error,
+    Request,
+    RestartableStreamingWriteFailure,
+    Stat,
+    get_log_threshold_for_error,
 )
 
 # https://cloud.google.com/storage/docs/naming
@@ -801,6 +803,7 @@ class Context:
         file_size: Optional[int] = None,
     ) -> BinaryIO:
         ...
+
     @overload
     def BlobFile(
         self,
@@ -812,6 +815,7 @@ class Context:
         file_size: Optional[int] = None,
     ) -> TextIO:
         ...
+
     def BlobFile(
         self,
         path: str,
@@ -1458,6 +1462,7 @@ def create_context(
     use_streaming_read: bool = False,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
     get_deadline: Optional[Callable[[], float]] = None,
+    save_access_token_to_disk: bool = True,
 ):
     """
     Same argument as configure(), but returns a Context object that has all the blobfile methods on it.
@@ -1479,5 +1484,6 @@ def create_context(
         use_streaming_read=use_streaming_read,
         default_buffer_size=default_buffer_size,
         get_deadline=get_deadline,
+        save_access_token_to_disk=save_access_token_to_disk,
     )
     return Context(conf=conf)

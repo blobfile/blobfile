@@ -704,8 +704,6 @@ class TokenManager:
 
     def _save_token_file(self, log_callback: Callable[[str], None]):
         os.makedirs(os.path.dirname(self._access_lock_file), exist_ok=True)
-        with open(self._access_lock_file, "w") as f:
-            f.write("")
 
         try:
             with filelock.FileLock(self._access_lock_file, timeout=1):

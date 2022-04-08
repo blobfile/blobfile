@@ -4,6 +4,7 @@
 
 * `parallel` option to `rmtree`
 * fix trailing semicolon with `bf.join`
+* add `save_access_token_to_disk` to save local access tokens locally
 
 ## 1.2.8
 

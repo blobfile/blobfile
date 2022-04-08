@@ -1,15 +1,17 @@
 import hashlib
 import io
 import json
+import os
+import platform
 import random
+import socket
+import ssl
+import tempfile
+import threading
 import time
 import urllib
-import os
-import threading
-import ssl
-import socket
-import platform
 from typing import (
+    Any,
     Callable,
     Dict,
     Iterator,
@@ -17,11 +19,11 @@ from typing import (
     Mapping,
     NamedTuple,
     Optional,
-    Any,
     Sequence,
     Tuple,
 )
 
+import filelock
 import urllib3
 import xmltodict
 
@@ -149,7 +151,7 @@ def _extract_error(data: bytes) -> Tuple[Optional[str], Optional[str]]:
 
 
 def _extract_error_from_response(
-    response: urllib3.HTTPResponse
+    response: urllib3.HTTPResponse,
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     err = None
     err_desc = None
@@ -353,6 +355,7 @@ class Config:
         use_streaming_read: bool,
         default_buffer_size: int,
         get_deadline: Optional[Callable[[], float]],
+        save_access_token_to_disk: bool,
     ) -> None:
         self.log_callback = log_callback
         self.connection_pool_max_size = connection_pool_max_size
@@ -371,6 +374,7 @@ class Config:
         self.use_streaming_read = use_streaming_read
         self.default_buffer_size = default_buffer_size
         self.get_deadline = get_deadline
+        self.save_access_token_to_disk = save_access_token_to_disk
 
         if get_http_pool is None:
             if (
@@ -648,27 +652,108 @@ def execute_request(
     assert False, "unreachable"
 
 
+class TupleEncoder(json.JSONEncoder):
+    def encode(self, obj):
+        def hint_tuples(item):
+            if isinstance(item, tuple):
+                return {"__tuple__": True, "items": item}
+            if isinstance(item, list):
+                return [hint_tuples(e) for e in item]
+            if isinstance(item, dict):
+                return {key: hint_tuples(value) for key, value in item.items()}
+            else:
+                return item
+
+        return super(TupleEncoder, self).encode(hint_tuples(obj))
+
+
+def hinted_tuple_hook(obj):
+    if "__tuple__" in obj:
+        return tuple(obj["items"])
+    else:
+        return obj
+
+
 class TokenManager:
     """
     Automatically refresh tokens when they expire
     """
 
     def __init__(
-        self, get_token_fn: Callable[[Config, Any], Tuple[Any, float]]
+        self,
+        get_token_fn: Callable[[Config, Any], Tuple[Any, float]],
+        name: str,
     ) -> None:
         self._get_token_fn = get_token_fn
         self._tokens = {}
         self._expirations = {}
         self._lock = threading.Lock()
+        self._access_lock_file = os.path.expanduser(f"~/.blobfile/{name}_tokens.lock")
+        self._access_token_file = os.path.expanduser(f"~/.blobfile/{name}_tokens.json")
+
+    def _load_token_file(self):
+        if os.path.exists(self._access_token_file):
+            with open(self._access_token_file) as f:
+                tokens = json.load(f, object_hook=hinted_tuple_hook)
+                for key, value in zip(tokens["token_keys"], tokens["token_values"]):
+                    self._tokens[key] = value
+                for key, value in zip(
+                    tokens["expiration_keys"], tokens["expiration_values"]
+                ):
+                    self._expirations[key] = value
+
+    def _save_token_file(self, log_callback: Callable[[str], None]):
+        os.makedirs(os.path.dirname(self._access_lock_file), exist_ok=True)
+
+        try:
+            with filelock.FileLock(self._access_lock_file, timeout=1):
+                os.makedirs(os.path.dirname(self._access_token_file), exist_ok=True)
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    tmp_path = os.path.join(tmpdir, "token.json")
+                    with open(tmp_path, "w") as f:
+                        f.write(
+                            TupleEncoder().encode(
+                                {
+                                    "token_keys": list(self._tokens.keys()),
+                                    "token_values": list(self._tokens.values()),
+                                    "expiration_keys": list(self._expirations.keys()),
+                                    "expiration_values": list(
+                                        self._expirations.values()
+                                    ),
+                                },
+                            )
+                        )
+                    os.replace(tmp_path, self._access_token_file)
+        except filelock.Timeout:
+            log_callback(
+                "Another instance of this application currently holds the lock."
+            )
 
     def get_token(self, conf: Config, key: Any) -> Any:
         with self._lock:
             now = time.time()
             expiration = self._expirations.get(key)
             if expiration is None or (now + EARLY_EXPIRATION_SECONDS) > expiration:
-                self._tokens[key], self._expirations[key] = self._get_token_fn(
-                    conf, key
-                )
+                if conf.save_access_token_to_disk:
+                    # Grab the acess file, see if we've already updated
+                    self._load_token_file()
+                    # See if an update already occurred
+                    expiration = self._expirations.get(key)
+                    if (
+                        expiration is None
+                        or (now + EARLY_EXPIRATION_SECONDS) > expiration
+                    ):
+                        # If not, get a new token and update the access file
+                        self._tokens[key], self._expirations[key] = self._get_token_fn(
+                            conf, key
+                        )
+
+                        self._save_token_file(conf.log_callback)
+
+                else:
+                    self._tokens[key], self._expirations[key] = self._get_token_fn(
+                        conf, key
+                    )
                 assert self._expirations[key] is not None
 
             assert key in self._tokens

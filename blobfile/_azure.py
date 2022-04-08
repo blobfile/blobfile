@@ -1,39 +1,39 @@
-import binascii
-import hashlib
-import random
-import urllib.parse
-import os
-import json
-import hmac
 import base64
-import time
+import binascii
 import calendar
-import datetime
-import re
-import math
 import concurrent.futures
-from typing import Any, Mapping, Dict, Optional, Tuple, Sequence, List, Iterator
+import datetime
+import hashlib
+import hmac
+import json
+import math
+import os
+import random
+import re
+import time
+import urllib.parse
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
-import xmltodict
 import urllib3
+import xmltodict
 
 from blobfile import _common as common
 from blobfile._common import (
-    Request,
-    Error,
-    Stat,
-    Config,
+    DEFAULT_RETRY_CODES,
     INVALID_HOSTNAME_STATUS,
-    TokenManager,
-    ConcurrentWriteFailure,
-    RequestFailure,
     BaseStreamingReadFile,
     BaseStreamingWriteFile,
-    FileBody,
+    ConcurrentWriteFailure,
+    Config,
     DirEntry,
-    strip_slashes,
+    Error,
+    FileBody,
+    Request,
+    RequestFailure,
+    Stat,
+    TokenManager,
     path_join,
-    DEFAULT_RETRY_CODES,
+    strip_slashes,
 )
 
 SHARED_KEY = "shared_key"
@@ -1484,6 +1484,6 @@ def join_paths(conf: Config, a: str, b: str) -> str:
     return combine_path(conf, account, container, obj)
 
 
-access_token_manager = TokenManager(_get_access_token)
+access_token_manager = TokenManager(_get_access_token, "azure_access")
 
-sas_token_manager = TokenManager(_get_sas_token)
+sas_token_manager = TokenManager(_get_sas_token, "azure_sas")

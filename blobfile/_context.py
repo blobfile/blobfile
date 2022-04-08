@@ -1462,7 +1462,7 @@ def create_context(
     use_streaming_read: bool = False,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
     get_deadline: Optional[Callable[[], float]] = None,
-    save_access_token_to_disk: bool = True,
+    save_access_token_to_disk: bool = False,
 ):
     """
     Same argument as configure(), but returns a Context object that has all the blobfile methods on it.

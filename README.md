@@ -82,7 +82,7 @@ There are a few bonus functions:
     * `get_http_pool=None`: a function that returns a `urllib3.PoolManager` to be used for requests
     * `use_streaming_read=True`: if set to `False`, read a chunk at a time instead of streaming them
     * `default_buffer_size=io.DEFAULT_BUFFER_SIZE`: the default buffer size to use for reading files (and writing local files)
-    * `save_access_token_to_disk=True`: Whether or not to save access tokens to disk.  Other processes can read the access tokens to avoid the 250ms it usually takes to get a token.
+    * `save_access_token_to_disk=False`: Whether or not to save access tokens to disk.  Other processes can read the access tokens to avoid the 250ms it usually takes to get a token.
 * `create_context` - (same arguments as `configure`), creates a new instance of `blobfile` with a custom configuration instead of modifying the global configuration
 
 ## Authentication

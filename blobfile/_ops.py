@@ -61,7 +61,7 @@ def configure(
     get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
     use_streaming_read: bool = False,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
-    save_access_token_to_disk: bool = True,
+    save_access_token_to_disk: bool = False,
 ) -> None:
     """
     log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout

@@ -1,9 +1,3 @@
-import binascii
-import hashlib
-import urllib.parse
-import os
-import json
-import hmac
 import base64
 import binascii
 import calendar
@@ -14,7 +8,6 @@ import hmac
 import json
 import math
 import os
-import random
 import re
 import time
 import urllib.parse
@@ -40,7 +33,6 @@ from blobfile._common import (
     TokenManager,
     path_join,
     strip_slashes,
-    DEFAULT_RETRY_CODES,
     rng,
 )
 

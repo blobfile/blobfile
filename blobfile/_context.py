@@ -3,12 +3,9 @@ from __future__ import annotations
 
 import binascii
 import stat as stat_module
-import re
-import shutil
 import collections
 import concurrent.futures
 import contextlib
-import glob as local_glob
 import hashlib
 import io
 import itertools
@@ -150,7 +147,7 @@ class Context:
                 ) as dst_f:
                     m = hashlib.md5()
                     while True:
-                        block = cast(bytes, src_f.read(CHUNK_SIZE))
+                        block = src_f.read(CHUNK_SIZE)
                         if block == b"":
                             break
                         if return_md5:

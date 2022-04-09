@@ -682,9 +682,7 @@ class TokenManager:
     """
 
     def __init__(
-        self,
-        get_token_fn: Callable[[Config, Any], Tuple[Any, float]],
-        name: str,
+        self, get_token_fn: Callable[[Config, Any], Tuple[Any, float]], name: str
     ) -> None:
         self._get_token_fn = get_token_fn
         self._tokens = {}
@@ -722,7 +720,7 @@ class TokenManager:
                                     "expiration_values": list(
                                         self._expirations.values()
                                     ),
-                                },
+                                }
                             )
                         )
                     os.replace(tmp_path, self._access_token_file)

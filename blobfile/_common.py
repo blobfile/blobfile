@@ -21,6 +21,7 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    cast,
 )
 
 import filelock
@@ -655,8 +656,8 @@ def execute_request(
 
 
 class TupleEncoder(json.JSONEncoder):
-    def encode(self, obj):
-        def hint_tuples(item):
+    def encode(self, o: Any) -> Any:
+        def hint_tuples(item: Any) -> Any:
             if isinstance(item, tuple):
                 return {"__tuple__": True, "items": item}
             if isinstance(item, list):
@@ -666,10 +667,10 @@ class TupleEncoder(json.JSONEncoder):
             else:
                 return item
 
-        return super(TupleEncoder, self).encode(hint_tuples(obj))
+        return super(TupleEncoder, self).encode(hint_tuples(o))
 
 
-def hinted_tuple_hook(obj):
+def hinted_tuple_hook(obj: Any) -> Any:
     if "__tuple__" in obj:
         return tuple(obj["items"])
     else:
@@ -709,7 +710,7 @@ class TokenManager:
             with filelock.FileLock(self._access_lock_file, timeout=1):
                 os.makedirs(os.path.dirname(self._access_token_file), exist_ok=True)
                 with tempfile.TemporaryDirectory() as tmpdir:
-                    tmp_path = os.path.join(tmpdir, "token.json")
+                    tmp_path = os.path.join(cast(str, tmpdir), "token.json")
                     with open(tmp_path, "w") as f:
                         f.write(
                             TupleEncoder().encode(
@@ -724,7 +725,7 @@ class TokenManager:
                             )
                         )
                     os.replace(tmp_path, self._access_token_file)
-        except filelock.Timeout:
+        except filelock.Timeout:  # type: ignore
             log_callback(
                 "Another instance of this application currently holds the lock."
             )

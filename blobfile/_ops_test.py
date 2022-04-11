@@ -131,6 +131,7 @@ def _write_contents(path, contents):
                     "storage",
                     "blob",
                     "upload",
+                    "--overwrite",
                     "--account-name",
                     account,
                     "--container-name",

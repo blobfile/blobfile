@@ -850,7 +850,7 @@ def _finalize_blob(
         headers={"x-ms-blob-content-md5": base64.b64encode(md5_digest).decode("utf8")},
         params=dict(comp="blocklist"),
         data=body,
-        success_codes=(201, 400),
+        success_codes=(201, 400, 404, INVALID_HOSTNAME_STATUS),
     )
     resp = execute_api_request(conf, req)
     if resp.status == 400:
@@ -869,6 +869,9 @@ def _finalize_blob(
             raise RequestFailure.create_from_request_response(
                 message=f"unexpected status {resp.status}", request=req, response=resp
             )
+    elif resp.status == 404 or resp.status == INVALID_HOSTNAME_STATUS:
+        # this can occur when using parallel upload
+        raise FileNotFoundError(f"No such file or directory: '{path}'")
 
 
 def isdir(conf: Config, path: str) -> bool:
@@ -1144,9 +1147,12 @@ def _upload_chunk(
         # this needs to be specified since we use a file object for the data
         headers={"Content-Length": str(size)},
         data=FileBody(path, start=start, end=start + size),
-        success_codes=(201,),
+        success_codes=(201, 404, INVALID_HOSTNAME_STATUS),
     )
-    execute_api_request(conf, req)
+    resp = execute_api_request(conf, req)
+    if resp.status == 404 or resp.status == INVALID_HOSTNAME_STATUS:
+        # this can happen during parallel upload
+        raise FileNotFoundError(f"No such file or directory: '{url}'")
 
 
 def parallel_upload(
@@ -1406,7 +1412,7 @@ def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> Optional[
             ),
             method="PUT",
             headers={"x-ms-copy-source": src_url},
-            success_codes=(202, 404, 409),
+            success_codes=(202, 404, 409, INVALID_HOSTNAME_STATUS),
         )
         return create_api_request(
             req,
@@ -1428,7 +1434,16 @@ def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> Optional[
             copy_status = resp.headers["x-ms-copy-status"]
             etag = resp.headers["etag"]
             break
-        if resp.status == 404:
+        elif resp.status == INVALID_HOSTNAME_STATUS:
+            raise FileNotFoundError(
+                f"Source container or destination container not found: src='{src}' dst='{dst}'"
+            )
+        elif resp.status == 404:
+            if resp.headers["x-ms-error-code"] == "ContainerNotFound":
+                raise FileNotFoundError(
+                    f"Source container or destination container not found: src='{src}' dst='{dst}'"
+                )
+
             raise FileNotFoundError(f"Source file not found: '{src}'")
         elif resp.status == 409:
             result = xmltodict.parse(resp.data)

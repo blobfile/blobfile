@@ -897,6 +897,35 @@ def test_copy(parallel):
                 assert _read_contents(dst) == contents
 
 
+@pytest.mark.parametrize("parallel", [False, True])
+def test_copy_invalid(parallel):
+    for contents in [b"", b"meow!", b"meow!" * (2 * 2 ** 20)]:
+        with _get_temp_local_path() as local_path, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2:
+            invalid_container_as_path = bf.join(AZURE_INVALID_CONTAINER, "file.bin")
+            invalid_account_as_path = bf.join(
+                AZURE_INVALID_CONTAINER_NO_ACCOUNT, "file.bin"
+            )
+
+            _write_contents(local_path, contents)
+            bf.copy(local_path, as_path1, parallel=parallel)
+            with pytest.raises(FileNotFoundError, match=invalid_container_as_path):
+                bf.copy(local_path, invalid_container_as_path, parallel=parallel)
+            with pytest.raises(FileNotFoundError, match=invalid_account_as_path):
+                bf.copy(local_path, invalid_account_as_path, parallel=parallel)
+
+            with pytest.raises(FileNotFoundError, match=invalid_container_as_path):
+                bf.copy(as_path1, invalid_container_as_path, parallel=parallel)
+            with pytest.raises(FileNotFoundError, match=invalid_account_as_path):
+                bf.copy(as_path1, invalid_account_as_path, parallel=parallel)
+
+            with pytest.raises(FileNotFoundError, match=invalid_container_as_path):
+                bf.copy(invalid_container_as_path, as_path2, parallel=parallel)
+
+            # this fails with a RequestFailure to get the sas token
+            # with pytest.raises(FileNotFoundError, match=invalid_account_as_path):
+            # bf.copy(invalid_account_as_path, as_path2, parallel=parallel)
+
+
 # the tests already take awhile and this adds like a minute
 @pytest.mark.slow
 @pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])

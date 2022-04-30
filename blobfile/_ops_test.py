@@ -1152,6 +1152,13 @@ def test_cache_dir(ctx):
             f.write(alternative_contents)
         with bf.BlobFile(path, mode="rb", streaming=False, cache_dir=cache_dir) as f:
             assert f.read() == alternative_contents
+        with bf.BlobFile(
+            f"https://{AS_EXTERNAL_ACCOUNT}.blob.core.windows.net/publiccontainer/test_cat_no_md5.png",
+            mode="rb",
+            streaming=False,
+            cache_dir=cache_dir,
+        ) as f:
+            assert len(f.read()) > 0
 
 
 @pytest.mark.parametrize(

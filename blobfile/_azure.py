@@ -1262,7 +1262,11 @@ def maybe_update_md5(conf: Config, path: str, etag: str, hexdigest: str) -> bool
             # https://docs.microsoft.com/en-us/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations
             "If-Match": etag,
         },
-        success_codes=(200, 404, 412),
+        # for a 403, we actually maybe could have updated the md5, but we don't have permission
+        # for a 404, this could be due to this being some anonymous access container
+        # for both cases this is potentially bad because it means cache_dir won't work, it might be nice to let the user
+        # know if there's a non-spammy way to do it
+        success_codes=(200, 403, 404, 412),
     )
     resp = execute_api_request(conf, req)
     return resp.status == 200

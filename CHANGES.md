@@ -1,8 +1,14 @@
 # Changelog
 
+## 1.3.0
+
+* `parallel` option for `bf.copy` will now use a faster copy for azure when copying between two different storage accounts
+* fix a bug when reading a file from an account with read-only access and also using `cache_dir`
+* better error messages when using remote copy
+
 ## 1.2.9
 
-* `parallel` option to `rmtree`
+* `parallel` option for `rmtree`
 * fix trailing semicolon with `bf.join`
 * add `save_access_token_to_disk` to save local access tokens locally
 * fix bug preventing parallel copy of empty file

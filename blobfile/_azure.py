@@ -114,7 +114,7 @@ def _load_credentials() -> Dict[str, Any]:
         }
 
     # look for a refresh token in the az command line credentials
-    # TODO: we could also try to use any found access tokens
+    # we could also try to use any found access tokens
     msal_tokens_path = os.path.expanduser("~/.azure/msal_token_cache.json")
     if os.path.exists(msal_tokens_path):
         with open(msal_tokens_path) as f:
@@ -839,15 +839,18 @@ def _clear_uncommitted_blocks(conf: Config, url: str, metadata: Dict[str, str]) 
 
 
 def _finalize_blob(
-    conf: Config, path: str, url: str, block_ids: List[str], md5_digest: bytes
+    conf: Config, path: str, url: str, block_ids: List[str], md5_digest: Optional[bytes]
 ) -> None:
     body = {"BlockList": {"Latest": block_ids}}
+    headers = {}
+    if md5_digest is not None:
+        # azure does not calculate md5s for us, we have to do that manually
+        # https://web.archive.org/web/20190118183153/https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
+        headers["x-ms-blob-content-md5"] = base64.b64encode(md5_digest).decode("utf8")
     req = Request(
         url=url,
         method="PUT",
-        # azure does not calculate md5s for us, we have to do that manually
-        # https://web.archive.org/web/20190118183153/https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
-        headers={"x-ms-blob-content-md5": base64.b64encode(md5_digest).decode("utf8")},
+        headers=headers,
         params=dict(comp="blocklist"),
         data=body,
         success_codes=(201, 400, 404, INVALID_HOSTNAME_STATUS),
@@ -1501,6 +1504,120 @@ def join_paths(conf: Config, a: str, b: str) -> str:
     if obj.startswith("/"):
         obj = obj[1:]
     return combine_path(conf, account, container, obj)
+
+
+def _put_block_from_url(
+    conf: Config, src: str, start: int, size: int, dst: str, block_id: str
+) -> None:
+    src_account, src_container, src_blob = split_path(src)
+    dst_account, dst_container, dst_blob = split_path(dst)
+
+    src_url = build_url(
+        src_account, "/{container}/{blob}", container=src_container, blob=src_blob
+    )
+
+    dst_url = build_url(
+        dst_account, "/{container}/{blob}", container=dst_container, blob=dst_blob
+    )
+
+    def build_req() -> Request:
+        # the signed url can expire, so technically we should get the sas_token and build the signed url
+        # each time we build a new request
+        sas_token = sas_token_manager.get_token(
+            conf=conf, key=(src_account, src_container)
+        )
+        # if we don't get a token, it's likely we have anonymous access to the container
+        # if we do get a token, the container is likely private and we need to use
+        # a signed url as the source
+        if sas_token is None:
+            copy_src_url = src_url
+        else:
+            copy_src_url, _ = generate_signed_url(key=sas_token, url=src_url)
+        req = Request(
+            url=dst_url,
+            method="PUT",
+            params=dict(comp="block", blockid=block_id),
+            headers={
+                "Content-Length": "0",
+                "x-ms-copy-source": copy_src_url,
+                "x-ms-source-range": common.calc_range(start=start, end=start + size),
+            },
+            success_codes=(201, 404, INVALID_HOSTNAME_STATUS),
+        )
+        return create_api_request(
+            req,
+            auth=access_token_manager.get_token(
+                conf=conf, key=(dst_account, dst_container)
+            ),
+        )
+
+    resp = common.execute_request(conf, build_req)
+    if resp.status == 404:
+        raise FileNotFoundError(
+            f"Source file/container or destination container not found: src='{src}' dst='{dst}'"
+        )
+    elif resp.status == INVALID_HOSTNAME_STATUS:
+        raise FileNotFoundError(
+            f"Source container or destination container not found: src='{src}' dst='{dst}'"
+        )
+
+
+def parallel_remote_copy(
+    conf: Config,
+    executor: concurrent.futures.Executor,
+    src: str,
+    dst: str,
+    return_md5: bool,
+) -> Optional[str]:
+    # for whatever reason, put block from url is faster than copy blob when you run multiple requests in parallel
+    # https://docs.microsoft.com/en-us/rest/api/storageservices/put-block-from-url
+
+    st = maybe_stat(conf, src)
+    if st is None:
+        raise FileNotFoundError(f"The system cannot find the path specified: '{src}'")
+
+    md5_digest = None
+    if st.md5 is not None:
+        md5_digest = binascii.unhexlify(st.md5)
+    upload_id = rng.randint(0, 2 ** 47 - 1)
+    block_ids = []
+    min_block_size = st.size // BLOCK_COUNT_LIMIT
+    assert min_block_size <= MAX_BLOCK_SIZE
+    part_size = max(conf.azure_write_chunk_size, min_block_size)
+    i = 0
+    start = 0
+    futures = []
+    while start < st.size:
+        block_id = _block_index_to_block_id(i, upload_id)
+        future = executor.submit(
+            _put_block_from_url,
+            conf,
+            src,
+            start,
+            min(part_size, st.size - start),
+            dst,
+            block_id,
+        )
+        futures.append(future)
+        block_ids.append(block_id)
+        i += 1
+        start += part_size
+    for future in futures:
+        future.result()
+
+    dst_account, dst_container, dst_blob = split_path(dst)
+    dst_url = build_url(
+        dst_account, "/{container}/{blob}", container=dst_container, blob=dst_blob
+    )
+
+    _finalize_blob(
+        conf=conf, path=dst, url=dst_url, block_ids=block_ids, md5_digest=md5_digest
+    )
+    return (
+        binascii.hexlify(md5_digest).decode("utf8")
+        if (return_md5 and md5_digest is not None)
+        else None
+    )
 
 
 access_token_manager = TokenManager(_get_access_token, "azure_access")

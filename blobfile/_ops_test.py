@@ -865,7 +865,7 @@ def test_rmtree(ctx, parallel):
 
 @pytest.mark.parametrize("parallel", [False, True])
 def test_copy(parallel):
-    for contents in [b"", b"meow!"]:
+    for contents in [b"", b"meow!", b"meow!" * (2 * 2 ** 20)]:
         with _get_temp_local_path() as local_path1, _get_temp_local_path() as local_path2, _get_temp_local_path() as local_path3, _get_temp_gcs_path() as gcs_path1, _get_temp_gcs_path() as gcs_path2, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2, _get_temp_as_path(
             account=AS_TEST_ACCOUNT2, container=AS_TEST_CONTAINER2
         ) as as_path3, _get_temp_as_path() as as_path4:

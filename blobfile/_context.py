@@ -109,15 +109,6 @@ class Context:
                     f"Destination '{dst}' already exists and overwrite is disabled"
                 )
 
-        # special case cloud to cloud copy, don't download the file
-        if _is_gcp_path(src) and _is_gcp_path(dst):
-            return gcp.remote_copy(self._conf, src=src, dst=dst, return_md5=return_md5)
-
-        if _is_azure_path(src) and _is_azure_path(dst):
-            return azure.remote_copy(
-                self._conf, src=src, dst=dst, return_md5=return_md5
-            )
-
         if parallel:
             copy_fn = None
             if (_is_azure_path(src) or _is_gcp_path(src)) and _is_local_path(dst):
@@ -129,6 +120,14 @@ class Context:
             if _is_local_path(src) and _is_gcp_path(dst):
                 copy_fn = gcp.parallel_upload
 
+            if _is_azure_path(src) and _is_azure_path(dst):
+                src_account, _, _ = azure.split_path(src)
+                dst_account, _, _ = azure.split_path(dst)
+                if src_account != dst_account:
+                    # normal remote copy is pretty fast and doesn't benefit from parallelization when used within
+                    # a storage account
+                    copy_fn = azure.parallel_remote_copy
+
             if copy_fn is not None:
                 if parallel_executor is None:
                     with concurrent.futures.ProcessPoolExecutor() as executor:
@@ -139,6 +138,15 @@ class Context:
                     return copy_fn(
                         self._conf, parallel_executor, src, dst, return_md5=return_md5
                     )
+
+        # special case cloud to cloud copy, don't download the file
+        if _is_gcp_path(src) and _is_gcp_path(dst):
+            return gcp.remote_copy(self._conf, src=src, dst=dst, return_md5=return_md5)
+
+        if _is_azure_path(src) and _is_azure_path(dst):
+            return azure.remote_copy(
+                self._conf, src=src, dst=dst, return_md5=return_md5
+            )
 
         for attempt, backoff in enumerate(common.exponential_sleep_generator()):
             try:

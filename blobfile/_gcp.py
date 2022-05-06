@@ -36,6 +36,8 @@ from blobfile._common import (
 )
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
+OAUTH_TOKEN = "oauth_token"
+ANONYMOUS = "anonymous"
 
 
 def _is_gce_instance() -> bool:
@@ -107,6 +109,12 @@ def _refresh_access_token_request(
 
 
 def _load_credentials() -> Tuple[Dict[str, Any], Optional[str]]:
+    if os.environ.get("GOOGLE_FORCE_ANONYMOUS_AUTH", "0") == "1":
+        return (
+            {},
+            "Anonymous auth forced via environment variable GOOGLE_FORCE_ANONYMOUS_AUTH=1",
+        )
+
     if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
         creds_path = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
         if not os.path.exists(creds_path):
@@ -158,7 +166,7 @@ def build_url(template: str, **data: str) -> str:
     return common.build_url(GCP_BASE_URL, template, **data)
 
 
-def create_api_request(req: Request, access_token: str) -> Request:
+def create_api_request(req: Request, auth: Tuple[str, str]) -> Request:
     if req.headers is None:
         headers = {}
     else:
@@ -169,7 +177,14 @@ def create_api_request(req: Request, access_token: str) -> Request:
     else:
         params = dict(req.params).copy()
 
-    headers["Authorization"] = f"Bearer {access_token}"
+    kind, token = auth
+    if kind == OAUTH_TOKEN:
+        headers["Authorization"] = f"Bearer {token}"
+    elif kind == ANONYMOUS:
+        pass
+    else:
+        raise Error(f"unrecognized auth kind `{kind}`")
+
     data = req.data
     if data is not None and isinstance(data, dict):
         data = json.dumps(data).encode("utf8")
@@ -396,7 +411,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
                     msg += "\nYour credentials may be expired, please run the following commands: `gcloud auth application-default revoke` (this may fail but ignore the error) then `gcloud auth application-default login`"
             raise Error(msg)
         assert resp.status == 200
-        return result["access_token"], now + float(result["expires_in"])
+        return (OAUTH_TOKEN, result["access_token"]), now + float(result["expires_in"])
     elif (
         os.environ.get("NO_GCE_CHECK", "false").lower() != "true" and _is_gce_instance()
     ):
@@ -410,15 +425,15 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
 
         resp = common.execute_request(conf, build_req)
         result = json.loads(resp.data)
-        return result["access_token"], now + float(result["expires_in"])
+        return (OAUTH_TOKEN, result["access_token"]), now + float(result["expires_in"])
     else:
-        raise Error(err)
+        return (ANONYMOUS, ""), float("inf")
 
 
 def execute_api_request(conf: Config, req: Request) -> urllib3.HTTPResponse:
     def build_req() -> Request:
         return create_api_request(
-            req, access_token=access_token_manager.get_token(conf, key="")
+            req, auth=access_token_manager.get_token(conf, key="")
         )
 
     return common.execute_request(conf, build_req)

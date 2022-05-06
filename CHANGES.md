@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.1
+
+* Support anonymous auth for GCS.
+
 ## 1.3.0
 
 * `parallel` option for `bf.copy` will now use a faster copy for azure when copying between two different storage accounts

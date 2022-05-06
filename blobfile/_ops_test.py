@@ -56,7 +56,7 @@ AZURE_PUBLIC_URL_HEADER = b"\x89PNG"
 def setup_gcloud_auth():
     # only run this for our docker tests, this tells gcloud to use the credentials supplied by the
     # test running script
-    if platform.system() == "Linux":
+    if platform.system() == "Linux" and "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
         sp.run(
             [
                 "gcloud",
@@ -427,7 +427,7 @@ def test_stat(ctx):
         _write_contents(path, contents)
         s = bf.stat(path)
         assert s.size == len(contents)
-        assert abs(time.time() - s.mtime) <= 20
+        assert abs(time.time() - s.mtime) <= 30
 
 
 @pytest.mark.parametrize(
@@ -438,7 +438,7 @@ def test_set_mtime(ctx):
     with ctx() as path:
         _write_contents(path, contents)
         s = bf.stat(path)
-        assert abs(time.time() - s.mtime) <= 20
+        assert abs(time.time() - s.mtime) <= 30
         new_mtime = 1
         assert bf.set_mtime(path, new_mtime)
         assert bf.stat(path).mtime == new_mtime
@@ -950,6 +950,12 @@ def test_copy_azure_public():
     with _get_temp_as_path() as dst:
         bf.copy(AZURE_PUBLIC_URL, dst)
         assert _read_contents(dst)[:4] == AZURE_PUBLIC_URL_HEADER
+
+
+def test_gcs_public():
+    filepath = "gs://tfds-data/datasets/mnist/3.0.1/dataset_info.json"
+    assert bf.exists(filepath)
+    assert len(bf.BlobFile(filepath, "rb").read()) > 0
 
 
 @pytest.mark.parametrize(

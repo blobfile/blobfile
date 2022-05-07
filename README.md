@@ -82,9 +82,10 @@ There are a few bonus functions:
     * `output_az_paths=False`: output `az://` paths instead of using the `https://` for azure
     * `use_azure_storage_account_key_fallback=True`: fallback to storage account keys for azure containers, having this enabled (the default) requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
     * `get_http_pool=None`: a function that returns a `urllib3.PoolManager` to be used for requests
-    * `use_streaming_read=True`: if set to `False`, read a chunk at a time instead of streaming them
+    * `use_streaming_read=False`: if set to `True`, use a single read per file instead of reading a chunk at a time (not recommended for azure)
     * `default_buffer_size=io.DEFAULT_BUFFER_SIZE`: the default buffer size to use for reading files (and writing local files)
-    * `save_access_token_to_disk=False`: Whether or not to save access tokens to disk.  Other processes can read the access tokens to avoid the 250ms it usually takes to get a token.
+    * `save_access_token_to_disk=False`: if set to `True` to save access tokens to disk so that other processes can read the access tokens to avoid the small amount of time it usually takes to get a token (if the token is still valid).
+    * `google_allow_anonymous_access=False`: if set to `True`, if no valid google credentials are found, fall back to anonymous access
 * `create_context` - (same arguments as `configure`), creates a new instance of `blobfile` with a custom configuration instead of modifying the global configuration
 
 ## Authentication

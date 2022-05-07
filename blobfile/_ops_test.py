@@ -953,9 +953,10 @@ def test_copy_azure_public():
 
 
 def test_gcs_public():
+    bf_ctx = bf.create_context(google_allow_anonymous_access=True)
     filepath = "gs://tfds-data/datasets/mnist/3.0.1/dataset_info.json"
-    assert bf.exists(filepath)
-    assert len(bf.BlobFile(filepath, "rb").read()) > 0
+    assert bf_ctx.exists(filepath)
+    assert len(bf_ctx.BlobFile(filepath, "rb").read()) > 0
 
 
 @pytest.mark.parametrize(
@@ -1564,16 +1565,16 @@ def test_deadline(ctx):
     with ctx() as path:
         _write_contents(path, contents)
         deadline = Deadline()
-        ctx = bf.create_context(get_deadline=deadline.get_deadline)
+        bf_ctx = bf.create_context(get_deadline=deadline.get_deadline)
         deadline.set_deadline(time.time() + 5)
-        with ctx.BlobFile(path, "rb") as f:
+        with bf_ctx.BlobFile(path, "rb") as f:
             f.read()
         time.sleep(5)
         with pytest.raises(bf.DeadlineExceeded):
-            with ctx.BlobFile(path, "rb") as f:
+            with bf_ctx.BlobFile(path, "rb") as f:
                 f.read()
         deadline.set_deadline(None)
-        with ctx.BlobFile(path, "rb") as f:
+        with bf_ctx.BlobFile(path, "rb") as f:
             f.read()
 
 

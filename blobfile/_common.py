@@ -359,6 +359,7 @@ class Config:
         default_buffer_size: int,
         get_deadline: Optional[Callable[[], float]],
         save_access_token_to_disk: bool,
+        google_allow_anonymous_access: bool,
     ) -> None:
         self.log_callback = log_callback
         self.connection_pool_max_size = connection_pool_max_size
@@ -378,6 +379,7 @@ class Config:
         self.default_buffer_size = default_buffer_size
         self.get_deadline = get_deadline
         self.save_access_token_to_disk = save_access_token_to_disk
+        self.google_allow_anonymous_access = google_allow_anonymous_access
 
         if get_http_pool is None:
             if (

@@ -2,7 +2,8 @@
 
 ## 1.3.1
 
-* Support anonymous auth for GCS.
+* Support anonymous auth for GCS, set `google_allow_anonymous_access=True` to use this
+* Clarify relationship with Tensorflow's `gfile`
 
 ## 1.3.0
 

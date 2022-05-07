@@ -1508,6 +1508,7 @@ def create_context(
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
     get_deadline: Optional[Callable[[], float]] = None,
     save_access_token_to_disk: bool = False,
+    google_allow_anonymous_access: bool = False,
 ):
     """
     Same argument as configure(), but returns a Context object that has all the blobfile methods on it.
@@ -1530,5 +1531,6 @@ def create_context(
         default_buffer_size=default_buffer_size,
         get_deadline=get_deadline,
         save_access_token_to_disk=save_access_token_to_disk,
+        google_allow_anonymous_access=google_allow_anonymous_access,
     )
     return Context(conf=conf)

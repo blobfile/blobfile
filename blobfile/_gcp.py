@@ -109,12 +109,6 @@ def _refresh_access_token_request(
 
 
 def _load_credentials() -> Tuple[Dict[str, Any], Optional[str]]:
-    if os.environ.get("GOOGLE_FORCE_ANONYMOUS_AUTH", "0") == "1":
-        return (
-            {},
-            "Anonymous auth forced via environment variable GOOGLE_FORCE_ANONYMOUS_AUTH=1",
-        )
-
     if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
         creds_path = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
         if not os.path.exists(creds_path):
@@ -143,10 +137,7 @@ def _load_credentials() -> Tuple[Dict[str, Any], Optional[str]]:
     )
 
 
-def _create_access_token_request(scopes: List[str]) -> Request:
-    creds, err = _load_credentials()
-    if err is not None:
-        raise Error(err)
+def _create_access_token_request(creds: Dict[str, Any], scopes: List[str]) -> Request:
     if "private_key" in creds:
         # looks like GCS does not support the no-oauth flow https://developers.google.com/identity/protocols/OAuth2ServiceAccount#jwt-auth
         return _create_token_request(
@@ -388,12 +379,13 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
     now = time.time()
 
     # https://github.com/googleapis/google-auth-library-java/blob/master/README.md#application-default-credentials
-    _, err = _load_credentials()
+    creds, err = _load_credentials()
     if err is None:
 
         def build_req() -> Request:
             req = _create_access_token_request(
-                scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
+                creds=creds,
+                scopes=["https://www.googleapis.com/auth/devstorage.full_control"],
             )
             req.success_codes = (200, 400)
             return req
@@ -426,8 +418,10 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
         resp = common.execute_request(conf, build_req)
         result = json.loads(resp.data)
         return (OAUTH_TOKEN, result["access_token"]), now + float(result["expires_in"])
-    else:
+    elif conf.google_allow_anonymous_access:
         return (ANONYMOUS, ""), float("inf")
+    else:
+        raise Error(err)
 
 
 def execute_api_request(conf: Config, req: Request) -> urllib3.HTTPResponse:

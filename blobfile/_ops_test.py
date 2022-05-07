@@ -953,10 +953,9 @@ def test_copy_azure_public():
 
 
 def test_gcs_public():
-    bf_ctx = bf.create_context(google_allow_anonymous_access=True)
     filepath = "gs://tfds-data/datasets/mnist/3.0.1/dataset_info.json"
-    assert bf_ctx.exists(filepath)
-    assert len(bf_ctx.BlobFile(filepath, "rb").read()) > 0
+    assert bf.exists(filepath)
+    assert len(bf.BlobFile(filepath, "rb").read()) > 0
 
 
 @pytest.mark.parametrize(

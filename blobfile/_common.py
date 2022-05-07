@@ -359,7 +359,6 @@ class Config:
         default_buffer_size: int,
         get_deadline: Optional[Callable[[], float]],
         save_access_token_to_disk: bool,
-        google_allow_anonymous_access: bool,
     ) -> None:
         self.log_callback = log_callback
         self.connection_pool_max_size = connection_pool_max_size
@@ -379,7 +378,6 @@ class Config:
         self.default_buffer_size = default_buffer_size
         self.get_deadline = get_deadline
         self.save_access_token_to_disk = save_access_token_to_disk
-        self.google_allow_anonymous_access = google_allow_anonymous_access
 
         if get_http_pool is None:
             if (
@@ -591,8 +589,13 @@ def execute_request(
                 return resp
             else:
                 message = f"unexpected status {resp.status}"
-                if url.startswith(GCP_BASE_URL) and resp.status in (429, 503):
-                    message += ": if you are writing a blob this error may be due to multiple concurrent writers - make sure you are not writing to the same blob from multiple processes simultaneously"
+                if url.startswith(GCP_BASE_URL):
+                    if resp.status in (429, 503):
+                        message += ": if you are writing a blob this error may be due to multiple concurrent writers - make sure you are not writing to the same blob from multiple processes simultaneously"
+                    elif resp.status == 401:
+                        message += ": no valid credentials were found, please login with 'gcloud auth application-default login' or else set the 'GOOGLE_APPLICATION_CREDENTIALS' environment variable to the path of a JSON format service account key"
+                    elif resp.status == 403:
+                        message += ": credentials were found but do not grant access to this resource, please make sure the account you are using (either via 'gcloud auth application-default login' or the 'GOOGLE_APPLICATION_CREDENTIALS' environment variable) has access"
                 err = RequestFailure.create_from_request_response(
                     message=message, request=req, response=resp
                 )

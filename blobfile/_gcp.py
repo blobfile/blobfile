@@ -108,16 +108,15 @@ def _refresh_access_token_request(
     )
 
 
-def _load_credentials() -> Tuple[Dict[str, Any], Optional[str]]:
+def _load_credentials() -> Dict[str, Any]:
     if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
         creds_path = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
         if not os.path.exists(creds_path):
-            return (
-                {},
-                f"credentials not found at {creds_path} specified by environment variable 'GOOGLE_APPLICATION_CREDENTIALS'",
+            raise Error(
+                f"credentials not found at {creds_path} specified by environment variable 'GOOGLE_APPLICATION_CREDENTIALS'"
             )
         with open(creds_path) as f:
-            return json.load(f), None
+            return json.load(f)
     if platform.system() == "Windows":
         # https://www.jhanley.com/google-cloud-application-default-credentials/
         default_creds_path = os.path.join(
@@ -130,11 +129,8 @@ def _load_credentials() -> Tuple[Dict[str, Any], Optional[str]]:
 
     if os.path.exists(default_creds_path):
         with open(default_creds_path) as f:
-            return json.load(f), None
-    return (
-        {},
-        "credentials not found, please login with 'gcloud auth application-default login' or else set the 'GOOGLE_APPLICATION_CREDENTIALS' environment variable to the path of a JSON format service account key",
-    )
+            return json.load(f)
+    return {}
 
 
 def _create_access_token_request(creds: Dict[str, Any], scopes: List[str]) -> Request:
@@ -212,9 +208,7 @@ def generate_signed_url(
         h = dict(headers).copy()
 
     # https://cloud.google.com/storage/docs/access-control/signing-urls-manually
-    creds, err = _load_credentials()
-    if err is not None:
-        raise Error(err)
+    creds = _load_credentials()
     if "private_key" not in creds:
         raise Error(
             "Private key not found in credentials.  Please set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to point to a JSON key for a service account to use this call"
@@ -376,11 +370,14 @@ def make_stat(item: Mapping[str, Any]) -> Stat:
 
 
 def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
+    if os.environ.get("BLOBFILE_FORCE_GOOGLE_ANONYMOUS_AUTH", "0") == "1":
+        return (ANONYMOUS, ""), float("inf")
+
     now = time.time()
 
     # https://github.com/googleapis/google-auth-library-java/blob/master/README.md#application-default-credentials
-    creds, err = _load_credentials()
-    if err is None:
+    creds = _load_credentials()
+    if len(creds) > 0:
 
         def build_req() -> Request:
             req = _create_access_token_request(
@@ -418,10 +415,8 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
         resp = common.execute_request(conf, build_req)
         result = json.loads(resp.data)
         return (OAUTH_TOKEN, result["access_token"]), now + float(result["expires_in"])
-    elif conf.google_allow_anonymous_access:
-        return (ANONYMOUS, ""), float("inf")
     else:
-        raise Error(err)
+        return (ANONYMOUS, ""), float("inf")
 
 
 def execute_api_request(conf: Config, req: Request) -> urllib3.HTTPResponse:

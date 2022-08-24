@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.2
+
+* Fix to default value for `use_azure_storage_account_key_fallback` from @hauntsaninja
+
 ## 1.3.1
 
 * Add support for anonymous auth for GCS

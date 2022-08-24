@@ -1088,16 +1088,11 @@ def _is_local_path(path: str) -> bool:
     return _get_module(path) is None
 
 
-def _download_chunk(conf: Config, src: str, dst: str, start: int, size: int) -> None:
-    # this is a little inefficient because each time we open a file we do
-    # a query for file metadata, we could call the StreamingReadFile subclass
-    # directly with the known size and avoid this
-    #
-    # in addition, we could provide a fake size (start + size) and change the call
-    # to _request_chunk to always specify the end of the file
-    # this should cause the connection to be put back into the pool by urllib3
+def _download_chunk(
+    conf: Config, src: str, dst: str, start: int, size: int, src_file_size: int
+) -> None:
     ctx = Context(conf)
-    with ctx.BlobFile(src, "rb") as src_f:
+    with ctx.BlobFile(src, "rb", file_size=src_file_size) as src_f:
         src_f.seek(start)
         # open output file such that we can write directly to the correct range
         with open(dst, "rb+") as dst_f:
@@ -1144,7 +1139,13 @@ def _parallel_download(
     futures = []
     while start < s.size:
         future = executor.submit(
-            _download_chunk, conf, src, dst, start, min(part_size, s.size - start)
+            _download_chunk,
+            conf,
+            src,
+            dst,
+            start,
+            min(part_size, s.size - start),
+            s.size,
         )
         futures.append(future)
         start += part_size

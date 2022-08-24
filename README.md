@@ -80,7 +80,7 @@ There are a few bonus functions:
     * `connect_timeout=10`: the maximum amount of time (in seconds) to wait for a connection attempt to a server to succeed, set to None to wait forever
     * `read_timeout=30`: the maximum amount of time (in seconds) to wait between consecutive read operations for a response from the server, set to None to wait forever
     * `output_az_paths=False`: output `az://` paths instead of using the `https://` for azure
-    * `use_azure_storage_account_key_fallback=True`: fallback to storage account keys for azure containers, having this enabled (the default) requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
+    * `use_azure_storage_account_key_fallback=False`: fallback to storage account keys for azure containers, having this enabled requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
     * `get_http_pool=None`: a function that returns a `urllib3.PoolManager` to be used for requests
     * `use_streaming_read=False`: if set to `True`, use a single read per file instead of reading a chunk at a time (not recommended for azure)
     * `default_buffer_size=io.DEFAULT_BUFFER_SIZE`: the default buffer size to use for reading files (and writing local files)

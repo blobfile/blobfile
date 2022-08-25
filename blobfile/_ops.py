@@ -62,6 +62,7 @@ def configure(
     use_streaming_read: bool = False,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
     save_access_token_to_disk: bool = False,
+    multiprocessing_start_method: str = "spawn",
 ) -> None:
     """
     log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout
@@ -77,7 +78,8 @@ def configure(
     get_http_pool: a function that returns a `urllib3.PoolManager` to be used for requests
     use_streaming_read: if set to `True`, use a single read per file instead of reading a chunk at a time (not recommended for azure)
     default_buffer_size: the default buffer size to use for reading files (and writing local files)
-    save_access_token_to_disk: Set to `True` to save access tokens to disk so that other processes can read the access tokens to avoid the small amount of time it usually takes to get a token (if the token is still valid).
+    save_access_token_to_disk: set to `True` to save access tokens to disk so that other processes can read the access tokens to avoid the small amount of time it usually takes to get a token (if the token is still valid).
+    multiprocessing_start_method: the start method to use when creating processes for parallel work
     """
     global default_context
     default_context = create_context(
@@ -97,6 +99,7 @@ def configure(
         use_streaming_read=use_streaming_read,
         default_buffer_size=default_buffer_size,
         save_access_token_to_disk=save_access_token_to_disk,
+        multiprocessing_start_method=multiprocessing_start_method,
     )
 
 

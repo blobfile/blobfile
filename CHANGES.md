@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.3
+
+* Added new `configure` option, `multiprocessing_start_method` that defaults to `spawn`, due to issues with `fork`.  To get the original behavior back, call `bf.configure(multiprocessing_start_method="fork")`
+
 ## 1.3.2
 
 * Fix to default value for `use_azure_storage_account_key_fallback` from @hauntsaninja

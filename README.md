@@ -85,6 +85,7 @@ There are a few bonus functions:
     * `use_streaming_read=False`: if set to `True`, use a single read per file instead of reading a chunk at a time (not recommended for azure)
     * `default_buffer_size=io.DEFAULT_BUFFER_SIZE`: the default buffer size to use for reading files (and writing local files)
     * `save_access_token_to_disk=False`: if set to `True` to save access tokens to disk so that other processes can read the access tokens to avoid the small amount of time it usually takes to get a token (if the token is still valid).
+    * `multiprocessing_start_method="spawn"`: the start method to use when creating processes for parallel work
 * `create_context` - (same arguments as `configure`), creates a new instance of `blobfile` with a custom configuration instead of modifying the global configuration
 
 ## Authentication

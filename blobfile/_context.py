@@ -130,7 +130,11 @@ class Context:
 
             if copy_fn is not None:
                 if parallel_executor is None:
-                    with concurrent.futures.ProcessPoolExecutor() as executor:
+                    with concurrent.futures.ProcessPoolExecutor(
+                        mp_context=mp.get_context(
+                            self._conf.multiprocessing_start_method
+                        )
+                    ) as executor:
                         return copy_fn(
                             self._conf, executor, src, dst, return_md5=return_md5
                         )
@@ -300,14 +304,15 @@ class Context:
                         initial_tasks.append(_GlobTask("", _split_path(pat)))
 
             if parallel:
-                tasks = mp.Queue()
+                mp_ctx = mp.get_context(self._conf.multiprocessing_start_method)
+                tasks = mp_ctx.Queue()
                 for t in initial_tasks:
                     tasks.put(t)
                 tasks_enqueued = len(initial_tasks)
-                results = mp.Queue()
+                results = mp_ctx.Queue()
 
                 tasks_done = 0
-                with mp.Pool(
+                with mp_ctx.Pool(
                     initializer=_glob_worker,
                     initargs=(self._conf, root, tasks, results),
                 ):
@@ -390,8 +395,9 @@ class Context:
                     conf=self._conf, prefix=path, exclude_prefix=True
                 )
             else:
-                prefixes = mp.Queue()
-                items = mp.Queue()
+                mp_ctx = mp.get_context(self._conf.multiprocessing_start_method)
+                prefixes = mp_ctx.Queue()
+                items = mp_ctx.Queue()
                 tasks_enqueued = 0
 
                 valid_chars = [
@@ -413,7 +419,7 @@ class Context:
                         tasks_enqueued += 1
 
                 tasks_done = 0
-                with mp.Pool(
+                with mp_ctx.Pool(
                     initializer=_sharded_listdir_worker,
                     initargs=(self._conf, prefixes, items),
                 ):
@@ -626,7 +632,11 @@ class Context:
 
             if parallel:
                 if parallel_executor is None:
-                    executor = concurrent.futures.ProcessPoolExecutor()
+                    executor = concurrent.futures.ProcessPoolExecutor(
+                        mp_context=mp.get_context(
+                            self._conf.multiprocessing_start_method
+                        )
+                    )
                     context = executor
                 else:
                     executor = parallel_executor
@@ -1509,6 +1519,7 @@ def create_context(
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
     get_deadline: Optional[Callable[[], float]] = None,
     save_access_token_to_disk: bool = False,
+    multiprocessing_start_method: str = "spawn",
 ):
     """
     Same argument as configure(), but returns a Context object that has all the blobfile methods on it.
@@ -1531,5 +1542,6 @@ def create_context(
         default_buffer_size=default_buffer_size,
         get_deadline=get_deadline,
         save_access_token_to_disk=save_access_token_to_disk,
+        multiprocessing_start_method=multiprocessing_start_method,
     )
     return Context(conf=conf)

@@ -359,6 +359,7 @@ class Config:
         default_buffer_size: int,
         get_deadline: Optional[Callable[[], float]],
         save_access_token_to_disk: bool,
+        multiprocessing_start_method: str,
     ) -> None:
         self.log_callback = log_callback
         self.connection_pool_max_size = connection_pool_max_size
@@ -378,6 +379,7 @@ class Config:
         self.default_buffer_size = default_buffer_size
         self.get_deadline = get_deadline
         self.save_access_token_to_disk = save_access_token_to_disk
+        self.multiprocessing_start_method = multiprocessing_start_method
 
         if get_http_pool is None:
             if (

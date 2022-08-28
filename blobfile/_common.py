@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -467,6 +468,37 @@ class Timeout(Exception):
     pass
 
 
+class WriteDeadlineFile:
+    """
+    An amazingly hacky way to set a timeout when writing a request body
+    """
+
+    def __init__(self, f: Any, deadline: float) -> None:
+        self.f = f
+        self.deadline = deadline
+
+    def read(self, n: int) -> bytes:
+        buf = self.f.read(n)
+        frame = inspect.currentframe()
+        assert frame is not None
+        parent_frame = frame.f_back
+        assert parent_frame is not None
+        sock = parent_frame.f_locals["self"].sock
+        timeout = self.deadline - time.time()
+        if timeout <= 0:
+            raise Timeout("Did not write enough bytes before deadline expired")
+        # this relies on this change from python 3.5:
+        # https://docs.python.org/3/library/socket.html#socket.socket.sendall
+        # "The socket timeout is no more reset each time data is sent successfully. The socket timeout is now the maximum total duration to send all data."
+        # It also relies on the python http library reading a chunk of data
+        # and then immediately doing a sendall() with that chunk
+        sock.settimeout(timeout)
+        return buf
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.f, name)
+
+
 def _read_with_deadline(
     fp: Any, sock: socket.socket, nbytes_to_read: int, deadline: float
 ) -> bytes:
@@ -519,7 +551,7 @@ def execute_request(
         total_timeout = None
 
         if conf.get_deadline is not None and req.method != "HEAD":
-            # HEAD requests don't have a body which is the only part the deadline applies to anyway
+            # HEAD requests don't have data which is the only part the deadline applies to anyway
             deadline = conf.get_deadline()
             if deadline is not None:
                 assert (
@@ -539,6 +571,12 @@ def execute_request(
                 # it's still possible for the header to be returned really slowly, but since we mostly
                 # talk to only a few servers, it's possible they all send the header quickly
                 total_timeout = deadline - now
+
+                if body is not None:
+                    # wrap the body in our super hacky deadline-enforcing file
+                    if isinstance(body, bytes):
+                        body = io.BytesIO(body)
+                    body = WriteDeadlineFile(body, deadline)
 
         err = None
         try:
@@ -643,6 +681,12 @@ def execute_request(
                         )
 
             err = RequestFailure.create_from_request_response(
+                message=f"request failed with exception {e}",
+                request=req,
+                response=urllib3.response.HTTPResponse(status=0, body=io.BytesIO(b"")),
+            )
+        except Timeout as e:
+            raise DeadlineExceeded.create_from_request_response(
                 message=f"request failed with exception {e}",
                 request=req,
                 response=urllib3.response.HTTPResponse(status=0, body=io.BytesIO(b"")),

@@ -13,9 +13,6 @@ import urllib.parse
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
 import urllib3
-from Cryptodome.Hash import SHA256
-from Cryptodome.PublicKey import RSA
-from Cryptodome.Signature import pkcs1_15
 
 from blobfile import _common as common
 from blobfile._common import (
@@ -53,6 +50,10 @@ def _b64encode(s: bytes) -> bytes:
 
 
 def _sign(private_key: str, msg: bytes) -> bytes:
+    from Cryptodome.Hash import SHA256
+    from Cryptodome.PublicKey import RSA
+    from Cryptodome.Signature import pkcs1_15
+
     key = RSA.import_key(private_key)
     h = SHA256.new(msg)
     return pkcs1_15.new(key).sign(h)

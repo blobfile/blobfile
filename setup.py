@@ -21,10 +21,10 @@ setup_dict = dict(
     license="Public Domain",
     packages=find_packages(),
     install_requires=[
-        "pycryptodomex>=3.8",
-        "urllib3>=1.25",
-        "xmltodict>=0.12.0",
-        "filelock>=3.0",
+        "pycryptodomex~=3.8",
+        "urllib3~=1.25",
+        "xmltodict~=0.12",
+        "filelock~=3.0",
     ],
     python_requires=">=3.7.0",
     # indicate that we have type information

@@ -23,7 +23,7 @@ setup_dict = dict(
     install_requires=[
         "pycryptodomex~=3.8",
         "urllib3~=1.25",
-        "xmltodict~=0.12.0",
+        "xmltodict~=0.12",
         "filelock~=3.0",
     ],
     python_requires=">=3.7.0",

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.4
+
+* Replace `xmltodict` with `xml`
+* Use lazy import for `pycryptodome` from @hauntsaninja
+
 ## 1.3.3
 
 * Added new `configure` option, `multiprocessing_start_method` that defaults to `spawn`, due to issues with `fork`.  To get the original behavior back, call `bf.configure(multiprocessing_start_method="fork")`

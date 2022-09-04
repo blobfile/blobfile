@@ -26,7 +26,7 @@ from typing import (
 
 import filelock
 import urllib3
-import xmltodict
+from blobfile import _xml as xml
 
 CHUNK_SIZE = 8 * 2 ** 20
 
@@ -140,7 +140,7 @@ class Error(Exception):
 def _extract_error(data: bytes) -> Tuple[Optional[str], Optional[str]]:
     if data.startswith(b"\xef\xbb\xbf<?xml"):
         try:
-            result = xmltodict.parse(data)
+            result = xml.parse(data)
             return result["Error"]["Code"], result["Error"].get("Message")
         except Exception:
             pass

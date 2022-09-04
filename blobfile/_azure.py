@@ -14,9 +14,9 @@ import urllib.parse
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 import urllib3
-import xmltodict
 
 from blobfile import _common as common
+from blobfile import _xml as xml
 from blobfile._common import (
     DEFAULT_RETRY_CODES,
     INVALID_HOSTNAME_STATUS,
@@ -230,7 +230,7 @@ def create_api_request(req: Request, auth: Tuple[str, str]) -> Request:
     )
     data = req.data
     if data is not None and isinstance(data, dict):
-        data = xmltodict.unparse(data).encode("utf8")
+        data = xml.unparse(data)
 
     result = Request(
         method=req.method,
@@ -772,7 +772,7 @@ def _get_sas_token(conf: Config, key: Any) -> Tuple[Any, float]:
             "Try setting the Storage Blob Delegator or Storage Blob Data Contributor IAM role "
             "at the account level."
         )
-    out = xmltodict.parse(resp.data)
+    out = xml.parse(resp.data)
     t = time.time() + SAS_TOKEN_EXPIRATION_SECONDS
     return out["UserDelegationKey"], t
 
@@ -811,14 +811,11 @@ def _clear_uncommitted_blocks(conf: Config, url: str, metadata: Dict[str, str]) 
     if resp.status != 200:
         return
 
-    result = xmltodict.parse(resp.data)
+    result = xml.parse(resp.data, repeated_tags={"Block"})
     if result["BlockList"]["CommittedBlocks"] is None:
         return
 
     blocks = result["BlockList"]["CommittedBlocks"]["Block"]
-    if isinstance(blocks, dict):
-        blocks = [blocks]
-
     body = {"BlockList": {"Latest": [b["Name"] for b in blocks]}}
     # make sure to preserve metadata for the file
     headers: Dict[str, str] = {
@@ -857,7 +854,7 @@ def _finalize_blob(
     )
     resp = execute_api_request(conf, req)
     if resp.status == 400:
-        result = xmltodict.parse(resp.data)
+        result = xml.parse(resp.data)
         if result["Error"]["Code"] == "InvalidBlockList":
             # the most likely way this could happen is if the file was deleted while
             # we were uploading, so assume that is what happened
@@ -940,7 +937,9 @@ def create_page_iterator(
         resp = execute_api_request(conf, req)
         if resp.status in (404, INVALID_HOSTNAME_STATUS):
             return
-        result = xmltodict.parse(resp.data)["EnumerationResults"]
+        result = xml.parse(resp.data, repeated_tags={"BlobPrefix", "Blob"})[
+            "EnumerationResults"
+        ]
         yield result
         if result["NextMarker"] is None:
             break
@@ -1316,14 +1315,10 @@ def _get_entries(
     if blobs is None:
         return
     if "BlobPrefix" in blobs:
-        if isinstance(blobs["BlobPrefix"], dict):
-            blobs["BlobPrefix"] = [blobs["BlobPrefix"]]
         for bp in blobs["BlobPrefix"]:
             path = combine_path(conf, account, container, bp["Name"])
             yield entry_from_dirpath(path)
     if "Blob" in blobs:
-        if isinstance(blobs["Blob"], dict):
-            blobs["Blob"] = [blobs["Blob"]]
         for b in blobs["Blob"]:
             path = combine_path(conf, account, container, b["Name"])
             if b["Name"].endswith("/"):
@@ -1453,7 +1448,7 @@ def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> Optional[
 
             raise FileNotFoundError(f"Source file not found: '{src}'")
         elif resp.status == 409:
-            result = xmltodict.parse(resp.data)
+            result = xml.parse(resp.data)
             if result["Error"]["Code"] != "PendingCopyOperation":
                 raise RequestFailure.create_from_request_response(
                     message=f"unexpected status {resp.status}",

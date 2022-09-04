@@ -1,4 +1,5 @@
 # https://github.com/tensorflow/tensorflow/issues/27023
+import datetime
 import warnings
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -1466,6 +1467,17 @@ def test_azure_maybe_update_md5(ctx):
         assert not azure.maybe_update_md5(
             ops.default_context._conf, path, st.version, meow_hash
         )
+
+
+def test_azure_timestamp_parsing():
+    timestamp = "Sun, 27 Sep 2009 18:41:57 GMT"
+
+    def ref_parse_timestamp(text: str) -> float:
+        return datetime.datetime.strptime(
+            text.replace("GMT", "Z"), "%a, %d %b %Y %H:%M:%S %z"
+        ).timestamp()
+
+    assert ref_parse_timestamp(timestamp) == azure._parse_timestamp(timestamp)
 
 
 def _get_http_pool_id(q):

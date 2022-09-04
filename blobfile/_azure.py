@@ -453,10 +453,30 @@ def _get_md5(metadata: Mapping[str, Any]) -> Optional[str]:
         return None
 
 
+_MONTH_NAME_TO_INDEX = {
+    "Jan": "01",
+    "Feb": "02",
+    "Mar": "03",
+    "Apr": "04",
+    "May": "05",
+    "Jun": "06",
+    "Jul": "07",
+    "Aug": "08",
+    "Sep": "09",
+    "Oct": "10",
+    "Nov": "11",
+    "Dec": "12",
+}
+
+
 def _parse_timestamp(text: str) -> float:
-    return datetime.datetime.strptime(
-        text.replace("GMT", "Z"), "%a, %d %b %Y %H:%M:%S %z"
-    ).timestamp()
+    # this function seems faster than using strptime
+    # text="Sun, 27 Sep 2009 18:41:57 GMT"
+    #       0    1  2   3    4        5
+    p = text.split()
+    date_string = f"{p[3]}-{_MONTH_NAME_TO_INDEX[p[2]]}-{p[1]}T{p[4]}+00:00"
+    dt = datetime.datetime.fromisoformat(date_string)
+    return dt.timestamp()
 
 
 def make_stat(item: Mapping[str, str]) -> Stat:

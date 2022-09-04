@@ -2,7 +2,7 @@
 
 ## 1.3.4
 
-* Replace `xmltodict` with `xml`
+* Replace `xmltodict` with `lxml` as it is slightly faster
 * Use lazy import for `pycryptodome` from @hauntsaninja
 
 ## 1.3.3

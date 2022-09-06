@@ -48,6 +48,8 @@ def unparse(data: Dict[str, Any]) -> bytes:
     root_keys = list(data.keys())
     assert len(root_keys) == 1, f"Must be only one root element, found {root_keys}"
     root = _create_tree(root_keys[0], data[root_keys[0]])
+    # xml_declaration=True doesn't work for some reason, it seems
+    # to use single quotes that azure doesn't like
     return b'<?xml version="1.0" encoding="utf-8"?>\n' + etree.tostring(
         root, encoding="utf8"
     )
@@ -71,7 +73,10 @@ def _create_tree(name: str, data: Dict[str, Any]) -> Element:
         else:
             assert isinstance(v, str) or v is None
             se = etree.Element(k)
-            if v is not None:
+            if v is None:
+                # match xmltodict's behavior and use <Elem></Elem> instead of <Elem />
+                se.text = ""
+            else:
                 se.text = v
             elem.append(se)
     return elem

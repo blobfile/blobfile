@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 import xmltodict
 from blobfile import _xml as xml
 
-resp = """\
+resp = b"""\
 <?xml version="1.0" encoding="utf-8"?>  
 <EnumerationResults ContainerName="https://myaccount.blob.core.windows.net/mycontainer">  
   <MaxResults>4</MaxResults>  
@@ -80,10 +80,19 @@ def remove_attributes(d: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def xmltodict_parse(data: bytes) -> Dict[str, Any]:
+    parsed = xmltodict.parse(data.decode("utf8"))
+    # we don't support attributes in our parser since we don't use them anyway
+    return remove_attributes(parsed)
+
+
+def xmltodict_unparse(d: Dict[str, Any]) -> bytes:
+    return xmltodict.unparse(d).encode("utf8")
+
+
 def test_parse():
-    ref = xmltodict.parse(resp)
-    ref = remove_attributes(ref)
-    actual = xml.parse(resp.encode("utf8"), repeated_tags={"Blob", "BlobPrefix"})
+    ref = xmltodict_parse(resp)
+    actual = xml.parse(resp, repeated_tags={"Blob", "BlobPrefix"})
     json_ref = json.dumps(ref, sort_keys=True, indent=" ")
     json_actual = json.dumps(actual, sort_keys=True, indent=" ")
     print(json_ref)
@@ -93,7 +102,7 @@ def test_parse():
 
 def test_unparse():
     body = {"BlockList": {"Latest": [str(i) for i in range(100)]}}
-    ref = xmltodict.unparse(body).encode("utf8")
+    ref = xmltodict_unparse(body)
     actual = xml.unparse(body)
     print(ref)
     print(actual)
@@ -101,28 +110,31 @@ def test_unparse():
 
 
 def test_roundtrip():
-    ref = xmltodict.parse(resp)
-    ref = remove_attributes(ref)
-    actual = xml.parse(xml.unparse(ref), repeated_tags={"Blob", "BlobPrefix"})
+    ref_parsed = xmltodict_parse(resp)
+    ref_unparsed = xmltodict_unparse(ref_parsed)
 
-    json_ref = json.dumps(ref, sort_keys=True, indent=" ")
-    json_actual = json.dumps(actual, sort_keys=True, indent=" ")
-    print(json_ref)
-    print(json_actual)
+    actual_parsed = xml.parse(ref_unparsed, repeated_tags={"Blob", "BlobPrefix"})
+    assert ref_parsed == actual_parsed
 
-    assert actual == ref
+    actual_unparsed = xml.unparse(ref_parsed)
+    print()
+    print(ref_unparsed)
+    print(actual_unparsed)
+    assert ref_unparsed == actual_unparsed
+
+    assert ref_unparsed == xml.unparse(
+        xml.parse(xml.unparse(ref_parsed), repeated_tags={"Blob", "BlobPrefix"})
+    )
 
 
 def main():
     # benchmarking
-    doc = xmltodict.parse(resp)
-    doc = remove_attributes(doc)
+    doc = xmltodict_parse(resp)
     doc2 = doc.copy()
     doc2["EnumerationResults"]["Blobs"]["Blob"] = (
         doc2["EnumerationResults"]["Blobs"]["Blob"] * 300
     )
-    expanded_resp = xmltodict.unparse(doc2)
-    expanded_resp_utf8 = expanded_resp.encode("utf8")
+    expanded_resp_utf8 = xmltodict_unparse(doc2)
 
     start = time.perf_counter()
     for _ in range(100):

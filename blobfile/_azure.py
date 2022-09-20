@@ -498,7 +498,11 @@ def make_stat(item: Mapping[str, str]) -> Stat:
 
 
 def _can_access_container(
-    conf: Config, account: str, container: str, auth: Tuple[str, str]
+    conf: Config,
+    account: str,
+    container: str,
+    auth: Tuple[str, str],
+    out_failures: List[RequestFailure],
 ) -> bool:
     # https://myaccount.blob.core.windows.net/mycontainer?restype=container&comp=list
     success_codes = [200, 403, 404, INVALID_HOSTNAME_STATUS]
@@ -524,9 +528,22 @@ def _can_access_container(
     # anonymous requests will for some reason get a 404 when they should get a 403
     # so treat a 404 from anon requests as a 403
     if resp.status == 404 and auth[0] == ANONYMOUS:
+        out_failures.append(
+            RequestFailure.create_from_request_response(
+                "Could not access container", build_req(), resp
+            )
+        )
         return False
     # if the container list succeeds or the container doesn't exist, return success
-    return resp.status in (200, 404)
+    if resp.status in (200, 404):
+        return True
+    else:
+        out_failures.append(
+            RequestFailure.create_from_request_response(
+                "Could not access container", build_req(), resp
+            )
+        )
+        return False
 
 
 def _get_storage_account_id(
@@ -581,7 +598,11 @@ def _get_subscription_ids(conf: Config, auth: Tuple[str, str]) -> List[str]:
 
 
 def _get_storage_account_key(
-    conf: Config, account: str, container: str, creds: Mapping[str, Any]
+    conf: Config,
+    account: str,
+    container: str,
+    creds: Mapping[str, Any],
+    out_failures: List[RequestFailure],
 ) -> Optional[Tuple[Any, float]]:
     # azure resource manager has very low limits on number of requests, so we have
     # to be careful to avoid extra requests here
@@ -641,7 +662,9 @@ def _get_storage_account_key(
     for key in result["keys"]:
         if key["permissions"] == "FULL":
             storage_key_auth = (SHARED_KEY, key["value"])
-            if _can_access_container(conf, account, container, storage_key_auth):
+            if _can_access_container(
+                conf, account, container, storage_key_auth, out_failures=out_failures
+            ):
                 return storage_key_auth
             else:
                 raise Error(
@@ -657,6 +680,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
     now = time.time()
     creds = _load_credentials()
     azure_auth = creds.get("_azure_auth")
+    access_failures: List[RequestFailure] = []
     if azure_auth == "sakey":
         if "account" in creds:
             if creds["account"] != account:
@@ -665,7 +689,9 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
                     f"but needed credentials for account '{account}'"
                 )
         auth = (SHARED_KEY, creds["storage_account_key"])
-        if _can_access_container(conf, account, container, auth):
+        if _can_access_container(
+            conf, account, container, auth, out_failures=access_failures
+        ):
             return (auth, now + SHARED_KEY_EXPIRATION_SECONDS)
     elif azure_auth == "refresh":
         # we have a refresh token, convert it into an access token for this account
@@ -704,13 +730,19 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
         auth = (OAUTH_TOKEN, result["access_token"])
 
         # for some azure accounts this access token does not work, check if it works
-        if _can_access_container(conf, account, container, auth):
+        if _can_access_container(
+            conf, account, container, auth, out_failures=access_failures
+        ):
             return (auth, now + float(result["expires_in"]))
 
         if conf.use_azure_storage_account_key_fallback:
             # fall back to getting the storage keys
             storage_account_key_auth = _get_storage_account_key(
-                conf=conf, account=account, container=container, creds=creds
+                conf=conf,
+                account=account,
+                container=container,
+                creds=creds,
+                out_failures=access_failures,
             )
             if storage_account_key_auth is not None:
                 return (storage_account_key_auth, now + SHARED_KEY_EXPIRATION_SECONDS)
@@ -724,13 +756,19 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
         resp = common.execute_request(conf, build_req)
         result = json.loads(resp.data)
         auth = (OAUTH_TOKEN, result["access_token"])
-        if _can_access_container(conf, account, container, auth):
+        if _can_access_container(
+            conf, account, container, auth, out_failures=access_failures
+        ):
             return (auth, now + float(result["expires_in"]))
 
         if conf.use_azure_storage_account_key_fallback:
             # fall back to getting the storage keys
             storage_account_key_auth = _get_storage_account_key(
-                conf=conf, account=account, container=container, creds=creds
+                conf=conf,
+                account=account,
+                container=container,
+                creds=creds,
+                out_failures=access_failures,
             )
             if storage_account_key_auth is not None:
                 return (storage_account_key_auth, now + SHARED_KEY_EXPIRATION_SECONDS)
@@ -738,10 +776,15 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
     # oddly, it seems that if you request a public container with a valid azure account, you cannot list the bucket
     # but if you list it with no account, that works fine
     anonymous_auth = (ANONYMOUS, "")
-    if _can_access_container(conf, account, container, anonymous_auth):
+    if _can_access_container(
+        conf, account, container, anonymous_auth, out_failures=access_failures
+    ):
         return (anonymous_auth, float("inf"))
 
     msg = f"Could not find any credentials that grant access to storage account: '{account}' and container: '{container}'"
+    if len(access_failures) > 0:
+        for resp_failure in access_failures:
+            msg += f"\n    Access Failure: {resp_failure}"
     if len(creds) == 0:
         msg += """
 

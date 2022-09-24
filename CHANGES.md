@@ -5,6 +5,7 @@
 * Azure timestamp parsing is now slightly faster
 * Replace `xmltodict` with `lxml` as it is slightly faster
 * Use lazy import for `pycryptodome` from @hauntsaninja
+* Print request ids when azure auth fails
 
 ## 1.3.3
 

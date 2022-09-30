@@ -79,12 +79,12 @@ There are a few bonus functions:
     * `retry_common_log_threshold=2`: set a retry count threshold above which to log very common failures to the log callback function
     * `connect_timeout=10`: the maximum amount of time (in seconds) to wait for a connection attempt to a server to succeed, set to None to wait forever
     * `read_timeout=30`: the maximum amount of time (in seconds) to wait between consecutive read operations for a response from the server, set to None to wait forever
-    * `output_az_paths=False`: output `az://` paths instead of using the `https://` for azure
+    * `output_az_paths=True`: output `az://` paths instead of using the `https://` for azure
     * `use_azure_storage_account_key_fallback=False`: fallback to storage account keys for azure containers, having this enabled requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
     * `get_http_pool=None`: a function that returns a `urllib3.PoolManager` to be used for requests
     * `use_streaming_read=False`: if set to `True`, use a single read per file instead of reading a chunk at a time (not recommended for azure)
     * `default_buffer_size=io.DEFAULT_BUFFER_SIZE`: the default buffer size to use for reading files (and writing local files)
-    * `save_access_token_to_disk=False`: if set to `True` to save access tokens to disk so that other processes can read the access tokens to avoid the small amount of time it usually takes to get a token (if the token is still valid).
+    * `save_access_token_to_disk=True`: if set to `True` to save access tokens to disk so that other processes can read the access tokens to avoid the small amount of time it usually takes to get a token (if the token is still valid).
     * `multiprocessing_start_method="spawn"`: the start method to use when creating processes for parallel work
 * `create_context` - (same arguments as `configure`), creates a new instance of `blobfile` with a custom configuration instead of modifying the global configuration
 

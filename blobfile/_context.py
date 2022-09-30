@@ -1512,13 +1512,13 @@ def create_context(
     retry_limit: Optional[int] = None,
     connect_timeout: Optional[int] = DEFAULT_CONNECT_TIMEOUT,
     read_timeout: Optional[int] = DEFAULT_READ_TIMEOUT,
-    output_az_paths: bool = False,
+    output_az_paths: bool = True,
     use_azure_storage_account_key_fallback: bool = False,
     get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
     use_streaming_read: bool = False,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
     get_deadline: Optional[Callable[[], float]] = None,
-    save_access_token_to_disk: bool = False,
+    save_access_token_to_disk: bool = True,
     multiprocessing_start_method: str = "spawn",
 ):
     """

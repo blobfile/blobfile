@@ -743,7 +743,7 @@ class TokenManager:
             expiration = self._expirations.get(key)
             if expiration is None or (now + EARLY_EXPIRATION_SECONDS) > expiration:
                 if conf.save_access_token_to_disk:
-                    # Grab the acess file, see if we've already updated
+                    # Grab the access token file
                     self._load_token_file()
                     # See if an update already occurred
                     expiration = self._expirations.get(key)

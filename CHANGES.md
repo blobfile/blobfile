@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.0
+
+* Change `configure` defaults to `output_az_paths=True` and `save_access_token_to_disk=True`
+
 ## 1.3.4
 
 * Azure timestamp parsing is now slightly faster

@@ -19,6 +19,7 @@ import multiprocessing as mp
 import platform
 import pickle
 import zipfile
+import re
 
 import av
 import pytest
@@ -37,13 +38,9 @@ AS_TEST_CONTAINER2 = os.getenv("AS_TEST_CONTAINER2", "testcontainer3")
 AS_INVALID_ACCOUNT = f"{AS_TEST_ACCOUNT}-does-not-exist"
 AS_EXTERNAL_ACCOUNT = "cshteststorage4"
 
-AZURE_VALID_CONTAINER = (
-    f"https://{AS_TEST_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}"
-)
-AZURE_INVALID_CONTAINER = f"https://{AS_TEST_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}-does-not-exist"
-AZURE_INVALID_CONTAINER_NO_ACCOUNT = (
-    f"https://{AS_INVALID_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}"
-)
+AZURE_VALID_CONTAINER = f"az://{AS_TEST_ACCOUNT}/{AS_TEST_CONTAINER}"
+AZURE_INVALID_CONTAINER = f"az://{AS_TEST_ACCOUNT}/{AS_TEST_CONTAINER}-does-not-exist"
+AZURE_INVALID_CONTAINER_NO_ACCOUNT = f"az://{AS_INVALID_ACCOUNT}/{AS_TEST_CONTAINER}"
 GCS_VALID_BUCKET = f"gs://{GCS_TEST_BUCKET}"
 GCS_INVALID_BUCKET = f"gs://{GCS_TEST_BUCKET}-does-not-exist"
 
@@ -335,6 +332,10 @@ def test_join():
 
 def _convert_https_to_az(path):
     return path.replace("https://", "az://").replace(".blob.core.windows.net", "")
+
+
+def _convert_az_to_https(path):
+    return re.sub(r"^az://(.*?)/", r"https://\1.blob.core.windows.net/", path)
 
 
 @pytest.mark.parametrize(
@@ -904,9 +905,11 @@ def test_copy(parallel):
 def test_copy_invalid(parallel):
     for contents in [b"", b"meow!", b"meow!" * (2 * 2 ** 20)]:
         with _get_temp_local_path() as local_path, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2:
-            invalid_container_as_path = bf.join(AZURE_INVALID_CONTAINER, "file.bin")
-            invalid_account_as_path = bf.join(
-                AZURE_INVALID_CONTAINER_NO_ACCOUNT, "file.bin"
+            invalid_container_as_path = _convert_az_to_https(
+                bf.join(AZURE_INVALID_CONTAINER, "file.bin")
+            )
+            invalid_account_as_path = _convert_az_to_https(
+                bf.join(AZURE_INVALID_CONTAINER_NO_ACCOUNT, "file.bin")
             )
 
             _write_contents(local_path, contents)

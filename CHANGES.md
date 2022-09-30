@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.0
+## 2.0.0
 
 * Change `configure` defaults to `output_az_paths=True` and `save_access_token_to_disk=True`
 

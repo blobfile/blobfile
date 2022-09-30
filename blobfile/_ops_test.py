@@ -119,7 +119,7 @@ def _get_temp_as_path(account=AS_TEST_ACCOUNT, container=AS_TEST_CONTAINER):
 
 
 def _write_contents(path, contents):
-    if ".blob.core.windows.net" in path:
+    if ".blob.core.windows.net" in path or path.startswith("az://"):
         with tempfile.TemporaryDirectory() as tmpdir:
             assert isinstance(tmpdir, str)
             account, container, blob = azure.split_path(path)
@@ -209,6 +209,7 @@ def test_basename():
 
 
 def test_dirname():
+    b = bf.create_context(output_az_paths=False)
     testcases = [
         ("a", ""),
         ("a/b", "a"),
@@ -253,11 +254,12 @@ def test_dirname():
         ),
     ]
     for input_, desired_output in testcases:
-        actual_output = bf.dirname(input_)
+        actual_output = b.dirname(input_)
         assert desired_output == actual_output, f"{input_}"
 
 
 def test_join():
+    b = bf.create_context(output_az_paths=False)
     testcases = [
         ("a", "b", "a/b"),
         ("a/b", "c", "a/b/c"),
@@ -322,12 +324,12 @@ def test_join():
         ("gs://test/a/b", "c:d;", "gs://test/a/b/c:d;"),
     ]
     for input_a, input_b, desired_output in testcases:
-        actual_output = bf.join(input_a, input_b)
+        actual_output = b.join(input_a, input_b)
         assert desired_output == actual_output, f"{input_a} {input_b}"
         # also make sure az:// urls work
         if "blob.core.windows.net" in input_a:
             az_input_a = _convert_https_to_az(input_a)
-            actual_output = bf.join(az_input_a, input_b)
+            actual_output = b.join(az_input_a, input_b)
             assert desired_output == actual_output, f"{az_input_a} {input_b}"
 
 
@@ -987,21 +989,20 @@ def test_concurrent_write_gcs():
 
 def test_concurrent_write_as():
     with _get_temp_as_path() as path:
-        bf.configure(azure_write_chunk_size=2 ** 20)
+        b = bf.create_context(azure_write_chunk_size=2 ** 20)
         outer_contents = b"miso" * (2 ** 20 + 1)
         inner_contents = b"momo" * (2 ** 20 + 1)
         # the inner write will invalidate the outer one, the last writer
         # to start wins with this setup
         with pytest.raises(bf.ConcurrentWriteFailure):
-            with bf.BlobFile(path, "wb", streaming=True) as f:
+            with b.BlobFile(path, "wb", streaming=True) as f:
                 f.write(outer_contents)
-                with bf.BlobFile(path, "wb", streaming=True) as f:
+                with b.BlobFile(path, "wb", streaming=True) as f:
                     f.write(inner_contents)
 
         # the outer write will finish last and overwrite the inner one
-        with bf.BlobFile(path, "rb") as f:
+        with b.BlobFile(path, "rb") as f:
             assert f.read() == inner_contents
-        bf.configure()
 
 
 @contextlib.contextmanager

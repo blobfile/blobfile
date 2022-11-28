@@ -22,7 +22,7 @@ setup_dict = dict(
     packages=find_packages(),
     install_requires=[
         "pycryptodomex~=3.8",
-        "urllib3~=1.25",
+        "urllib3>=1.25.3,<3",
         "lxml~=4.9",
         "filelock~=3.0",
     ],

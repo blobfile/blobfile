@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import urllib
+import shutil
 from typing import (
     Any,
     Callable,
@@ -740,7 +741,7 @@ class TokenManager:
                                 }
                             )
                         )
-                    os.replace(tmp_path, self._access_token_file)
+                    shutil.move(tmp_path, self._access_token_file)
         except filelock.Timeout:  # type: ignore
             log_callback(
                 "Another instance of this application currently holds the lock."

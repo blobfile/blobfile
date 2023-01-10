@@ -725,22 +725,22 @@ class TokenManager:
         try:
             with filelock.FileLock(self._access_lock_file, timeout=1):
                 os.makedirs(os.path.dirname(self._access_token_file), exist_ok=True)
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    tmp_path = os.path.join(cast(str, tmpdir), "token.json")
-                    with open(tmp_path, "w") as f:
-                        f.write(
-                            TupleEncoder().encode(
-                                {
-                                    "token_keys": list(self._tokens.keys()),
-                                    "token_values": list(self._tokens.values()),
-                                    "expiration_keys": list(self._expirations.keys()),
-                                    "expiration_values": list(
-                                        self._expirations.values()
-                                    ),
-                                }
-                            )
+                # Use a ".tmp" in same dir to prevent cross device issues with os.replace
+                tmp_path = self._access_token_file + ".tmp"
+                with open(tmp_path, "w") as f:
+                    f.write(
+                        TupleEncoder().encode(
+                            {
+                                "token_keys": list(self._tokens.keys()),
+                                "token_values": list(self._tokens.values()),
+                                "expiration_keys": list(self._expirations.keys()),
+                                "expiration_values": list(
+                                    self._expirations.values()
+                                ),
+                            }
                         )
-                    os.replace(tmp_path, self._access_token_file)
+                    )
+                os.replace(tmp_path, self._access_token_file)
         except filelock.Timeout:  # type: ignore
             log_callback(
                 "Another instance of this application currently holds the lock."

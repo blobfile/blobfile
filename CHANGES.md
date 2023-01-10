@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.1
+
+* Fix for storing access tokens on a different filesystem than the one used for temp directories from @hponde
+
 ## 2.0.0
 
 * Change `configure` defaults to `output_az_paths=True` and `save_access_token_to_disk=True`

@@ -6,7 +6,6 @@ import platform
 import random
 import socket
 import ssl
-import tempfile
 import threading
 import time
 import urllib
@@ -21,7 +20,6 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
-    cast,
 )
 
 import filelock
@@ -278,7 +276,7 @@ class PoolDirector:
         # both are supposedly threadsafe though, so we shouldn't need a thread-local pool
         with self.lock:
             if self.pool_manager is None or self.creation_pid != os.getpid():
-                if int(urllib3.__version__.split(".")[0]) >= 2:
+                if int(urllib3.__version__.split(".")[0]) >= 2:  # type: ignore
                     # urllib3>=1.26.12 deprecates urllib3.contrib.pyopenssl and requests has an
                     # upper bound pin on urllib3, so the historical issues below are very unlikely
                     # to come about if you have urllib3 2.0
@@ -734,9 +732,7 @@ class TokenManager:
                                 "token_keys": list(self._tokens.keys()),
                                 "token_values": list(self._tokens.values()),
                                 "expiration_keys": list(self._expirations.keys()),
-                                "expiration_values": list(
-                                    self._expirations.values()
-                                ),
+                                "expiration_values": list(self._expirations.values()),
                             }
                         )
                     )

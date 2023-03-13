@@ -34,6 +34,7 @@ from blobfile._common import (
     path_join,
     strip_slashes,
     rng,
+    EtagMismatch,
 )
 
 SHARED_KEY = "shared_key"
@@ -1174,12 +1175,26 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                     ),
                 ),
                 data=data,
-                success_codes=(201,),
+                success_codes=(201, 412),
                 # retry if we get an MD5 mismatch error (unfortunately we are just guessing that it is a mismatch error
                 # from the 400 status code)
                 retry_codes=(400,) + DEFAULT_RETRY_CODES,
             )
-            execute_api_request(self._conf, req)
+            resp = execute_api_request(self._conf, req)
+            if resp.status == 412:
+                if resp.headers["x-ms-error-code"] != "ConditionNotMet":
+                    raise RequestFailure.create_from_request_response(
+                        message=f"unexpected status {resp.status}",
+                        request=req,
+                        response=resp,
+                    )
+                else:
+                    raise EtagMismatch.create_from_request_response(
+                        message=f"etag mismatch",
+                        request=req,
+                        response=resp,
+                )
+
             self._block_index += 1
             if self._block_index >= BLOCK_COUNT_LIMIT:
                 raise Error(

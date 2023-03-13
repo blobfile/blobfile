@@ -1473,6 +1473,28 @@ def test_azure_maybe_update_md5(ctx):
         )
 
 
+@pytest.mark.parametrize("ctx", [_get_temp_as_path])
+def test_azure_etags(ctx):
+    contents = b"bark!"
+    alternative_contents = b"ruff"
+
+    with ctx() as path:
+        bf.BlobFile(path, "wb").write(contents)
+        etag = bf.stat(path).version
+        with bf.create_context(additional_http_headers={"If-Match": etag}) as ctx:
+            with ctx.BlobFile(path, "wb") as f:
+                # first time should work
+                f.write(alternative_contents)
+
+                # second time should fail
+                with pytest.raises(bf.EtagMismatch):
+                    f.write(contents)
+
+        assert bf.BlobFile(path, "rb").read() == alternative_contents
+
+        bf.remove(path)
+
+
 def test_azure_timestamp_parsing():
     timestamp = "Sun, 27 Sep 2009 18:41:57 GMT"
 

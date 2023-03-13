@@ -244,6 +244,14 @@ class DeadlineExceeded(RequestFailure):
     pass
 
 
+class EtagMismatch(RequestFailure):
+    """
+    A write failed due to an ETag mismatch
+    """
+
+    pass
+
+
 class Stat(NamedTuple):
     size: int
     mtime: float
@@ -367,6 +375,7 @@ class Config:
         get_deadline: Optional[Callable[[], float]],
         save_access_token_to_disk: bool,
         multiprocessing_start_method: str,
+        additional_http_headers: Optional[Dict[str, str]] = None,
     ) -> None:
         self.log_callback = log_callback
         self.connection_pool_max_size = connection_pool_max_size
@@ -387,6 +396,7 @@ class Config:
         self.get_deadline = get_deadline
         self.save_access_token_to_disk = save_access_token_to_disk
         self.multiprocessing_start_method = multiprocessing_start_method
+        self.additional_http_headers = additional_http_headers
 
         if get_http_pool is None:
             if (
@@ -509,6 +519,9 @@ def execute_request(
 ) -> urllib3.HTTPResponse:
     for attempt, backoff in enumerate(exponential_sleep_generator()):
         req = build_req()
+        req.headers = dict(req.headers)
+        if conf.additional_http_headers:
+            req.headers.update(conf.additional_http_headers)
         url = req.url
         if req.params is not None:
             if len(req.params) > 0:

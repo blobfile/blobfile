@@ -34,6 +34,7 @@ from typing import (
     Union,
     cast,
     overload,
+    Mapping,
 )
 
 import urllib3
@@ -1520,6 +1521,7 @@ def create_context(
     get_deadline: Optional[Callable[[], float]] = None,
     save_access_token_to_disk: bool = True,
     multiprocessing_start_method: str = "spawn",
+    additional_http_headers: Optional[Mapping[str, str]] = None,
 ):
     """
     Same argument as configure(), but returns a Context object that has all the blobfile methods on it.
@@ -1543,5 +1545,6 @@ def create_context(
         get_deadline=get_deadline,
         save_access_token_to_disk=save_access_token_to_disk,
         multiprocessing_start_method=multiprocessing_start_method,
+        additional_http_headers=additional_http_headers,
     )
     return Context(conf=conf)

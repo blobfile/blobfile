@@ -12,6 +12,7 @@ from typing import (
     TextIO,
     Tuple,
     overload,
+    Mapping,
 )
 
 import urllib3
@@ -63,6 +64,8 @@ def configure(
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
     save_access_token_to_disk: bool = True,
     multiprocessing_start_method: str = "spawn",
+    additional_http_headers: Optional[Mapping[str, str]] = None,
+
 ) -> None:
     """
     log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout
@@ -80,6 +83,7 @@ def configure(
     default_buffer_size: the default buffer size to use for reading files (and writing local files)
     save_access_token_to_disk: set to `True` to save access tokens to disk so that other processes can read the access tokens to avoid the small amount of time it usually takes to get a token (if the token is still valid).
     multiprocessing_start_method: the start method to use when creating processes for parallel work
+    additional_http_headers: a mapping of additional headers to add to all requests
     """
     global default_context
     default_context = create_context(
@@ -100,6 +104,7 @@ def configure(
         default_buffer_size=default_buffer_size,
         save_access_token_to_disk=save_access_token_to_disk,
         multiprocessing_start_method=multiprocessing_start_method,
+        additional_http_headers=additional_http_headers,
     )
 
 

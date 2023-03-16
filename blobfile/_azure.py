@@ -1190,10 +1190,8 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                     )
                 else:
                     raise EtagMismatch.create_from_request_response(
-                        message=f"etag mismatch",
-                        request=req,
-                        response=resp,
-                )
+                        message=f"etag mismatch", request=req, response=resp
+                    )
 
             self._block_index += 1
             if self._block_index >= BLOCK_COUNT_LIMIT:

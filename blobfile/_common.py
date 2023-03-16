@@ -375,7 +375,7 @@ class Config:
         get_deadline: Optional[Callable[[], float]],
         save_access_token_to_disk: bool,
         multiprocessing_start_method: str,
-        additional_http_headers: Optional[Dict[str, str]] = None,
+        additional_http_headers: Optional[Mapping[str, str]] = None,
     ) -> None:
         self.log_callback = log_callback
         self.connection_pool_max_size = connection_pool_max_size
@@ -519,9 +519,13 @@ def execute_request(
 ) -> urllib3.HTTPResponse:
     for attempt, backoff in enumerate(exponential_sleep_generator()):
         req = build_req()
-        req.headers = dict(req.headers)
-        if conf.additional_http_headers:
-            req.headers.update(conf.additional_http_headers)
+        if req.headers is None:
+            headers = {}
+        else:
+            headers = dict(req.headers)
+        if conf.additional_http_headers is not None:
+            headers.update(conf.additional_http_headers)
+
         url = req.url
         if req.params is not None:
             if len(req.params) > 0:
@@ -565,7 +569,7 @@ def execute_request(
             resp = conf.get_http_pool().request(
                 method=req.method,
                 url=url,
-                headers=req.headers,
+                headers=headers,
                 body=body,
                 timeout=urllib3.Timeout(
                     connect=conf.connect_timeout,

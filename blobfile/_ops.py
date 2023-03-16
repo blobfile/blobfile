@@ -65,7 +65,6 @@ def configure(
     save_access_token_to_disk: bool = True,
     multiprocessing_start_method: str = "spawn",
     additional_http_headers: Optional[Mapping[str, str]] = None,
-
 ) -> None:
     """
     log_callback: a log callback function `log(msg: string)` to use instead of printing to stdout

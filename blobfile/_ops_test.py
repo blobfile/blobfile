@@ -1481,18 +1481,17 @@ def test_azure_etags(ctx):
     with ctx() as path:
         bf.BlobFile(path, "wb").write(contents)
         etag = bf.stat(path).version
-        with bf.create_context(additional_http_headers={"If-Match": etag}) as ctx:
-            with ctx.BlobFile(path, "wb") as f:
-                # first time should work
-                f.write(alternative_contents)
+        bf_ctx = bf.create_context(additional_http_headers={"If-Match": etag})
+        with bf_ctx.BlobFile(path, "wb") as f:
+            # first time should work
+            f.write(alternative_contents)
 
+        with pytest.raises(bf.EtagMismatch):
+            with bf_ctx.BlobFile(path, "wb") as f:
                 # second time should fail
-                with pytest.raises(bf.EtagMismatch):
-                    f.write(contents)
+                f.write(contents)
 
         assert bf.BlobFile(path, "rb").read() == alternative_contents
-
-        bf.remove(path)
 
 
 def test_azure_timestamp_parsing():

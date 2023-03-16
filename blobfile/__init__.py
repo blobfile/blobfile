@@ -68,6 +68,7 @@ __all__ = [
     "BlobFile",
     "Request",
     "Error",
+    "EtagMismatch",
     "RequestFailure",
     "RestartableStreamingWriteFailure",
     "ConcurrentWriteFailure",

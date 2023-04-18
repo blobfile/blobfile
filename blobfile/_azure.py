@@ -1138,12 +1138,12 @@ class StreamingWriteFile(BaseStreamingWriteFile):
 
         self._upload_id = rng.randint(0, 2 ** 47 - 1)
         self._block_index = 0
-        self.version = version # for azure, this is an etag
+        self._version = version  # for azure, this is an etag
         # check to see if there is an existing blob at this location with the wrong type
         req = Request(
             url=self._url,
             method="HEAD",
-            headers={"If-Match": self.version} if self.version else {},
+            headers={"If-Match": self._version} if self._version else {},
             success_codes=(200, 400, 404, 412, INVALID_HOSTNAME_STATUS),
         )
         resp = execute_api_request(conf, req)
@@ -1156,7 +1156,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 # with ConcurrentWriteFailure
                 resp = _clear_uncommitted_blocks(conf, self._url, resp.headers)
                 if resp:
-                    self.version = resp.headers["ETag"] # update the version according to new etag
+                    self._version = resp.headers["ETag"] # update the version according to new etag
             else:
                 # if the existing blob type is not compatible with the block blob we are about to write
                 # we have to delete the file before writing our block blob or else we will get a 409
@@ -1234,7 +1234,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 url=self._url,
                 block_ids=block_ids,
                 md5_digest=self._md5.digest(),
-                version=self.version
+                version=self._version
             )
 
 

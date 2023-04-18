@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import binascii
-import stat as stat_module
 import collections
 import concurrent.futures
 import contextlib
@@ -18,6 +17,7 @@ import stat as stat_module
 import tempfile
 import time
 import urllib.parse
+from functools import partial
 from types import ModuleType
 from typing import (
     TYPE_CHECKING,
@@ -116,7 +116,7 @@ class Context:
                 copy_fn = _parallel_download
 
             if _is_local_path(src) and _is_azure_path(dst):
-                copy_fn = azure.parallel_upload
+                copy_fn = partial(azure.parallel_upload, version=version)
 
             if _is_local_path(src) and _is_gcp_path(dst):
                 copy_fn = gcp.parallel_upload
@@ -127,7 +127,7 @@ class Context:
                 if src_account != dst_account:
                     # normal remote copy is pretty fast and doesn't benefit from parallelization when used within
                     # a storage account
-                    copy_fn = azure.parallel_remote_copy
+                    copy_fn = partial(azure.parallel_remote_copy, version=version)
 
             if copy_fn is not None:
                 if parallel_executor is None:

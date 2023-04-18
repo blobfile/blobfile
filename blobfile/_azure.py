@@ -1262,6 +1262,7 @@ def parallel_upload(
     src: str,
     dst: str,
     return_md5: bool,
+    version: Optional[str],
 ) -> Optional[str]:
     with open(src, "rb") as f:
         md5_digest = common.block_md5(f)
@@ -1299,7 +1300,7 @@ def parallel_upload(
         future.result()
 
     _finalize_blob(
-        conf=conf, path=dst, url=dst_url, block_ids=block_ids, md5_digest=md5_digest
+        conf=conf, path=dst, url=dst_url, block_ids=block_ids, md5_digest=md5_digest, version=version
     )
     return binascii.hexlify(md5_digest).decode("utf8") if return_md5 else None
 
@@ -1662,6 +1663,7 @@ def parallel_remote_copy(
     src: str,
     dst: str,
     return_md5: bool,
+    version: Optional[str],
 ) -> Optional[str]:
     # for whatever reason, put block from url is faster than copy blob when you run multiple requests in parallel
     # https://docs.microsoft.com/en-us/rest/api/storageservices/put-block-from-url
@@ -1705,7 +1707,7 @@ def parallel_remote_copy(
     )
 
     _finalize_blob(
-        conf=conf, path=dst, url=dst_url, block_ids=block_ids, md5_digest=md5_digest
+        conf=conf, path=dst, url=dst_url, block_ids=block_ids, md5_digest=md5_digest, version=version
     )
     return (
         binascii.hexlify(md5_digest).decode("utf8")

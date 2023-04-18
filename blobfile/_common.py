@@ -244,6 +244,14 @@ class DeadlineExceeded(RequestFailure):
     pass
 
 
+class VersionMismatch(RequestFailure):
+    """
+    A write failed due to a version mismatch, using ETag for azure or generation for gcloud
+    """
+
+    pass
+
+
 class Stat(NamedTuple):
     size: int
     mtime: float

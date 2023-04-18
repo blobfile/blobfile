@@ -33,6 +33,7 @@ from blobfile._common import (
     RequestFailure as RequestFailure,
     RestartableStreamingWriteFailure as RestartableStreamingWriteFailure,
     ConcurrentWriteFailure as ConcurrentWriteFailure,
+    VersionMismatch as VersionMismatch,
     DeadlineExceeded as DeadlineExceeded,
     Stat as Stat,
     DirEntry as DirEntry,

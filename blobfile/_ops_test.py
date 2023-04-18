@@ -1473,6 +1473,38 @@ def test_azure_maybe_update_md5(ctx):
         )
 
 
+@pytest.mark.parametrize("ctx", [_get_temp_as_path])
+def test_azure_etags(ctx):
+    contents = b"bark!"
+    alternative_contents = b"ruff"
+
+    with ctx() as path:
+        bf.BlobFile(path, "wb").write(contents)
+        version = bf.stat(path).version
+
+        # test can write a bunch of times on correct version
+        with bf.BlobFile(path, "wb", version=version) as f:
+            # first time should work
+            for _ in range(1000):
+                f.write(alternative_contents)
+
+        version = bf.stat(path).version
+        with bf.BlobFile(path, "wb", version=version) as f:
+            # overwrite it again to match with later in test
+            f.write(alternative_contents)
+
+        new_version = bf.stat(path).version
+        assert new_version != version
+        with pytest.raises(bf.VersionMismatch):
+            with bf.BlobFile(path, "wb", version=version) as f:
+                # second time should fail
+                f.write(contents)
+
+        assert bf.BlobFile(path, "rb").read() == alternative_contents
+
+        bf.remove(path)
+
+
 def test_azure_timestamp_parsing():
     timestamp = "Sun, 27 Sep 2009 18:41:57 GMT"
 

@@ -34,6 +34,7 @@ from blobfile._common import (
     path_join,
     strip_slashes,
     rng,
+    VersionMismatch,
 )
 
 SHARED_KEY = "shared_key"
@@ -863,7 +864,7 @@ def _block_index_to_block_id(index: int, upload_id: int) -> str:
     return base64.b64encode(id_plus_index.to_bytes(8, byteorder="big")).decode("utf8")
 
 
-def _clear_uncommitted_blocks(conf: Config, url: str, metadata: Dict[str, str]) -> None:
+def _clear_uncommitted_blocks(conf: Config, url: str, metadata: Dict[str, str]) -> Optional[urllib3.HTTPResponse]:
     # to avoid leaking uncommitted blocks, we can do a Put Block List with
     # all the existing blocks for a file
     # this will change the last-modified timestamp and the etag
@@ -895,11 +896,12 @@ def _clear_uncommitted_blocks(conf: Config, url: str, metadata: Dict[str, str]) 
         data=body,
         success_codes=(201, 404, 412),
     )
-    execute_api_request(conf, req)
+
+    return execute_api_request(conf, req)
 
 
 def _finalize_blob(
-    conf: Config, path: str, url: str, block_ids: List[str], md5_digest: Optional[bytes]
+    conf: Config, path: str, url: str, block_ids: List[str], md5_digest: Optional[bytes], version: Optional[str],
 ) -> None:
     body = {"BlockList": {"Latest": block_ids}}
     headers = {}
@@ -907,13 +909,16 @@ def _finalize_blob(
         # azure does not calculate md5s for us, we have to do that manually
         # https://web.archive.org/web/20190118183153/https://blogs.msdn.microsoft.com/windowsazurestorage/2011/02/17/windows-azure-blob-md5-overview/
         headers["x-ms-blob-content-md5"] = base64.b64encode(md5_digest).decode("utf8")
+
+    if version is not None:
+        headers["If-Match"] = version
     req = Request(
         url=url,
         method="PUT",
         headers=headers,
         params=dict(comp="blocklist"),
         data=body,
-        success_codes=(201, 400, 404, INVALID_HOSTNAME_STATUS),
+        success_codes=(201, 400, 404, 412, INVALID_HOSTNAME_STATUS),
     )
     resp = execute_api_request(conf, req)
     if resp.status == 400:
@@ -935,6 +940,19 @@ def _finalize_blob(
     elif resp.status == 404 or resp.status == INVALID_HOSTNAME_STATUS:
         # this can occur when using parallel upload
         raise FileNotFoundError(f"No such file or directory: '{path}'")
+    elif resp.status == 412:
+        if resp.headers["x-ms-error-code"] != "ConditionNotMet":
+            raise RequestFailure.create_from_request_response(
+                message=f"unexpected status {resp.status}",
+                request=req,
+                response=resp,
+            )
+        else:
+            raise VersionMismatch.create_from_request_response(
+                message=f"etag mismatch",
+                request=req,
+                response=resp,
+            )
 
 
 def isdir(conf: Config, path: str) -> bool:
@@ -1038,7 +1056,7 @@ class StreamingReadFile(BaseStreamingReadFile):
 
 
 class StreamingWriteFile(BaseStreamingWriteFile):
-    def __init__(self, conf: Config, path: str) -> None:
+    def __init__(self, conf: Config, path: str, version: Optional[str]) -> None:
         self._path = path
         account, container, blob = split_path(path)
         self._url = build_url(
@@ -1120,11 +1138,13 @@ class StreamingWriteFile(BaseStreamingWriteFile):
 
         self._upload_id = rng.randint(0, 2 ** 47 - 1)
         self._block_index = 0
+        self.version = version # for azure, this is an etag
         # check to see if there is an existing blob at this location with the wrong type
         req = Request(
             url=self._url,
             method="HEAD",
-            success_codes=(200, 400, 404, INVALID_HOSTNAME_STATUS),
+            headers={"If-Match": self.version} if self.version else {},
+            success_codes=(200, 400, 404, 412, INVALID_HOSTNAME_STATUS),
         )
         resp = execute_api_request(conf, req)
         if resp.status == 200:
@@ -1134,7 +1154,9 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 # deleting all uncommitted blocks
                 # this means that the last writer to start is likely to win, the others should fail
                 # with ConcurrentWriteFailure
-                _clear_uncommitted_blocks(conf, self._url, resp.headers)
+                resp = _clear_uncommitted_blocks(conf, self._url, resp.headers)
+                if resp:
+                    self.version = resp.headers["ETag"] # update the version according to new etag
             else:
                 # if the existing blob type is not compatible with the block blob we are about to write
                 # we have to delete the file before writing our block blob or else we will get a 409
@@ -1147,6 +1169,19 @@ class StreamingWriteFile(BaseStreamingWriteFile):
             raise FileNotFoundError(
                 f"No such file or container/account does not exist: '{path}'"
             )
+        elif resp.status == 412:
+            if resp.headers["x-ms-error-code"] != "ConditionNotMet":
+                raise RequestFailure.create_from_request_response(
+                    message=f"unexpected status {resp.status}",
+                    request=req,
+                    response=resp,
+                )
+            else:
+                raise VersionMismatch.create_from_request_response(
+                    message=f"etag mismatch",
+                    request=req,
+                    response=resp,
+                )
         self._md5 = hashlib.md5()
         super().__init__(conf=conf, chunk_size=conf.azure_write_chunk_size)
 
@@ -1199,6 +1234,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 url=self._url,
                 block_ids=block_ids,
                 md5_digest=self._md5.digest(),
+                version=self.version
             )
 
 

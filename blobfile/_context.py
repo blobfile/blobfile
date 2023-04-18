@@ -95,6 +95,7 @@ class Context:
         parallel: bool = False,
         parallel_executor: Optional[concurrent.futures.Executor] = None,
         return_md5: bool = False,
+        version: Optional[str] = None,
     ) -> Optional[str]:
         # it would be best to check isdir() for remote paths, but that would
         # involve 2 extra network requests, so just do this test instead
@@ -155,7 +156,7 @@ class Context:
         for attempt, backoff in enumerate(common.exponential_sleep_generator()):
             try:
                 with self.BlobFile(src, "rb", streaming=True) as src_f, self.BlobFile(
-                    dst, "wb", streaming=True
+                    dst, "wb", streaming=True, version=version
                 ) as dst_f:
                     m = hashlib.md5()
                     while True:
@@ -819,6 +820,7 @@ class Context:
         buffer_size: int = ...,
         cache_dir: Optional[str] = ...,
         file_size: Optional[int] = None,
+        version: Optional[str] = None,
     ) -> BinaryIO:
         ...
 
@@ -831,6 +833,7 @@ class Context:
         buffer_size: int = ...,
         cache_dir: Optional[str] = ...,
         file_size: Optional[int] = None,
+        version: Optional[str] = None,
     ) -> TextIO:
         ...
 
@@ -842,12 +845,13 @@ class Context:
         buffer_size: Optional[int] = None,
         cache_dir: Optional[str] = None,
         file_size: Optional[int] = None,
+        version: Optional[str] = None,
     ):
         """
         Open a local or remote file for reading or writing
 
         Args:
-            path local or remote path
+            path: local or remote path
             mode: one of "r", "rb", "w", "wb", "a", "ab" indicating the mode to open the file in
             streaming: the default for `streaming` is `True` when `mode` is in `"r", "rb"` and `False` when `mode` is in `"w", "wb", "a", "ab"`.
                 * `streaming=True`:
@@ -861,6 +865,7 @@ class Context:
             buffer_size: number of bytes to buffer, this can potentially make reading more efficient.
             cache_dir: a directory in which to cache files for reading, only valid if `streaming=False` and `mode` is in `"r", "rb"`.   You are reponsible for cleaning up the cache directory.
             file_size: size of the file being opened, can be specified directly to avoid checking the file size when opening the file.  While this will avoid a network request, it also means that you may get an error when first reading a file that does not exist rather than when opening it.  Only valid for modes "r" and "rb".  This valid will be ignored for local files.
+            version: a version number of the file being opened, used to prevent overwriting a file that has changed since it was opened.  Only valid for modes "w", "wb", "a", "ab"
 
         Returns:
             A file-like object
@@ -873,6 +878,11 @@ class Context:
 
         if file_size is not None:
             assert mode in ("r", "rb"), "Can only specify file_size when reading"
+
+        if version:
+            assert mode in ("w", "wb", "a", "ab"), "Can only specify version when writing"
+            assert not _is_local_path(path), "Cannot specify version when writing to local file"
+            # we check for gcp later to raise a NotImplementedError instead
 
         if _is_local_path(path) and "w" in mode:
             # local filesystems require that intermediate directories exist, but this is not required by the
@@ -896,6 +906,8 @@ class Context:
                 else:
                     f = io.BufferedWriter(f, buffer_size=buffer_size)
             elif _is_gcp_path(path):
+                if version:
+                    raise NotImplementedError("Cannot specify version for GCP files")
                 if mode in ("w", "wb"):
                     f = gcp.StreamingWriteFile(self._conf, path)
                 elif mode in ("r", "rb"):
@@ -905,7 +917,7 @@ class Context:
                     raise Error(f"Unsupported mode: '{mode}'")
             elif _is_azure_path(path):
                 if mode in ("w", "wb"):
-                    f = azure.StreamingWriteFile(self._conf, path)
+                    f = azure.StreamingWriteFile(self._conf, path, version)
                 elif mode in ("r", "rb"):
                     f = azure.StreamingReadFile(self._conf, path, size=file_size)
                     f = io.BufferedReader(f, buffer_size=buffer_size)
@@ -1056,6 +1068,7 @@ class Context:
                 mode=mode,
                 tmp_dir=tmp_dir,
                 remote_path=remote_path,
+                version=version,
             )
             if "r" in mode:
                 f = io.BufferedReader(f, buffer_size=buffer_size)
@@ -1473,6 +1486,7 @@ class _ProxyFile(io.FileIO):
         mode: 'Literal["r", "rb", "w", "wb", "a", "ab"]',
         tmp_dir: Optional[str],
         remote_path: Optional[str],
+        version: Optional[str],
     ) -> None:
         super().__init__(local_path, mode=mode)
         self._ctx = ctx
@@ -1481,6 +1495,7 @@ class _ProxyFile(io.FileIO):
         self._local_path = local_path
         self._remote_path = remote_path
         self._closed = False
+        self._version = version
 
     def close(self) -> None:
         if not hasattr(self, "_closed") or self._closed:
@@ -1489,7 +1504,7 @@ class _ProxyFile(io.FileIO):
         super().close()
         try:
             if self._remote_path is not None and self._mode in ("w", "wb", "a", "ab"):
-                self._ctx.copy(self._local_path, self._remote_path, overwrite=True)
+                self._ctx.copy(self._local_path, self._remote_path, overwrite=True, version=self._version)
         finally:
             # if the copy fails, still cleanup our local temp file so it is not leaked
             if self._tmp_dir is not None:

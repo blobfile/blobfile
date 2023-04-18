@@ -311,6 +311,7 @@ def BlobFile(
     buffer_size: int = ...,
     cache_dir: Optional[str] = ...,
     file_size: Optional[int] = None,
+    version: Optional[str] = None,
 ) -> BinaryIO:
     ...
 
@@ -323,6 +324,7 @@ def BlobFile(
     buffer_size: int = ...,
     cache_dir: Optional[str] = ...,
     file_size: Optional[int] = None,
+    version: Optional[str] = None,
 ) -> TextIO:
     ...
 
@@ -334,6 +336,7 @@ def BlobFile(
     buffer_size: Optional[int] = None,
     cache_dir: Optional[str] = None,
     file_size: Optional[int] = None,
+    version: Optional[str] = None,
 ):
     """
     Open a local or remote file for reading or writing
@@ -363,4 +366,5 @@ def BlobFile(
         buffer_size=buffer_size,
         cache_dir=cache_dir,
         file_size=file_size,
+        version=version,
     )

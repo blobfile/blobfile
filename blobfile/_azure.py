@@ -864,7 +864,9 @@ def _block_index_to_block_id(index: int, upload_id: int) -> str:
     return base64.b64encode(id_plus_index.to_bytes(8, byteorder="big")).decode("utf8")
 
 
-def _clear_uncommitted_blocks(conf: Config, url: str, metadata: Dict[str, str]) -> Optional[urllib3.HTTPResponse]:
+def _clear_uncommitted_blocks(
+    conf: Config, url: str, metadata: Dict[str, str]
+) -> Optional[urllib3.HTTPResponse]:
     # to avoid leaking uncommitted blocks, we can do a Put Block List with
     # all the existing blocks for a file
     # this will change the last-modified timestamp and the etag
@@ -901,7 +903,12 @@ def _clear_uncommitted_blocks(conf: Config, url: str, metadata: Dict[str, str]) 
 
 
 def _finalize_blob(
-    conf: Config, path: str, url: str, block_ids: List[str], md5_digest: Optional[bytes], version: Optional[str],
+    conf: Config,
+    path: str,
+    url: str,
+    block_ids: List[str],
+    md5_digest: Optional[bytes],
+    version: Optional[str],
 ) -> None:
     body = {"BlockList": {"Latest": block_ids}}
     headers = {}
@@ -943,15 +950,11 @@ def _finalize_blob(
     elif resp.status == 412:
         if resp.headers["x-ms-error-code"] != "ConditionNotMet":
             raise RequestFailure.create_from_request_response(
-                message=f"unexpected status {resp.status}",
-                request=req,
-                response=resp,
+                message=f"unexpected status {resp.status}", request=req, response=resp
             )
         else:
             raise VersionMismatch.create_from_request_response(
-                message=f"etag mismatch",
-                request=req,
-                response=resp,
+                message=f"etag mismatch", request=req, response=resp
             )
 
 
@@ -1156,7 +1159,9 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 # with ConcurrentWriteFailure
                 resp = _clear_uncommitted_blocks(conf, self._url, resp.headers)
                 if resp:
-                    self._version = resp.headers["ETag"] # update the version according to new etag
+                    self._version = resp.headers[
+                        "ETag"
+                    ]  # update the version according to new etag
             else:
                 # if the existing blob type is not compatible with the block blob we are about to write
                 # we have to delete the file before writing our block blob or else we will get a 409
@@ -1178,9 +1183,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 )
             else:
                 raise VersionMismatch.create_from_request_response(
-                    message=f"etag mismatch",
-                    request=req,
-                    response=resp,
+                    message=f"etag mismatch", request=req, response=resp
                 )
         self._md5 = hashlib.md5()
         super().__init__(conf=conf, chunk_size=conf.azure_write_chunk_size)
@@ -1234,7 +1237,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 url=self._url,
                 block_ids=block_ids,
                 md5_digest=self._md5.digest(),
-                version=self._version
+                version=self._version,
             )
 
 
@@ -1300,7 +1303,12 @@ def parallel_upload(
         future.result()
 
     _finalize_blob(
-        conf=conf, path=dst, url=dst_url, block_ids=block_ids, md5_digest=md5_digest, version=version
+        conf=conf,
+        path=dst,
+        url=dst_url,
+        block_ids=block_ids,
+        md5_digest=md5_digest,
+        version=version,
     )
     return binascii.hexlify(md5_digest).decode("utf8") if return_md5 else None
 
@@ -1707,7 +1715,12 @@ def parallel_remote_copy(
     )
 
     _finalize_blob(
-        conf=conf, path=dst, url=dst_url, block_ids=block_ids, md5_digest=md5_digest, version=version
+        conf=conf,
+        path=dst,
+        url=dst_url,
+        block_ids=block_ids,
+        md5_digest=md5_digest,
+        version=version,
     )
     return (
         binascii.hexlify(md5_digest).decode("utf8")

@@ -76,4 +76,5 @@ __all__ = [
     "DirEntry",
     "Context",
     "create_context",
+    "VersionMismatch",
 ]

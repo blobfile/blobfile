@@ -880,8 +880,15 @@ class Context:
             assert mode in ("r", "rb"), "Can only specify file_size when reading"
 
         if version:
-            assert mode in ("w", "wb", "a", "ab"), "Can only specify version when writing"
-            assert not _is_local_path(path), "Cannot specify version when writing to local file"
+            assert mode in (
+                "w",
+                "wb",
+                "a",
+                "ab",
+            ), "Can only specify version when writing"
+            assert not _is_local_path(
+                path
+            ), "Cannot specify version when writing to local file"
             # we check for gcp later to raise a NotImplementedError instead
 
         if _is_local_path(path) and "w" in mode:
@@ -1504,7 +1511,12 @@ class _ProxyFile(io.FileIO):
         super().close()
         try:
             if self._remote_path is not None and self._mode in ("w", "wb", "a", "ab"):
-                self._ctx.copy(self._local_path, self._remote_path, overwrite=True, version=self._version)
+                self._ctx.copy(
+                    self._local_path,
+                    self._remote_path,
+                    overwrite=True,
+                    version=self._version,
+                )
         finally:
             # if the copy fails, still cleanup our local temp file so it is not leaked
             if self._tmp_dir is not None:

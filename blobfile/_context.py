@@ -95,7 +95,7 @@ class Context:
         parallel: bool = False,
         parallel_executor: Optional[concurrent.futures.Executor] = None,
         return_md5: bool = False,
-        version: Optional[str] = None,
+        dst_version: Optional[str] = None,
     ) -> Optional[str]:
         # it would be best to check isdir() for remote paths, but that would
         # involve 2 extra network requests, so just do this test instead
@@ -110,13 +110,18 @@ class Context:
                     f"Destination '{dst}' already exists and overwrite is disabled"
                 )
 
+        if dst_version is not None:
+            assert _is_azure_path(
+                dst
+            ), f"Destination version was specified, but destination path {dst} does not support a version check"
+
         if parallel:
             copy_fn = None
             if (_is_azure_path(src) or _is_gcp_path(src)) and _is_local_path(dst):
                 copy_fn = _parallel_download
 
             if _is_local_path(src) and _is_azure_path(dst):
-                copy_fn = partial(azure.parallel_upload, version=version)
+                copy_fn = partial(azure.parallel_upload, dst_version=dst_version)
 
             if _is_local_path(src) and _is_gcp_path(dst):
                 copy_fn = gcp.parallel_upload
@@ -127,7 +132,9 @@ class Context:
                 if src_account != dst_account:
                     # normal remote copy is pretty fast and doesn't benefit from parallelization when used within
                     # a storage account
-                    copy_fn = partial(azure.parallel_remote_copy, version=version)
+                    copy_fn = partial(
+                        azure.parallel_remote_copy, dst_version=dst_version
+                    )
 
             if copy_fn is not None:
                 if parallel_executor is None:
@@ -149,6 +156,10 @@ class Context:
             return gcp.remote_copy(self._conf, src=src, dst=dst, return_md5=return_md5)
 
         if _is_azure_path(src) and _is_azure_path(dst):
+            # support could be added here for this but it's currently missing
+            assert (
+                dst_version is None
+            ), f"Destination version was specified, but destination path {dst} does not support a version check"
             return azure.remote_copy(
                 self._conf, src=src, dst=dst, return_md5=return_md5
             )
@@ -156,7 +167,7 @@ class Context:
         for attempt, backoff in enumerate(common.exponential_sleep_generator()):
             try:
                 with self.BlobFile(src, "rb", streaming=True) as src_f, self.BlobFile(
-                    dst, "wb", streaming=True, version=version
+                    dst, "wb", streaming=True, version=dst_version
                 ) as dst_f:
                     m = hashlib.md5()
                     while True:
@@ -1515,7 +1526,7 @@ class _ProxyFile(io.FileIO):
                     self._local_path,
                     self._remote_path,
                     overwrite=True,
-                    version=self._version,
+                    dst_version=self._version,
                 )
         finally:
             # if the copy fails, still cleanup our local temp file so it is not leaked

@@ -110,6 +110,7 @@ def copy(
     parallel: bool = False,
     parallel_executor: Optional[concurrent.futures.Executor] = None,
     return_md5: bool = False,
+    dst_version: Optional[str] = None,
 ) -> Optional[str]:
     """
     Copy a file from one path to another
@@ -126,6 +127,8 @@ def copy(
 
     If `return_md5` is set to `True`, an md5 will be calculated during the copy and returned if available,
     or else None will be returned.
+
+    If `dst_version` is set to a version string, the copy will fail if the destination path does not have this version (versions can be retrieved with `stat()`)
     """
     return default_context.copy(
         src=src,
@@ -134,6 +137,7 @@ def copy(
         parallel=parallel,
         parallel_executor=parallel_executor,
         return_md5=return_md5,
+        dst_version=dst_version,
     )
 
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.2
+
+* Support a `version` parameter for writing files to Azure, if the `version` doesn't match the remote version, a `VersionMismatch` error will be raised from @williamzhuk
+
 ## 2.0.1
 
 * Fix for storing access tokens on a different filesystem than the one used for temp directories from @hponde

@@ -139,6 +139,7 @@ Azure Blobs URLs have the format `az://<account>/<container>` or `https://<accou
 * `RequestFailure(Error)` - a request has failed permanently, the status code can be found in the property `response_status:int` and an error code, if available, is in `error:Optional[str]`.
 * `RestartableStreamingWriteFailure(RequestFailure)` - a streaming write has failed permanently, which requires restarting from the beginning of the stream.
 * `ConcurrentWriteFailure(RequestFailure)` - a write failed because another process was writing to the same file at the same time.
+* `VersionMismatch(RequestFailure)` - a write failed because the remote file did not match the version specified by the user.
 * The following generic exceptions are raised from some functions to make the behavior similar to the original versions: `FileNotFoundError`, `FileExistsError`, `IsADirectoryError`, `NotADirectoryError`, `OSError`, `ValueError`, `io.UnsupportedOperation`
 
 ## Logging

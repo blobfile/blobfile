@@ -64,6 +64,10 @@ RESPONSE_HEADER_TO_REQUEST_HEADER = {
 
 
 def _load_credentials() -> Dict[str, Any]:
+    # When AZURE_USE_IDENTITY=1, blobfile will use the azure-identity package to retrieve AAD access tokens
+    if os.getenv("AZURE_USE_IDENTITY", "0") == "1":
+        return {"_azure_auth": "azure-identity"}
+
     # https://github.com/Azure/azure-sdk-for-python/tree/master/sdk/identity/azure-identity#environment-variables
     # AZURE_STORAGE_KEY seems to be the environment variable mentioned by the az cli
     # AZURE_STORAGE_ACCOUNT_KEY is mentioned elsewhere on the internet
@@ -773,6 +777,37 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
             )
             if storage_account_key_auth is not None:
                 return (storage_account_key_auth, now + SHARED_KEY_EXPIRATION_SECONDS)
+    
+    # If opted into using azure-identity, use DefaultAzureCredential to get a token
+    # This enables the use of Managed Identity, Workload Identity, and other auth methods not implemented here
+    elif azure_auth == "azure-identity":
+        try:
+            from azure.identity import DefaultAzureCredential
+        except ImportError:
+            raise RuntimeError(
+                "When setting AZURE_USE_IDENTITY=1, you must also install the azure-identity package"
+            )
+
+        with DefaultAzureCredential() as cred:
+            token = cred.get_token("https://storage.azure.com/.default")
+        auth = (OAUTH_TOKEN, token.token)
+        if _can_access_container(
+            conf, account, container, auth, out_failures=access_failures
+        ):
+            return (auth, token.expires_on)
+
+        if conf.use_azure_storage_account_key_fallback:
+            # fall back to getting the storage keys
+            storage_account_key_auth = _get_storage_account_key(
+                conf=conf,
+                account=account,
+                container=container,
+                creds=creds,
+                out_failures=access_failures,
+            )
+            if storage_account_key_auth is not None:
+                return (storage_account_key_auth, now + SHARED_KEY_EXPIRATION_SECONDS)
+    
 
     # oddly, it seems that if you request a public container with a valid azure account, you cannot list the bucket
     # but if you list it with no account, that works fine

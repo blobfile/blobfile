@@ -102,11 +102,12 @@ The following methods will be tried in order:
 
 The following methods will be tried in order:
 
-1) Check the environment variable `AZURE_STORAGE_KEY` for an azure storage account key (these are per-storage account shared keys described in https://docs.microsoft.com/en-us/azure/storage/common/storage-account-keys-manage)
-2) Check the environment variable `AZURE_APPLICATION_CREDENTIALS` which should point to JSON credentials for a service principal output by the command `az ad sp create-for-rbac --name <name>`
-3) Check the environment variables `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID` corresponding to a service principal described in the previous step but without the JSON file.
+1) If `AZURE_USE_IDENTITY=1` is set, use [DefaultAzureCredential](https://learn.microsoft.com/en-us/python/api/azure-identity/azure.identity.defaultazurecredential?view=azure-python) from the `azure-identity` package to acquire tokens. Note: your application must install the `azure-identity` package; `blobfile` does not specify it as a required dependency.
+2) Check the environment variable `AZURE_STORAGE_KEY` for an azure storage account key (these are per-storage account shared keys described in https://docs.microsoft.com/en-us/azure/storage/common/storage-account-keys-manage)
+3) Check the environment variable `AZURE_APPLICATION_CREDENTIALS` which should point to JSON credentials for a service principal output by the command `az ad sp create-for-rbac --name <name>`
+4) Check the environment variables `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID` corresponding to a service principal described in the previous step but without the JSON file.
 4) Check the environment variable `AZURE_STORAGE_CONNECTION_STRING` for an [Azure Storage connection string](https://docs.microsoft.com/en-us/azure/storage/common/storage-configure-connection-string)
-5) Use credentials from the `az` command line tool if they can be found.
+6) Use credentials from the `az` command line tool if they can be found.
 
 If access using credentials fails, anonymous access will be tried.  `blobfile` supports public access for containers marked as public, but not individual blobs.
 

@@ -61,7 +61,9 @@ from blobfile._common import (
     Request,
     RestartableStreamingWriteFailure,
     Stat,
+    RemoteOrLocalPath,
     get_log_threshold_for_error,
+    path_to_str,
 )
 
 # https://cloud.google.com/storage/docs/naming
@@ -89,14 +91,16 @@ class Context:
 
     def copy(
         self,
-        src: str,
-        dst: str,
+        src: RemoteOrLocalPath,
+        dst: RemoteOrLocalPath,
         overwrite: bool = False,
         parallel: bool = False,
         parallel_executor: Optional[concurrent.futures.Executor] = None,
         return_md5: bool = False,
         dst_version: Optional[str] = None,
     ) -> Optional[str]:
+        src = path_to_str(src)
+        dst = path_to_str(dst)
         # it would be best to check isdir() for remote paths, but that would
         # involve 2 extra network requests, so just do this test instead
         if _guess_isdir(src):
@@ -199,7 +203,8 @@ class Context:
                     )
                 time.sleep(backoff)
 
-    def exists(self, path: str) -> bool:
+    def exists(self, path: RemoteOrLocalPath) -> bool:
+        path = path_to_str(path)
         if _is_local_path(path):
             return os.path.exists(path)
         elif _is_gcp_path(path):
@@ -215,7 +220,8 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
-    def basename(self, path: str) -> str:
+    def basename(self, path: RemoteOrLocalPath) -> str:
+        path = path_to_str(path)
         if _is_gcp_path(path):
             _, obj = gcp.split_path(path)
             return obj.split("/")[-1]
@@ -353,7 +359,8 @@ class Context:
         else:
             raise Error(f"Unrecognized path '{pattern}'")
 
-    def isdir(self, path: str) -> bool:
+    def isdir(self, path: RemoteOrLocalPath) -> bool:
+        path = path_to_str(path)
         if _is_local_path(path):
             return os.path.isdir(path)
         elif _is_gcp_path(path):
@@ -363,11 +370,13 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
-    def listdir(self, path: str, shard_prefix_length: int = 0) -> Iterator[str]:
+    def listdir(self, path: RemoteOrLocalPath, shard_prefix_length: int = 0) -> Iterator[str]:
+        path = path_to_str(path)
         for entry in self.scandir(path, shard_prefix_length=shard_prefix_length):
             yield entry.name
 
-    def scandir(self, path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
+    def scandir(self, path: RemoteOrLocalPath, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
+        path = path_to_str(path)
         if (_is_gcp_path(path) or _is_azure_path(path)) and not path.endswith("/"):
             path += "/"
         if not self.exists(path):
@@ -444,7 +453,8 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
-    def makedirs(self, path: str) -> None:
+    def makedirs(self, path: RemoteOrLocalPath) -> None:
+        path = path_to_str(path)
         if _is_local_path(path):
             os.makedirs(path, exist_ok=True)
         elif _is_gcp_path(path):
@@ -454,7 +464,8 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
-    def remove(self, path: str) -> None:
+    def remove(self, path: RemoteOrLocalPath) -> None:
+        path = path_to_str(path)
         if _is_local_path(path):
             os.remove(path)
         elif _is_gcp_path(path):
@@ -476,7 +487,8 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
-    def rmdir(self, path: str) -> None:
+    def rmdir(self, path: RemoteOrLocalPath) -> None:
+        path = path_to_str(path)
         if _is_local_path(path):
             os.rmdir(path)
             return
@@ -537,7 +549,8 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
-    def stat(self, path: str) -> Stat:
+    def stat(self, path: RemoteOrLocalPath) -> Stat:
+        path = path_to_str(path)
         if _is_local_path(path):
             s = os.stat(path)
             return Stat(
@@ -560,7 +573,8 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
-    def set_mtime(self, path: str, mtime: float, version: Optional[str] = None) -> bool:
+    def set_mtime(self, path: RemoteOrLocalPath, mtime: float, version: Optional[str] = None) -> bool:
+        path = path_to_str(path)
         if _is_local_path(path):
             assert version is None
             os.utime(path, times=(mtime, mtime))
@@ -574,10 +588,11 @@ class Context:
 
     def rmtree(
         self,
-        path: str,
+        path: RemoteOrLocalPath,
         parallel: bool = False,
         parallel_executor: Optional[concurrent.futures.Executor] = None,
     ) -> None:
+        path = path_to_str(path)
         if not self.isdir(path):
             raise NotADirectoryError(f"The directory name is invalid: '{path}'")
 
@@ -671,10 +686,11 @@ class Context:
 
     def walk(
         self,
-        top: str,
+        top: RemoteOrLocalPath,
         topdown: bool = True,
         onerror: Optional[Callable[[OSError], None]] = None,
     ) -> Iterator[Tuple[str, Sequence[str], Sequence[str]]]:
+        top = path_to_str(top)
         if not self.isdir(top):
             return
 
@@ -764,7 +780,8 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{top}'")
 
-    def dirname(self, path: str) -> str:
+    def dirname(self, path: RemoteOrLocalPath) -> str:
+        path = path_to_str(path)
         if _is_gcp_path(path):
             return gcp.dirname(self._conf, path)
         elif _is_azure_path(path):
@@ -772,13 +789,15 @@ class Context:
         else:
             return os.path.dirname(path)
 
-    def join(self, a: str, *args: str) -> str:
+    def join(self, a: RemoteOrLocalPath, *args: str) -> str:
+        a = path_to_str(a)
         out = a
         for b in args:
             out = _join2(self._conf, out, b)
         return out
 
-    def get_url(self, path: str) -> Tuple[str, Optional[float]]:
+    def get_url(self, path: RemoteOrLocalPath) -> Tuple[str, Optional[float]]:
+        path = path_to_str(path)
         if _is_gcp_path(path):
             return gcp.get_url(self._conf, path)
         elif _is_azure_path(path):
@@ -788,7 +807,8 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
-    def md5(self, path: str) -> str:
+    def md5(self, path: RemoteOrLocalPath) -> str:
+        path = path_to_str(path)
         if _is_gcp_path(path):
             st = gcp.maybe_stat(self._conf, path)
             if st is None:
@@ -825,7 +845,7 @@ class Context:
     @overload
     def BlobFile(
         self,
-        path: str,
+        path: RemoteOrLocalPath,
         mode: Literal["rb", "wb", "ab"],
         streaming: Optional[bool] = ...,
         buffer_size: int = ...,
@@ -838,7 +858,7 @@ class Context:
     @overload
     def BlobFile(
         self,
-        path: str,
+        path: RemoteOrLocalPath,
         mode: Literal["r", "w", "a"] = ...,
         streaming: Optional[bool] = ...,
         buffer_size: int = ...,
@@ -850,7 +870,7 @@ class Context:
 
     def BlobFile(
         self,
-        path: str,
+        path: RemoteOrLocalPath,
         mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r",
         streaming: Optional[bool] = None,
         buffer_size: Optional[int] = None,
@@ -881,6 +901,7 @@ class Context:
         Returns:
             A file-like object
         """
+        path = path_to_str(path)
         if _guess_isdir(path):
             raise IsADirectoryError(f"Is a directory: '{path}'")
 

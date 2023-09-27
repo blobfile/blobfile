@@ -26,7 +26,7 @@ setup_dict = dict(
         "lxml~=4.9",
         "filelock~=3.0",
     ],
-    python_requires=">=3.7.0",
+    python_requires=">=3.8.0",
     # indicate that we have type information
     package_data={"blobfile": ["py.typed", "VERSION"]},
     # mypy cannot find type information in zip files

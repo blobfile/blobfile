@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import concurrent.futures
 from typing import (
-    TYPE_CHECKING,
     BinaryIO,
     Callable,
     Iterator,
+    Literal,
     Optional,
     Sequence,
     TextIO,
@@ -15,14 +15,6 @@ from typing import (
 )
 
 import urllib3
-
-if TYPE_CHECKING:
-    # Literal is only in the stdlib in Python 3.8+
-    # this works without having a runtime installation of typing_extensions because
-    # a) we postponed evaluation of type annotations with PEP 563,
-    # b) we don't use Literal as a base class or for casting,
-    # c) type checkers always know what typing_extensions is
-    from typing_extensions import Literal
 
 from blobfile._common import DirEntry, Stat, RemoteOrLocalPath
 from blobfile._context import (

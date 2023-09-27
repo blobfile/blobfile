@@ -613,12 +613,12 @@ def _get_storage_account_key(
     # giving it access to the bucket
 
     # get an access token for the management service
-    def build_req() -> Request:
+    def build_req_access_token() -> Request:
         return _create_access_token_request(
             creds=creds, scope="https://management.azure.com/.default"
         )
 
-    resp = common.execute_request(conf, build_req)
+    resp = common.execute_request(conf, build_req_access_token)
     result = json.loads(resp.data)
     auth = (OAUTH_TOKEN, result["access_token"])
 
@@ -650,7 +650,7 @@ def _get_storage_account_key(
             # we failed to find the storage account, give up
             return None
 
-    def build_req() -> Request:
+    def build_req_list_keys() -> Request:
         req = Request(
             method="POST",
             url=f"https://management.azure.com{storage_account_id}/listKeys",
@@ -658,7 +658,7 @@ def _get_storage_account_key(
         )
         return create_api_request(req, auth=auth)
 
-    resp = common.execute_request(conf, build_req)
+    resp = common.execute_request(conf, build_req_list_keys)
     result = json.loads(resp.data)
     for key in result["keys"]:
         if key["permissions"] == "FULL":
@@ -841,7 +841,7 @@ def _get_sas_token(conf: Config, key: Any) -> Tuple[Any, float]:
     return out["UserDelegationKey"], t
 
 
-def execute_api_request(conf: Config, req: Request) -> urllib3.HTTPResponse:
+def execute_api_request(conf: Config, req: Request) -> "urllib3.BaseHTTPResponse":
     u = urllib.parse.urlparse(req.url)
     account = u.netloc.split(".")[0]
     path_parts = u.path.split("/")
@@ -866,7 +866,7 @@ def _block_index_to_block_id(index: int, upload_id: int) -> str:
 
 def _clear_uncommitted_blocks(
     conf: Config, url: str, metadata: Dict[str, str]
-) -> Optional[urllib3.HTTPResponse]:
+) -> Optional["urllib3.BaseHTTPResponse"]:
     # to avoid leaking uncommitted blocks, we can do a Put Block List with
     # all the existing blocks for a file
     # this will change the last-modified timestamp and the etag
@@ -1041,7 +1041,7 @@ class StreamingReadFile(BaseStreamingReadFile):
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
-    ) -> urllib3.response.HTTPResponse:
+    ) -> "urllib3.BaseHTTPResponse":
         account, container, blob = split_path(self._path)
         req = Request(
             url=build_url(

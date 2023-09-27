@@ -8,7 +8,7 @@ import socket
 import ssl
 import threading
 import time
-import urllib
+import urllib.parse
 from typing import (
     Any,
     Callable,
@@ -155,7 +155,7 @@ def _extract_error(data: bytes) -> Tuple[Optional[str], Optional[str]]:
 
 
 def _extract_error_from_response(
-    response: urllib3.HTTPResponse,
+    response: "urllib3.BaseHTTPResponse",
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     err = None
     err_desc = None
@@ -206,7 +206,7 @@ class RequestFailure(Error):
 
     @classmethod
     def create_from_request_response(
-        cls, message: str, request: Request, response: urllib3.HTTPResponse
+        cls, message: str, request: Request, response: "urllib3.BaseHTTPResponse"
     ) -> Any:
         # this helper function exists because if you make a custom Exception subclass it cannot
         # be unpickled easily: https://stackoverflow.com/questions/41808912/cannot-unpickle-exception-subclass
@@ -517,7 +517,7 @@ def _read_with_deadline(
 
 def execute_request(
     conf: Config, build_req: Callable[[], Request]
-) -> urllib3.HTTPResponse:
+) -> "urllib3.BaseHTTPResponse":
     for attempt, backoff in enumerate(exponential_sleep_generator()):
         req = build_req()
         url = req.url
@@ -564,7 +564,8 @@ def execute_request(
                 method=req.method,
                 url=url,
                 headers=req.headers,
-                body=body,
+                # WindowedFile isn't actually an IO[Any] or Iterable[bytes]
+                body=body,  # type: ignore
                 timeout=urllib3.Timeout(
                     connect=conf.connect_timeout,
                     read=conf.read_timeout,
@@ -917,7 +918,8 @@ class BaseStreamingReadFile(io.RawIOBase):
 
                 err = None
                 try:
-                    opt_n = self._f.readinto(b)
+                    # urllib3 should actually admit a memoryview over here
+                    opt_n = self._f.readinto(b)  # type: ignore
                     assert opt_n is not None, "file is in non-blocking mode"
                     n = opt_n
                     if n == 0:

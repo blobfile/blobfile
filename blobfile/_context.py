@@ -71,7 +71,7 @@ DEFAULT_READ_TIMEOUT = 30
 DEFAULT_BUFFER_SIZE = 8 * 2**20
 
 
-def _execute_fn_and_ignore_result(fn: Callable, *args: Any):
+def _execute_fn_and_ignore_result(fn: Callable[..., object], *args: Any):
     fn(*args)
 
 
@@ -160,7 +160,7 @@ class Context:
                             break
                         if return_md5:
                             m.update(block)
-                        dst_f.write(block)  # type: ignore
+                        dst_f.write(block)
                     if return_md5:
                         return m.hexdigest()
                     else:

@@ -155,7 +155,8 @@ def _extract_error_from_response(
     err = None
     err_desc = None
     err_headers = None
-    if response.data is not None:
+    # TODO: type checker thinks response.data is never None, confirm this
+    if response.data is not None:  # type: ignore
         err, err_desc = _extract_error(response.data)
     if response.headers:
         err_headers = ", ".join(f"{header}: {value}" for header, value in response.headers.items())
@@ -362,7 +363,7 @@ class Config:
         get_http_pool: Optional[Callable[[], urllib3.PoolManager]],
         use_streaming_read: bool,
         default_buffer_size: int,
-        get_deadline: Optional[Callable[[], float]],
+        get_deadline: Optional[Callable[[], Optional[float]]],
         save_access_token_to_disk: bool,
         multiprocessing_start_method: str,
     ) -> None:
@@ -562,7 +563,7 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
                     # https://github.com/urllib3/urllib3/issues/1741
                     # because this is an SSLSocket, we can't easily recreate it from the fileno(), instead find the underlying socket object
                     fp: Any = resp._fp.fp  # type: ignore
-                    sock: socket.socket = fp.raw._sock  # type: ignore
+                    sock: socket.socket = fp.raw._sock
                     try:
                         body = _read_with_deadline(
                             fp=fp,
@@ -720,7 +721,7 @@ class TokenManager:
                         )
                     )
                 os.replace(tmp_path, self._access_token_file)
-        except filelock.Timeout:  # type: ignore
+        except filelock.Timeout:
             log_callback("Another instance of this application currently holds the lock.")
 
     def get_token(self, conf: Config, key: Any) -> Any:
@@ -786,7 +787,7 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
     def writable(self) -> bool:
         return True
 
-    def write(self, b: bytes) -> int:
+    def write(self, b: bytes) -> int:  # type: ignore
         if len(self._buf) == 0 and len(b) >= self._chunk_size:
             # optimization for when we want to do a single large f.write()
             mv = memoryview(b)
@@ -830,7 +831,7 @@ class BaseStreamingReadFile(io.RawIOBase):
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
-    ) -> urllib3.response.HTTPResponse:
+    ) -> "urllib3.BaseHTTPResponse":
         raise NotImplementedError
 
     def readall(self) -> bytes:

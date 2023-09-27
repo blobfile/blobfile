@@ -1,5 +1,6 @@
 import os
 from setuptools import setup, find_packages
+from typing import Any
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -10,7 +11,7 @@ with open(os.path.join(SCRIPT_DIR, "blobfile", "VERSION")) as version_file:
     version = version_file.read().strip()
 
 
-setup_dict = dict(
+setup_dict = dict[str, Any](
     name="blobfile",
     version=version,
     description="Read GCS, ABS and local paths with the same interface, clone of tensorflow.io.gfile",

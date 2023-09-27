@@ -420,7 +420,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
         return (ANONYMOUS, ""), float("inf")
 
 
-def execute_api_request(conf: Config, req: Request) -> urllib3.HTTPResponse:
+def execute_api_request(conf: Config, req: Request) -> "urllib3.BaseHTTPResponse":
     def build_req() -> Request:
         return create_api_request(
             req, auth=access_token_manager.get_token(conf, key="")
@@ -440,7 +440,7 @@ class StreamingReadFile(BaseStreamingReadFile):
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
-    ) -> urllib3.response.HTTPResponse:
+    ) -> "urllib3.BaseHTTPResponse":
         bucket, name = split_path(self._path)
         req = Request(
             url=build_url("/storage/v1/b/{bucket}/o/{name}", bucket=bucket, name=name),

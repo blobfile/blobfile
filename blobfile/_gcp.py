@@ -67,9 +67,7 @@ def _create_jwt(private_key: str, data: Mapping[str, Any]) -> bytes:
     return header_b64 + b"." + body_b64 + b"." + signature_b64
 
 
-def _create_token_request(
-    client_email: str, private_key: str, scopes: List[str]
-) -> Request:
+def _create_token_request(client_email: str, private_key: str, scopes: List[str]) -> Request:
     # https://developers.google.com/identity/protocols/OAuth2ServiceAccount
     now = time.time()
     claim_set = {
@@ -137,9 +135,7 @@ def _load_credentials() -> Dict[str, Any]:
 def _create_access_token_request(creds: Dict[str, Any], scopes: List[str]) -> Request:
     if "private_key" in creds:
         # looks like GCS does not support the no-oauth flow https://developers.google.com/identity/protocols/OAuth2ServiceAccount#jwt-auth
-        return _create_token_request(
-            creds["client_email"], creds["private_key"], scopes
-        )
+        return _create_token_request(creds["client_email"], creds["private_key"], scopes)
     elif "refresh_token" in creds:
         return _refresh_access_token_request(
             refresh_token=creds["refresh_token"],
@@ -270,17 +266,12 @@ def generate_signed_url(
     canonical_request_hash = hashlib.sha256(canonical_request.encode()).hexdigest()
 
     string_to_sign = "\n".join(
-        [
-            "GOOG4-RSA-SHA256",
-            request_timestamp,
-            credential_scope,
-            canonical_request_hash,
-        ]
+        ["GOOG4-RSA-SHA256", request_timestamp, credential_scope, canonical_request_hash]
     )
 
-    signature = binascii.hexlify(
-        _sign(creds["private_key"], string_to_sign.encode("utf8"))
-    ).decode("utf8")
+    signature = binascii.hexlify(_sign(creds["private_key"], string_to_sign.encode("utf8"))).decode(
+        "utf8"
+    )
     host_name = "https://storage.googleapis.com"
     signed_url = f"{host_name}{canonical_uri}?{canonical_query_string}&X-Goog-Signature={signature}"
     return signed_url, expiration
@@ -382,8 +373,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
 
         def build_req() -> Request:
             req = _create_access_token_request(
-                creds=creds,
-                scopes=["https://www.googleapis.com/auth/devstorage.full_control"],
+                creds=creds, scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
             )
             req.success_codes = (200, 400)
             return req
@@ -402,9 +392,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
             raise Error(msg)
         assert resp.status == 200
         return (OAUTH_TOKEN, result["access_token"]), now + float(result["expires_in"])
-    elif (
-        os.environ.get("NO_GCE_CHECK", "false").lower() != "true" and _is_gce_instance()
-    ):
+    elif os.environ.get("NO_GCE_CHECK", "false").lower() != "true" and _is_gce_instance():
         # see if the metadata server has a token for us
         def build_req() -> Request:
             return Request(
@@ -422,9 +410,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
 
 def execute_api_request(conf: Config, req: Request) -> "urllib3.BaseHTTPResponse":
     def build_req() -> Request:
-        return create_api_request(
-            req, auth=access_token_manager.get_token(conf, key="")
-        )
+        return create_api_request(req, auth=access_token_manager.get_token(conf, key=""))
 
     return common.execute_request(conf, build_req)
 
@@ -459,9 +445,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
     def __init__(self, conf: Config, path: str) -> None:
         bucket, name = split_path(path)
         req = Request(
-            url=build_url(
-                "/upload/storage/v1/b/{bucket}/o?uploadType=resumable", bucket=bucket
-            ),
+            url=build_url("/upload/storage/v1/b/{bucket}/o?uploadType=resumable", bucket=bucket),
             method="POST",
             data=dict(name=name),
             success_codes=(200, 400, 404),
@@ -598,11 +582,7 @@ def _delete_part(conf: Config, bucket: str, name: str) -> None:
 
 
 def parallel_upload(
-    conf: Config,
-    executor: concurrent.futures.Executor,
-    src: str,
-    dst: str,
-    return_md5: bool,
+    conf: Config, executor: concurrent.futures.Executor, src: str, dst: str, return_md5: bool
 ) -> Optional[str]:
     with open(src, "rb") as f:
         md5_digest = common.block_md5(f)
@@ -620,21 +600,14 @@ def parallel_upload(
     source_objects = []
     object_names = []
     max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
-    part_size = max(
-        math.ceil(s.st_size / max_workers), common.PARALLEL_COPY_MINIMUM_PART_SIZE
-    )
+    part_size = max(math.ceil(s.st_size / max_workers), common.PARALLEL_COPY_MINIMUM_PART_SIZE)
     i = 0
     start = 0
     futures = []
     while start < s.st_size:
         suffix = f".part.{i}"
         future = executor.submit(
-            _upload_part,
-            conf,
-            src,
-            start,
-            min(part_size, s.st_size - start),
-            dst + suffix,
+            _upload_part, conf, src, start, min(part_size, s.st_size - start), dst + suffix
         )
         futures.append(future)
         object_names.append(dstname + suffix)
@@ -692,9 +665,7 @@ def _create_page_iterator(
         p["pageToken"] = result["nextPageToken"]
 
 
-def list_blobs(
-    conf: Config, path: str, delimiter: Optional[str] = None
-) -> Iterator[DirEntry]:
+def list_blobs(conf: Config, path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
     params = {}
     if delimiter is not None:
         params["delimiter"] = delimiter
@@ -745,9 +716,7 @@ def get_url(conf: Config, path: str) -> Tuple[str, Optional[float]]:
     return generate_signed_url(bucket, blob, expiration=MAX_EXPIRATION)
 
 
-def set_mtime(
-    conf: Config, path: str, mtime: float, version: Optional[str] = None
-) -> bool:
+def set_mtime(conf: Config, path: str, mtime: float, version: Optional[str] = None) -> bool:
     bucket, blob = split_path(path)
     params = None
     if version is not None:

@@ -60,17 +60,15 @@ from blobfile._common import (
 
 # https://cloud.google.com/storage/docs/naming
 # https://www.w3.org/TR/xml/#charsets
-INVALID_CHARS = (
-    set().union(range(0x0, 0x9)).union(range(0xB, 0xE)).union(range(0xE, 0x20))
-)
+INVALID_CHARS = set().union(range(0x0, 0x9)).union(range(0xB, 0xE)).union(range(0xE, 0x20))
 
-DEFAULT_AZURE_WRITE_CHUNK_SIZE = 8 * 2 ** 20
-DEFAULT_GOOGLE_WRITE_CHUNK_SIZE = 8 * 2 ** 20
+DEFAULT_AZURE_WRITE_CHUNK_SIZE = 8 * 2**20
+DEFAULT_GOOGLE_WRITE_CHUNK_SIZE = 8 * 2**20
 DEFAULT_RETRY_LOG_THRESHOLD = 0
 DEFAULT_RETRY_COMMON_LOG_THRESHOLD = 2
 DEFAULT_CONNECT_TIMEOUT = 10
 DEFAULT_READ_TIMEOUT = 30
-DEFAULT_BUFFER_SIZE = 8 * 2 ** 20
+DEFAULT_BUFFER_SIZE = 8 * 2**20
 
 
 def _execute_fn_and_ignore_result(fn: Callable, *args: Any):
@@ -128,24 +126,16 @@ class Context:
                 if src_account != dst_account:
                     # normal remote copy is pretty fast and doesn't benefit from parallelization when used within
                     # a storage account
-                    copy_fn = partial(
-                        azure.parallel_remote_copy, dst_version=dst_version
-                    )
+                    copy_fn = partial(azure.parallel_remote_copy, dst_version=dst_version)
 
             if copy_fn is not None:
                 if parallel_executor is None:
                     with concurrent.futures.ProcessPoolExecutor(
-                        mp_context=mp.get_context(
-                            self._conf.multiprocessing_start_method
-                        )
+                        mp_context=mp.get_context(self._conf.multiprocessing_start_method)
                     ) as executor:
-                        return copy_fn(
-                            self._conf, executor, src, dst, return_md5=return_md5
-                        )
+                        return copy_fn(self._conf, executor, src, dst, return_md5=return_md5)
                 else:
-                    return copy_fn(
-                        self._conf, parallel_executor, src, dst, return_md5=return_md5
-                    )
+                    return copy_fn(self._conf, parallel_executor, src, dst, return_md5=return_md5)
 
         # special case cloud to cloud copy, don't download the file
         if _is_gcp_path(src) and _is_gcp_path(dst):
@@ -156,9 +146,7 @@ class Context:
             assert (
                 dst_version is None
             ), f"Destination version was specified, but destination path {dst} does not support a version check"
-            return azure.remote_copy(
-                self._conf, src=src, dst=dst, return_md5=return_md5
-            )
+            return azure.remote_copy(self._conf, src=src, dst=dst, return_md5=return_md5)
 
         for attempt, backoff in enumerate(common.exponential_sleep_generator()):
             try:
@@ -183,10 +171,7 @@ class Context:
                 # if this failure occurs, the upload must be restarted from the beginning
                 # https://cloud.google.com/storage/docs/resumable-uploads#practices
                 # https://github.com/googleapis/gcs-resumable-upload/issues/15#issuecomment-249324122
-                if (
-                    self._conf.retry_limit is not None
-                    and attempt >= self._conf.retry_limit
-                ):
+                if self._conf.retry_limit is not None and attempt >= self._conf.retry_limit:
                     raise
 
                 if attempt >= get_log_threshold_for_error(self._conf, str(err)):
@@ -257,11 +242,7 @@ class Context:
                     stat=None
                     if is_dir
                     else Stat(
-                        size=s.st_size,
-                        mtime=s.st_mtime,
-                        ctime=s.st_ctime,
-                        md5=None,
-                        version=None,
+                        size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None, version=None
                     ),
                 )
         elif _is_gcp_path(pattern) or _is_azure_path(pattern):
@@ -290,9 +271,7 @@ class Context:
                 ), "You probably want to use parallel=True if you are setting shard_prefix_length > 0"
                 initial_tasks = []
                 valid_chars = [
-                    i
-                    for i in range(256)
-                    if i not in INVALID_CHARS.union([ord("/"), ord("*")])
+                    i for i in range(256) if i not in INVALID_CHARS.union([ord("/"), ord("*")])
                 ]
                 pattern_prefix, pattern_suffix = blob_prefix.split("*", maxsplit=1)
                 for repeat in range(1, shard_prefix_length + 1):
@@ -323,8 +302,7 @@ class Context:
 
                 tasks_done = 0
                 with mp_ctx.Pool(
-                    initializer=_glob_worker,
-                    initargs=(self._conf, root, tasks, results),
+                    initializer=_glob_worker, initargs=(self._conf, root, tasks, results)
                 ):
                     while tasks_done < tasks_enqueued:
                         r = results.get()
@@ -372,9 +350,7 @@ class Context:
         if (_is_gcp_path(path) or _is_azure_path(path)) and not path.endswith("/"):
             path += "/"
         if not self.exists(path):
-            raise FileNotFoundError(
-                f"The system cannot find the path specified: '{path}'"
-            )
+            raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
         if not self.isdir(path):
             raise NotADirectoryError(f"The directory name is invalid: '{path}'")
         if _is_local_path(path):
@@ -404,18 +380,14 @@ class Context:
                     )
         elif _is_gcp_path(path) or _is_azure_path(path):
             if shard_prefix_length == 0:
-                yield from _list_blobs_in_dir(
-                    conf=self._conf, prefix=path, exclude_prefix=True
-                )
+                yield from _list_blobs_in_dir(conf=self._conf, prefix=path, exclude_prefix=True)
             else:
                 mp_ctx = mp.get_context(self._conf.multiprocessing_start_method)
                 prefixes = mp_ctx.Queue()
                 items = mp_ctx.Queue()
                 tasks_enqueued = 0
 
-                valid_chars = [
-                    i for i in range(256) if i not in INVALID_CHARS and i != ord("/")
-                ]
+                valid_chars = [i for i in range(256) if i not in INVALID_CHARS and i != ord("/")]
                 for repeat in range(1, shard_prefix_length + 1):
                     for chars in itertools.product(valid_chars, repeat=repeat):
                         prefix = ""
@@ -433,8 +405,7 @@ class Context:
 
                 tasks_done = 0
                 with mp_ctx.Pool(
-                    initializer=_sharded_listdir_worker,
-                    initargs=(self._conf, prefixes, items),
+                    initializer=_sharded_listdir_worker, initargs=(self._conf, prefixes, items)
                 ):
                     while tasks_done < tasks_enqueued:
                         entry = items.get()
@@ -465,17 +436,13 @@ class Context:
                 raise IsADirectoryError(f"Is a directory: '{path}'")
             ok = gcp.remove(self._conf, path)
             if not ok:
-                raise FileNotFoundError(
-                    f"The system cannot find the path specified: '{path}'"
-                )
+                raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
         elif _is_azure_path(path):
             if path.endswith("/"):
                 raise IsADirectoryError(f"Is a directory: '{path}'")
             ok = azure.remove(self._conf, path)
             if not ok:
-                raise FileNotFoundError(
-                    f"The system cannot find the path specified: '{path}'"
-                )
+                raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
@@ -521,9 +488,7 @@ class Context:
         if _is_gcp_path(path):
             bucket, blob = gcp.split_path(path)
             req = Request(
-                url=gcp.build_url(
-                    "/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob
-                ),
+                url=gcp.build_url("/storage/v1/b/{bucket}/o/{object}", bucket=bucket, object=blob),
                 method="DELETE",
                 success_codes=(204,),
             )
@@ -531,9 +496,7 @@ class Context:
         elif _is_azure_path(path):
             account, container, blob = azure.split_path(path)
             req = Request(
-                url=azure.build_url(
-                    account, "/{container}/{blob}", container=container, blob=blob
-                ),
+                url=azure.build_url(account, "/{container}/{blob}", container=container, blob=blob),
                 method="DELETE",
                 success_codes=(202,),
             )
@@ -545,13 +508,7 @@ class Context:
         path = path_to_str(path)
         if _is_local_path(path):
             s = os.stat(path)
-            return Stat(
-                size=s.st_size,
-                mtime=s.st_mtime,
-                ctime=s.st_ctime,
-                md5=None,
-                version=None,
-            )
+            return Stat(size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None, version=None)
         elif _is_gcp_path(path):
             st = gcp.maybe_stat(self._conf, path)
             if st is None:
@@ -565,7 +522,9 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
-    def set_mtime(self, path: RemoteOrLocalPath, mtime: float, version: Optional[str] = None) -> bool:
+    def set_mtime(
+        self, path: RemoteOrLocalPath, mtime: float, version: Optional[str] = None
+    ) -> bool:
         path = path_to_str(path)
         if _is_local_path(path):
             assert version is None
@@ -633,10 +592,7 @@ class Context:
                         )
                         req = Request(
                             url=azure.build_url(
-                                account,
-                                "/{container}/{blob}",
-                                container=container,
-                                blob=entry_blob,
+                                account, "/{container}/{blob}", container=container, blob=entry_blob
                             ),
                             method="DELETE",
                             # 404 is allowed in case a failed request successfully deleted the file
@@ -652,9 +608,7 @@ class Context:
             if parallel:
                 if parallel_executor is None:
                     executor = concurrent.futures.ProcessPoolExecutor(
-                        mp_context=mp.get_context(
-                            self._conf.multiprocessing_start_method
-                        )
+                        mp_context=mp.get_context(self._conf.multiprocessing_start_method)
                     )
                     context = executor
                 else:
@@ -664,9 +618,7 @@ class Context:
                 futures = []
                 with context:
                     for req in request_generator():
-                        f = executor.submit(
-                            _execute_fn_and_ignore_result, fn, self._conf, req
-                        )
+                        f = executor.submit(_execute_fn_and_ignore_result, fn, self._conf, req)
                         futures.append(f)
                 for f in futures:
                     f.result()
@@ -688,9 +640,7 @@ class Context:
 
         if _is_local_path(top):
             top = os.path.normpath(top)
-            for root, dirnames, filenames in os.walk(
-                top=top, topdown=topdown, onerror=onerror
-            ):
+            for root, dirnames, filenames in os.walk(top=top, topdown=topdown, onerror=onerror):
                 assert isinstance(root, str)
                 if root.endswith(os.sep):
                     root = root[:-1]
@@ -744,11 +694,7 @@ class Context:
                     if dirpath != cur:
                         # pop directories from the current path until we match the prefix of this new path
                         while cur != dirpath[: len(cur)]:
-                            yield (
-                                top + "/".join(cur),
-                                dirnames_stack.pop(),
-                                filenames_stack.pop(),
-                            )
+                            yield (top + "/".join(cur), dirnames_stack.pop(), filenames_stack.pop())
                             cur.pop()
                         # push directories from the new path until the current path matches it
                         while cur != dirpath:
@@ -761,11 +707,7 @@ class Context:
                     if entry.is_file:
                         filenames_stack[-1].append(entry.name)
                 while len(cur) > 0:
-                    yield (
-                        top + "/".join(cur),
-                        dirnames_stack.pop(),
-                        filenames_stack.pop(),
-                    )
+                    yield (top + "/".join(cur), dirnames_stack.pop(), filenames_stack.pop())
                     cur.pop()
                 yield (_strip_slash(top), dirnames_stack.pop(), filenames_stack.pop())
                 assert len(dirnames_stack) == 0 and len(filenames_stack) == 0
@@ -904,15 +846,8 @@ class Context:
             assert mode in ("r", "rb"), "Can only specify file_size when reading"
 
         if version:
-            assert mode in (
-                "w",
-                "wb",
-                "a",
-                "ab",
-            ), "Can only specify version when writing"
-            assert not _is_local_path(
-                path
-            ), "Cannot specify version when writing to local file"
+            assert mode in ("w", "wb", "a", "ab"), "Can only specify version when writing"
+            assert not _is_local_path(path), "Cannot specify version when writing to local file"
             # we check for gcp later to raise a NotImplementedError instead
 
         if _is_local_path(path) and "w" in mode:
@@ -1002,9 +937,7 @@ class Context:
                         self.copy(remote_path, local_path)
                     else:
                         if not _is_local_path(cache_dir):
-                            raise Error(
-                                f"cache_dir must be a local path: '{cache_dir}'"
-                            )
+                            raise Error(f"cache_dir must be a local path: '{cache_dir}'")
                         self.makedirs(cache_dir)
                         path_md5 = hashlib.md5(path.encode("utf8")).hexdigest()
                         lock_path = self.join(cache_dir, f"{path_md5}.lock")
@@ -1044,20 +977,13 @@ class Context:
 
                             if perform_copy:
                                 local_hexdigest = self.copy(
-                                    remote_path,
-                                    tmp_path,
-                                    overwrite=True,
-                                    return_md5=True,
+                                    remote_path, tmp_path, overwrite=True, return_md5=True
                                 )
-                                assert (
-                                    local_hexdigest is not None
-                                ), "failed to return md5"
+                                assert local_hexdigest is not None, "failed to return md5"
                                 # the file we downloaded may not match the remote file because
                                 # the remote file changed while we were downloading it
                                 # in this case make sure we don't cache it under the wrong md5
-                                local_path = self.join(
-                                    cache_dir, local_hexdigest, local_filename
-                                )
+                                local_path = self.join(cache_dir, local_hexdigest, local_filename)
                                 os.makedirs(self.dirname(local_path), exist_ok=True)
                                 if os.path.exists(local_path):
                                     # the file is already here, nevermind
@@ -1068,23 +994,15 @@ class Context:
                                 if remote_hash is None:
                                     if _is_azure_path(path):
                                         azure.maybe_update_md5(
-                                            self._conf,
-                                            path,
-                                            remote_version,
-                                            local_hexdigest,
+                                            self._conf, path, remote_version, local_hexdigest
                                         )
                                     elif _is_gcp_path(path):
                                         gcp.maybe_update_md5(
-                                            self._conf,
-                                            path,
-                                            remote_version,
-                                            local_hexdigest,
+                                            self._conf, path, remote_version, local_hexdigest
                                         )
                             else:
                                 assert remote_hash is not None
-                                local_path = self.join(
-                                    cache_dir, remote_hash, local_filename
-                                )
+                                local_path = self.join(cache_dir, remote_hash, local_filename)
                 else:
                     tmp_dir = tempfile.mkdtemp()
                     local_path = self.join(tmp_dir, local_filename)
@@ -1167,11 +1085,7 @@ def _download_chunk(
 
 
 def _parallel_download(
-    conf: Config,
-    executor: concurrent.futures.Executor,
-    src: str,
-    dst: str,
-    return_md5: bool,
+    conf: Config, executor: concurrent.futures.Executor, src: str, dst: str, return_md5: bool
 ) -> Optional[str]:
     ctx = Context(conf=conf)
 
@@ -1186,20 +1100,12 @@ def _parallel_download(
             f.write(b"\0")
 
     max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
-    part_size = max(
-        math.ceil(s.size / max_workers), common.PARALLEL_COPY_MINIMUM_PART_SIZE
-    )
+    part_size = max(math.ceil(s.size / max_workers), common.PARALLEL_COPY_MINIMUM_PART_SIZE)
     start = 0
     futures = []
     while start < s.size:
         future = executor.submit(
-            _download_chunk,
-            conf,
-            src,
-            dst,
-            start,
-            min(part_size, s.size - start),
-            s.size,
+            _download_chunk, conf, src, dst, start, min(part_size, s.size - start), s.size
         )
         futures.append(future)
         start += part_size
@@ -1282,9 +1188,7 @@ def _glob_full(conf: Config, pattern: str) -> Iterator[DirEntry]:
 
     re_pattern = _compile_pattern(pattern)
 
-    for entry in _expand_implicit_dirs(
-        root=prefix, it=_list_blobs(conf=conf, path=prefix)
-    ):
+    for entry in _expand_implicit_dirs(root=prefix, it=_list_blobs(conf=conf, path=prefix)):
         entry_slash_path = _get_slash_path(entry)
         if bool(re_pattern.match(entry_slash_path)):
             if entry_slash_path == prefix and entry.is_dir:
@@ -1416,9 +1320,7 @@ def _guess_isdir(path: str) -> bool:
     return False
 
 
-def _list_blobs(
-    conf: Config, path: str, delimiter: Optional[str] = None
-) -> Iterator[DirEntry]:
+def _list_blobs(conf: Config, path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
     params = {}
     if delimiter is not None:
         params["delimiter"] = delimiter
@@ -1442,9 +1344,7 @@ def _normalize_path(conf: Config, path: str) -> str:
     return path
 
 
-def _list_blobs_in_dir(
-    conf: Config, prefix: str, exclude_prefix: bool
-) -> Iterator[DirEntry]:
+def _list_blobs_in_dir(conf: Config, prefix: str, exclude_prefix: bool) -> Iterator[DirEntry]:
     # the prefix check doesn't work without normalization
     normalized_prefix = _normalize_path(conf, prefix)
     for entry in _list_blobs(conf=conf, path=normalized_prefix, delimiter="/"):
@@ -1480,9 +1380,7 @@ def _get_entry(conf: Config, path: str) -> Optional[DirEntry]:
 
 
 def _sharded_listdir_worker(
-    conf: Config,
-    prefixes: mp.Queue[Tuple[str, str, bool]],
-    items: mp.Queue[Optional[DirEntry]],
+    conf: Config, prefixes: mp.Queue[Tuple[str, str, bool]], items: mp.Queue[Optional[DirEntry]]
 ) -> None:
     while True:
         base, prefix, exact = prefixes.get(True)
@@ -1536,10 +1434,7 @@ class _ProxyFile(io.FileIO):
         try:
             if self._remote_path is not None and self._mode in ("w", "wb", "a", "ab"):
                 self._ctx.copy(
-                    self._local_path,
-                    self._remote_path,
-                    overwrite=True,
-                    dst_version=self._version,
+                    self._local_path, self._remote_path, overwrite=True, dst_version=self._version
                 )
         finally:
             # if the copy fails, still cleanup our local temp file so it is not leaked

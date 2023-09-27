@@ -22,19 +22,19 @@ from typing import (
     Sequence,
     Tuple,
     Union,
-    runtime_checkable
+    runtime_checkable,
 )
 
 import filelock
 import urllib3
 from blobfile import _xml as xml
 
-CHUNK_SIZE = 8 * 2 ** 20
+CHUNK_SIZE = 8 * 2**20
 
 DEFAULT_CONNECTION_POOL_MAX_SIZE = 32
 DEFAULT_MAX_CONNECTION_POOL_COUNT = 10
 
-PARALLEL_COPY_MINIMUM_PART_SIZE = 32 * 2 ** 20
+PARALLEL_COPY_MINIMUM_PART_SIZE = 32 * 2**20
 
 EARLY_EXPIRATION_SECONDS = 5 * 60
 
@@ -54,18 +54,13 @@ DEFAULT_RETRY_CODES = (408, 429, 500, 502, 503, 504)
 
 # https://github.com/christopher-hesse/blobfile/issues/153
 # https://github.com/christopher-hesse/blobfile/issues/156
-COMMON_ERROR_SUBSTRINGS = [
-    "[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]",
-    "('Connection aborted.',",
-]
+COMMON_ERROR_SUBSTRINGS = ["[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]", "('Connection aborted.',"]
 
 rng = random.SystemRandom()
 
 
 def exponential_sleep_generator(
-    initial: float = BACKOFF_INITIAL,
-    maximum: float = BACKOFF_MAX,
-    multiplier: float = 2,
+    initial: float = BACKOFF_INITIAL, maximum: float = BACKOFF_MAX, multiplier: float = 2
 ) -> Iterator[float]:
     # retry once immediately in case it's a transient error
     yield 0
@@ -163,9 +158,7 @@ def _extract_error_from_response(
     if response.data is not None:
         err, err_desc = _extract_error(response.data)
     if response.headers:
-        err_headers = ", ".join(
-            f"{header}: {value}" for header, value in response.headers.items()
-        )
+        err_headers = ", ".join(f"{header}: {value}" for header, value in response.headers.items())
     return err, err_desc, err_headers
 
 
@@ -272,9 +265,7 @@ class DirEntry(NamedTuple):
 
 
 class PoolDirector:
-    def __init__(
-        self, connection_pool_max_size: int, max_connection_pool_count: int
-    ) -> None:
+    def __init__(self, connection_pool_max_size: int, max_connection_pool_count: int) -> None:
         self.connection_pool_max_size = connection_pool_max_size
         self.max_connection_pool_count = max_connection_pool_count
         self.pool_manager = None
@@ -318,9 +309,7 @@ class PoolDirector:
                     # this exists because there's no obvious way to cause that function to use the ssl.SSLContext except for un-monkey-patching urllib3
                     context = ssl.SSLContext(ssl.PROTOCOL_TLS)
                     context.verify_mode = ssl.CERT_REQUIRED
-                    context.options |= (
-                        ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_COMPRESSION
-                    )
+                    context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_COMPRESSION
                     context.load_default_certs()
 
                 self.creation_pid = os.getpid()
@@ -336,9 +325,7 @@ class PoolDirector:
     # we don't want to serialize locks or other unpicklable objects
     # when this object is passed to concurrent.futures executors
     def __getstate__(self) -> Dict[str, Any]:
-        return {
-            k: v for k, v in self.__dict__.items() if k not in ["lock", "pool_manager"]
-        }
+        return {k: v for k, v in self.__dict__.items() if k not in ["lock", "pool_manager"]}
 
     def __setstate__(self, state: Any) -> None:
         self.__init__(
@@ -390,9 +377,7 @@ class Config:
         self.connect_timeout = connect_timeout
         self.read_timeout = read_timeout
         self.output_az_paths = output_az_paths
-        self.use_azure_storage_account_key_fallback = (
-            use_azure_storage_account_key_fallback
-        )
+        self.use_azure_storage_account_key_fallback = use_azure_storage_account_key_fallback
         self.use_streaming_read = use_streaming_read
         self.default_buffer_size = default_buffer_size
         self.get_deadline = get_deadline
@@ -515,9 +500,7 @@ def _read_with_deadline(
     return bytes(buf)
 
 
-def execute_request(
-    conf: Config, build_req: Callable[[], Request]
-) -> "urllib3.BaseHTTPResponse":
+def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.BaseHTTPResponse":
     for attempt, backoff in enumerate(exponential_sleep_generator()):
         req = build_req()
         url = req.url
@@ -540,18 +523,14 @@ def execute_request(
             # HEAD requests don't have a body which is the only part the deadline applies to anyway
             deadline = conf.get_deadline()
             if deadline is not None:
-                assert (
-                    preload_content
-                ), "preload_content must be set to True when using a deadline"
+                assert preload_content, "preload_content must be set to True when using a deadline"
                 preload_content = False
                 now = time.time()
                 if now >= deadline:
                     raise DeadlineExceeded.create_from_request_response(
                         message=f"refusing to send request due to deadline",
                         request=req,
-                        response=urllib3.response.HTTPResponse(
-                            status=0, body=io.BytesIO(b"")
-                        ),
+                        response=urllib3.response.HTTPResponse(status=0, body=io.BytesIO(b"")),
                     )
                 # this isn't actually sufficient, since the read timeout doesn't work in the way we want
                 # it's still possible for the header to be returned really slowly, but since we mostly
@@ -567,9 +546,7 @@ def execute_request(
                 # WindowedFile isn't actually an IO[Any] or Iterable[bytes]
                 body=body,  # type: ignore
                 timeout=urllib3.Timeout(
-                    connect=conf.connect_timeout,
-                    read=conf.read_timeout,
-                    total=total_timeout,
+                    connect=conf.connect_timeout, read=conf.read_timeout, total=total_timeout
                 ),
                 preload_content=preload_content,
                 retries=False,
@@ -602,9 +579,7 @@ def execute_request(
                     except Timeout as e:
                         resp.close()
                         raise DeadlineExceeded.create_from_request_response(
-                            message=f"request failed with exception {e}",
-                            request=req,
-                            response=resp,
+                            message=f"request failed with exception {e}", request=req, response=resp
                         )
             if resp.status in req.success_codes:
                 return resp
@@ -708,9 +683,7 @@ class TokenManager:
     Automatically refresh tokens when they expire
     """
 
-    def __init__(
-        self, get_token_fn: Callable[[Config, Any], Tuple[Any, float]], name: str
-    ) -> None:
+    def __init__(self, get_token_fn: Callable[[Config, Any], Tuple[Any, float]], name: str) -> None:
         self._get_token_fn = get_token_fn
         self._tokens = {}
         self._expirations = {}
@@ -724,9 +697,7 @@ class TokenManager:
                 tokens = json.load(f, object_hook=hinted_tuple_hook)
                 for key, value in zip(tokens["token_keys"], tokens["token_values"]):
                     self._tokens[key] = value
-                for key, value in zip(
-                    tokens["expiration_keys"], tokens["expiration_values"]
-                ):
+                for key, value in zip(tokens["expiration_keys"], tokens["expiration_values"]):
                     self._expirations[key] = value
 
     def _save_token_file(self, log_callback: Callable[[str], None]):
@@ -750,9 +721,7 @@ class TokenManager:
                     )
                 os.replace(tmp_path, self._access_token_file)
         except filelock.Timeout:  # type: ignore
-            log_callback(
-                "Another instance of this application currently holds the lock."
-            )
+            log_callback("Another instance of this application currently holds the lock.")
 
     def get_token(self, conf: Config, key: Any) -> Any:
         with self._lock:
@@ -764,21 +733,14 @@ class TokenManager:
                     self._load_token_file()
                     # See if an update already occurred
                     expiration = self._expirations.get(key)
-                    if (
-                        expiration is None
-                        or (now + EARLY_EXPIRATION_SECONDS) > expiration
-                    ):
+                    if expiration is None or (now + EARLY_EXPIRATION_SECONDS) > expiration:
                         # If not, get a new token and update the access file
-                        self._tokens[key], self._expirations[key] = self._get_token_fn(
-                            conf, key
-                        )
+                        self._tokens[key], self._expirations[key] = self._get_token_fn(conf, key)
 
                         self._save_token_file(conf.log_callback)
 
                 else:
-                    self._tokens[key], self._expirations[key] = self._get_token_fn(
-                        conf, key
-                    )
+                    self._tokens[key], self._expirations[key] = self._get_token_fn(conf, key)
                 assert self._expirations[key] is not None
 
             assert key in self._tokens
@@ -946,10 +908,7 @@ class BaseStreamingReadFile(io.RawIOBase):
                 self._f = None
                 self.failures += 1
 
-                if (
-                    self._conf.retry_limit is not None
-                    and attempt >= self._conf.retry_limit
-                ):
+                if self._conf.retry_limit is not None and attempt >= self._conf.retry_limit:
                     raise err
 
                 if attempt >= get_log_threshold_for_error(self._conf, str(err)):
@@ -1093,6 +1052,7 @@ def get_log_threshold_for_error(conf: Config, err: str) -> int:
 @runtime_checkable
 class BlobPathLike(Protocol):
     """Similar to the __fspath__ protocol, but for remote blob paths."""
+
     def __blobpath__(self) -> str:
         ...
 

@@ -24,7 +24,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--path", required=True)
     parser.add_argument("--streaming-read-request", action="store_true")
-    parser.add_argument("--buffer-size", default=8 * 2 ** 20, type=int)
+    parser.add_argument("--buffer-size", default=8 * 2**20, type=int)
     parser.add_argument("--size", default=1_000_000_000, type=int)
     args = parser.parse_args()
 

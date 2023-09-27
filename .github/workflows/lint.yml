@@ -6,7 +6,7 @@ permissions:
   contents: read
 
 jobs:
-  lint:
+  typecheck:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -17,3 +17,12 @@ jobs:
       - run: pip install pytest lxml-stubs
       - run: pip install pyright
       - run: pyright .
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+      - run: pip install black==23.9.1
+      - run: black --check --diff .

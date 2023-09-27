@@ -27,10 +27,7 @@ def run_tests_direct(rest, env):
 def run_tests_docker(name, rest, env):
     assert os.path.exists("testing/Dockerfile")
 
-    sp.run(
-        ["docker", "build", "--file", "testing/Dockerfile", "--tag", name, "."],
-        check=True,
-    )
+    sp.run(["docker", "build", "--file", "testing/Dockerfile", "--tag", name, "."], check=True)
     google_credentials_path = os.environ.get(
         "GOOGLE_APPLICATION_CREDENTIALS",
         os.path.expanduser("~/.config/gcloud/application_default_credentials.json"),
@@ -109,9 +106,7 @@ def run_tests_docker(name, rest, env):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--direct", action="store_true", help="run without docker")
-    parser.add_argument(
-        "--env", action="append", help="key=value environment variables to set"
-    )
+    parser.add_argument("--env", action="append", help="key=value environment variables to set")
     args, rest = parser.parse_known_args()
 
     os.chdir(os.path.dirname(SCRIPT_DIR))

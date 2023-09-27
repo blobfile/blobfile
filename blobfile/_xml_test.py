@@ -131,9 +131,7 @@ def main():
     # benchmarking
     doc = xmltodict_parse(resp)
     doc2 = doc.copy()
-    doc2["EnumerationResults"]["Blobs"]["Blob"] = (
-        doc2["EnumerationResults"]["Blobs"]["Blob"] * 300
-    )
+    doc2["EnumerationResults"]["Blobs"]["Blob"] = doc2["EnumerationResults"]["Blobs"]["Blob"] * 300
     expanded_resp_utf8 = xmltodict_unparse(doc2)
 
     start = time.perf_counter()

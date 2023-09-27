@@ -20,9 +20,7 @@ def parse(document: bytes, repeated_tags: Optional[Set[str]] = None) -> Dict[str
     return {root.tag: children}
 
 
-def _recursive_dict(
-    elem: Element, repeated_tags: Set[str]
-) -> Union[Dict[str, Any], Optional[str]]:
+def _recursive_dict(elem: Element, repeated_tags: Set[str]) -> Union[Dict[str, Any], Optional[str]]:
     if len(elem) == 0:
         return elem.text
     else:
@@ -50,9 +48,7 @@ def unparse(data: Dict[str, Any]) -> bytes:
     root = _create_tree(root_keys[0], data[root_keys[0]])
     # xml_declaration=True doesn't work for some reason, it seems
     # to use single quotes that azure doesn't like
-    return b'<?xml version="1.0" encoding="utf-8"?>\n' + etree.tostring(
-        root, encoding="utf8"
-    )
+    return b'<?xml version="1.0" encoding="utf-8"?>\n' + etree.tostring(root, encoding="utf8")
 
 
 def _create_tree(name: str, data: Dict[str, Any]) -> Element:

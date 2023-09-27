@@ -249,13 +249,13 @@ def rmtree(
     """
     Delete a directory tree
     """
-    return default_context.rmtree(
-        path=path, parallel=parallel, parallel_executor=parallel_executor
-    )
+    return default_context.rmtree(path=path, parallel=parallel, parallel_executor=parallel_executor)
 
 
 def walk(
-    top: RemoteOrLocalPath, topdown: bool = True, onerror: Optional[Callable[[OSError], None]] = None
+    top: RemoteOrLocalPath,
+    topdown: bool = True,
+    onerror: Optional[Callable[[OSError], None]] = None,
 ) -> Iterator[Tuple[str, Sequence[str], Sequence[str]]]:
     """
     Walk a directory tree in a similar manner to os.walk

@@ -6,7 +6,7 @@ import os
 
 import blobfile as bf
 
-CHUNK_SIZE = 2 ** 20
+CHUNK_SIZE = 2**20
 
 
 @contextlib.contextmanager

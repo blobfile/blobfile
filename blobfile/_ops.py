@@ -16,7 +16,7 @@ from typing import (
 
 import urllib3
 
-from blobfile._common import DirEntry, Stat
+from blobfile._common import DirEntry, Stat, RemoteOrLocalPath
 from blobfile._context import (
     DEFAULT_AZURE_WRITE_CHUNK_SIZE,
     DEFAULT_BUFFER_SIZE,
@@ -96,8 +96,8 @@ def configure(
 
 
 def copy(
-    src: str,
-    dst: str,
+    src: RemoteOrLocalPath,
+    dst: RemoteOrLocalPath,
     overwrite: bool = False,
     parallel: bool = False,
     parallel_executor: Optional[concurrent.futures.Executor] = None,
@@ -133,14 +133,14 @@ def copy(
     )
 
 
-def exists(path: str) -> bool:
+def exists(path: RemoteOrLocalPath) -> bool:
     """
     Return true if that path exists (either as a file or a directory)
     """
     return default_context.exists(path=path)
 
 
-def basename(path: str) -> str:
+def basename(path: RemoteOrLocalPath) -> str:
     """
     Get the filename component of the path
 
@@ -175,14 +175,14 @@ def scanglob(
     )
 
 
-def isdir(path: str) -> bool:
+def isdir(path: RemoteOrLocalPath) -> bool:
     """
     Return true if a path is an existing directory
     """
     return default_context.isdir(path=path)
 
 
-def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
+def listdir(path: RemoteOrLocalPath, shard_prefix_length: int = 0) -> Iterator[str]:
     """
     Returns an iterator of the contents of the directory at `path`
 
@@ -196,42 +196,42 @@ def listdir(path: str, shard_prefix_length: int = 0) -> Iterator[str]:
     return default_context.listdir(path=path, shard_prefix_length=shard_prefix_length)
 
 
-def scandir(path: str, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
+def scandir(path: RemoteOrLocalPath, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
     """
     Same as `listdir`, but returns `DirEntry` objects instead of strings
     """
     return default_context.scandir(path=path, shard_prefix_length=shard_prefix_length)
 
 
-def makedirs(path: str) -> None:
+def makedirs(path: RemoteOrLocalPath) -> None:
     """
     Make any directories necessary to ensure that path is a directory
     """
     return default_context.makedirs(path=path)
 
 
-def remove(path: str) -> None:
+def remove(path: RemoteOrLocalPath) -> None:
     """
     Remove a file at the given path
     """
     return default_context.remove(path=path)
 
 
-def rmdir(path: str) -> None:
+def rmdir(path: RemoteOrLocalPath) -> None:
     """
     Remove an empty directory at the given path
     """
     return default_context.rmdir(path=path)
 
 
-def stat(path: str) -> Stat:
+def stat(path: RemoteOrLocalPath) -> Stat:
     """
     Stat a file or object representing a directory, returns a Stat object
     """
     return default_context.stat(path=path)
 
 
-def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
+def set_mtime(path: RemoteOrLocalPath, mtime: float, version: Optional[str] = None) -> bool:
     """
     Set the mtime for a path, returns True on success
 
@@ -242,7 +242,7 @@ def set_mtime(path: str, mtime: float, version: Optional[str] = None) -> bool:
 
 
 def rmtree(
-    path: str,
+    path: RemoteOrLocalPath,
     parallel: bool = False,
     parallel_executor: Optional[concurrent.futures.Executor] = None,
 ) -> None:
@@ -255,7 +255,7 @@ def rmtree(
 
 
 def walk(
-    top: str, topdown: bool = True, onerror: Optional[Callable[[OSError], None]] = None
+    top: RemoteOrLocalPath, topdown: bool = True, onerror: Optional[Callable[[OSError], None]] = None
 ) -> Iterator[Tuple[str, Sequence[str], Sequence[str]]]:
     """
     Walk a directory tree in a similar manner to os.walk
@@ -263,7 +263,7 @@ def walk(
     return default_context.walk(top=top, topdown=topdown, onerror=onerror)
 
 
-def dirname(path: str) -> str:
+def dirname(path: RemoteOrLocalPath) -> str:
     """
     Get the directory name of the path
 
@@ -273,21 +273,21 @@ def dirname(path: str) -> str:
     return default_context.dirname(path=path)
 
 
-def join(a: str, *args: str) -> str:
+def join(a: RemoteOrLocalPath, *args: str) -> str:
     """
     Join file paths, if a path is an absolute path, it will replace the entire path component of previous paths
     """
     return default_context.join(a, *args)
 
 
-def get_url(path: str) -> Tuple[str, Optional[float]]:
+def get_url(path: RemoteOrLocalPath) -> Tuple[str, Optional[float]]:
     """
     Get a URL for the given path that a browser could open
     """
     return default_context.get_url(path=path)
 
 
-def md5(path: str) -> str:
+def md5(path: RemoteOrLocalPath) -> str:
     """
     Get the MD5 hash for a file in hexdigest format.
 
@@ -301,7 +301,7 @@ def md5(path: str) -> str:
 
 @overload
 def BlobFile(
-    path: str,
+    path: RemoteOrLocalPath,
     mode: Literal["rb", "wb", "ab"],
     streaming: Optional[bool] = ...,
     buffer_size: int = ...,
@@ -314,7 +314,7 @@ def BlobFile(
 
 @overload
 def BlobFile(
-    path: str,
+    path: RemoteOrLocalPath,
     mode: Literal["r", "w", "a"] = ...,
     streaming: Optional[bool] = ...,
     buffer_size: int = ...,
@@ -326,7 +326,7 @@ def BlobFile(
 
 
 def BlobFile(
-    path: str,
+    path: RemoteOrLocalPath,
     mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r",
     streaming: Optional[bool] = None,
     buffer_size: Optional[int] = None,

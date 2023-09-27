@@ -4,7 +4,8 @@
 
 * Support resolving objects that define `__blobpath__`
 * Drop support for Python 3.7
-* Various lint and test changes
+* Remove hack to work around old versions of `requests` (if you use `requests`, use 2.26 or newer)
+* Various type checking, linting and test changes
 
 ## 2.0.2
 

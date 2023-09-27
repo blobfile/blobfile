@@ -279,43 +279,8 @@ class PoolDirector:
         # both are supposedly threadsafe though, so we shouldn't need a thread-local pool
         with self.lock:
             if self.pool_manager is None or self.creation_pid != os.getpid():
-                if int(urllib3.__version__.split(".")[0]) >= 2:  # type: ignore
-                    # urllib3>=1.26.12 deprecates urllib3.contrib.pyopenssl and requests has an
-                    # upper bound pin on urllib3, so the historical issues below are very unlikely
-                    # to come about if you have urllib3 2.0
-                    context = None
-                else:
-                    # None of the following is true if you use requests 2.26 or later. But:
-                    #
-                    # tensorflow imports requests which calls
-                    #   import urllib3.contrib.pyopenssl
-                    #   urllib3.contrib.pyopenssl.inject_into_urllib3()
-                    # which will monkey patch urllib3 to use pyopenssl and sometimes break things
-                    # with errors such as "certificate verify failed"
-                    # https://github.com/pyca/pyopenssl/issues/823
-                    # https://github.com/psf/requests/issues/5238
-                    # in order to fix this here are a couple of options:
-
-                    # method 1
-                    # from urllib3.util import ssl_
-
-                    # if ssl_.IS_PYOPENSSL:
-                    #     import urllib3.contrib.pyopenssl
-
-                    #     urllib3.contrib.pyopenssl.extract_from_urllib3()
-                    # http = urllib3.PoolManager()
-
-                    # method 2
-                    # build a context based on https://github.com/urllib3/urllib3/blob/edc3ddb3d1cbc5871df4a17a53ca53be7b37facc/src/urllib3/util/ssl_.py#L220
-                    # this exists because there's no obvious way to cause that function to use the ssl.SSLContext except for un-monkey-patching urllib3
-                    context = ssl.SSLContext(ssl.PROTOCOL_TLS)
-                    context.verify_mode = ssl.CERT_REQUIRED
-                    context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_COMPRESSION
-                    context.load_default_certs()
-
                 self.creation_pid = os.getpid()
                 self.pool_manager = urllib3.PoolManager(
-                    ssl_context=context,
                     maxsize=self.connection_pool_max_size,
                     num_pools=self.max_connection_pool_count,
                 )

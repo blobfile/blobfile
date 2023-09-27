@@ -919,7 +919,7 @@ def _finalize_blob(
             )
         else:
             raise VersionMismatch.create_from_request_response(
-                message=f"etag mismatch", request=req, response=resp
+                message="etag mismatch", request=req, response=resp
             )
 
 
@@ -1131,7 +1131,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 )
             else:
                 raise VersionMismatch.create_from_request_response(
-                    message=f"etag mismatch", request=req, response=resp
+                    message="etag mismatch", request=req, response=resp
                 )
         self._md5 = hashlib.md5()
         super().__init__(conf=conf, chunk_size=conf.azure_write_chunk_size)
@@ -1330,8 +1330,7 @@ def list_blobs(conf: Config, path: str, delimiter: Optional[str] = None) -> Iter
         params=dict(comp="list", restype="container", prefix=prefix, **params),
     )
     for result in it:
-        for entry in _get_entries(conf, account, container, result):
-            yield entry
+        yield from _get_entries(conf, account, container, result)
 
 
 def entry_from_dirpath(path: str) -> DirEntry:

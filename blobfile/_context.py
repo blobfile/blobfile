@@ -1412,7 +1412,7 @@ class _ProxyFile(io.FileIO):
         self,
         ctx: Context,
         local_path: str,
-        mode: 'Literal["r", "rb", "w", "wb", "a", "ab"]',
+        mode: Literal["r", "rb", "w", "wb", "a", "ab"],
         tmp_dir: Optional[str],
         remote_path: Optional[str],
         version: Optional[str],

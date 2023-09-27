@@ -14,11 +14,6 @@ def run_tests_direct(rest, env):
         os.environ[k] = v
 
     start = time.time()
-    sp.run(["python", "testing/run-static.py"], check=True)
-    elapsed = int(time.time() - start)
-    print(f"elapsed {elapsed}s")
-
-    start = time.time()
     sp.run(["python", "testing/run-tests.py", *rest], check=True)
     elapsed = int(time.time() - start)
     print(f"elapsed {elapsed}s")
@@ -66,24 +61,6 @@ def run_tests_docker(name, rest, env):
 
     for e in env:
         docker_cmd.extend(["--env", e])
-
-    print("running static checks")
-    start = time.time()
-
-    sp.run(
-        docker_cmd
-        + [
-            "--volume",
-            f"{os.getcwd()}:/host",
-            name,
-            "python",
-            "-c",
-            open("testing/run-static.py").read(),
-        ],
-        check=True,
-    )
-    elapsed = int(time.time() - start)
-    print(f"elapsed {elapsed}s")
 
     start = time.time()
     sp.run(

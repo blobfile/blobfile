@@ -18,8 +18,11 @@ from typing import (
     Mapping,
     NamedTuple,
     Optional,
+    Protocol,
     Sequence,
     Tuple,
+    Union,
+    runtime_checkable
 )
 
 import filelock
@@ -1083,3 +1086,22 @@ def get_log_threshold_for_error(conf: Config, err: str) -> int:
         return conf.retry_common_log_threshold
     else:
         return conf.retry_log_threshold
+
+
+@runtime_checkable
+class BlobPathLike(Protocol):
+    """Similar to the __fspath__ protocol, but for remote blob paths."""
+    def __blobpath__(self) -> str:
+        ...
+
+
+RemoteOrLocalPath = Union[str, BlobPathLike, os.PathLike[str]]
+
+
+def path_to_str(path: RemoteOrLocalPath) -> str:
+    if isinstance(path, BlobPathLike):
+        return path.__blobpath__()
+    elif isinstance(path, os.PathLike):
+        return path.__fspath__()
+    else:
+        return path

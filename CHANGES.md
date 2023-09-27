@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+* Support resolving objects that define `__blobpath__`
+* Drop support for Python 3.7
+* Various lint and test changes
+
 ## 2.0.2
 
 * Support a `version` parameter for writing files to Azure, if the `version` doesn't match the remote version, a `VersionMismatch` error will be raised from @williamzhuk

@@ -528,7 +528,7 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
                 now = time.time()
                 if now >= deadline:
                     raise DeadlineExceeded.create_from_request_response(
-                        message=f"refusing to send request due to deadline",
+                        message="refusing to send request due to deadline",
                         request=req,
                         response=urllib3.response.HTTPResponse(status=0, body=io.BytesIO(b"")),
                     )
@@ -668,7 +668,7 @@ class TupleEncoder(json.JSONEncoder):
             else:
                 return item
 
-        return super(TupleEncoder, self).encode(hint_tuples(o))
+        return super().encode(hint_tuples(o))
 
 
 def hinted_tuple_hook(obj: Any) -> Any:

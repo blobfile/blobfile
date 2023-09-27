@@ -678,8 +678,7 @@ def list_blobs(conf: Config, path: str, delimiter: Optional[str] = None) -> Iter
         params=dict(prefix=prefix, **params),
     )
     for result in it:
-        for entry in _get_entries(bucket, result):
-            yield entry
+        yield from _get_entries(bucket, result)
 
 
 def _get_entries(bucket: str, result: Mapping[str, Any]) -> Iterator[DirEntry]:

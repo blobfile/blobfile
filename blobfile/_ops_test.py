@@ -778,7 +778,7 @@ def test_rmtree(ctx, parallel):
         bf.makedirs(save_path)
 
         # implicit dir
-        if not "://" in path:
+        if "://" not in path:
             bf.makedirs(bf.join(destroy_path, "adir"))
         with bf.BlobFile(bf.join(destroy_path, "adir/b"), "wb") as w:
             w.write(contents)
@@ -989,8 +989,8 @@ def test_more_exists():
         (GCS_VALID_BUCKET + "/", True),
         (GCS_VALID_BUCKET + "//", False),
         (GCS_VALID_BUCKET + "/invalid.file", False),
-        (f"/does-not-exist", False),
-        (f"/", True),
+        ("/does-not-exist", False),
+        ("/", True),
     ]
     for path, should_exist in testcases:
         assert bf.exists(path) == should_exist

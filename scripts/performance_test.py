@@ -24,7 +24,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--path", required=True)
     parser.add_argument("--streaming-read-request", action="store_true")
-    parser.add_argument("--buffer-size", default=8 * 2 ** 20, type=int)
+    parser.add_argument("--buffer-size", default=8 * 2**20, type=int)
     parser.add_argument("--size", default=1_000_000_000, type=int)
     args = parser.parse_args()
 
@@ -70,18 +70,18 @@ def main():
     end = time.time()
     print(f"MB/s {count * len(data) /1e6/(end - start)}")
 
-    filepaths = list(bf.glob(f"gs://gcp-public-data-landsat/LC08/01/001/003/**/*.TIF"))
+    filepaths = list(bf.glob("gs://gcp-public-data-landsat/LC08/01/001/003/**/*.TIF"))
     with timer("read_small_files"):
         for fp in filepaths[:100]:
             with bf.BlobFile(fp, "rb", buffer_size=args.buffer_size) as f:
                 f.read(1)
 
     with timer("glob"):
-        first_file_list = list(bf.glob(f"gs://gcp-public-data-landsat/LC08/01/001/**"))
+        first_file_list = list(bf.glob("gs://gcp-public-data-landsat/LC08/01/001/**"))
 
     with timer("parallel_glob"):
         second_file_list = list(
-            bf.glob(f"gs://gcp-public-data-landsat/LC08/01/001/**", parallel=True)
+            bf.glob("gs://gcp-public-data-landsat/LC08/01/001/**", parallel=True)
         )
 
     assert set(first_file_list) == set(second_file_list)

@@ -1,5 +1,6 @@
 import os
 from setuptools import setup, find_packages
+from typing import Any
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -10,7 +11,7 @@ with open(os.path.join(SCRIPT_DIR, "blobfile", "VERSION")) as version_file:
     version = version_file.read().strip()
 
 
-setup_dict = dict(
+setup_dict = dict[str, Any](
     name="blobfile",
     version=version,
     description="Read GCS, ABS and local paths with the same interface, clone of tensorflow.io.gfile",
@@ -20,13 +21,8 @@ setup_dict = dict(
     author="Christopher Hesse",
     license="Public Domain",
     packages=find_packages(),
-    install_requires=[
-        "pycryptodomex~=3.8",
-        "urllib3>=1.25.3,<3",
-        "lxml~=4.9",
-        "filelock~=3.0",
-    ],
-    python_requires=">=3.7.0",
+    install_requires=["pycryptodomex~=3.8", "urllib3>=1.25.3,<3", "lxml~=4.9", "filelock~=3.0"],
+    python_requires=">=3.8.0",
     # indicate that we have type information
     package_data={"blobfile": ["py.typed", "VERSION"]},
     # mypy cannot find type information in zip files

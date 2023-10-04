@@ -221,14 +221,8 @@ def test_dirname():
         ("gs://a/b/c/test.filename", "gs://a/b/c"),
         ("gs://a/b/c/", "gs://a/b"),
         ("gs://a/b/c/////", "gs://a/b"),
-        (
-            "https://a.blob.core.windows.net/container",
-            "https://a.blob.core.windows.net/container",
-        ),
-        (
-            "https://a.blob.core.windows.net/container/",
-            "https://a.blob.core.windows.net/container",
-        ),
+        ("https://a.blob.core.windows.net/container", "https://a.blob.core.windows.net/container"),
+        ("https://a.blob.core.windows.net/container/", "https://a.blob.core.windows.net/container"),
         (
             "https://a.blob.core.windows.net/container/////",
             "https://a.blob.core.windows.net/container",
@@ -264,11 +258,7 @@ def test_join():
         ("a/b/", "c/", "a/b/c/"),
         ("a/b/", "/c/", "/c/"),
         ("", "", ""),
-        (
-            "gs://a/b/c",
-            "d0123456789-._~!$&'()*+,:=@;",
-            "gs://a/b/c/d0123456789-._~!$&'()*+,:=@;",
-        ),
+        ("gs://a/b/c", "d0123456789-._~!$&'()*+,:=@;", "gs://a/b/c/d0123456789-._~!$&'()*+,:=@;"),
         ("gs://a", "b", "gs://a/b"),
         ("gs://a/b", "c", "gs://a/b/c"),
         ("gs://a/b/", "c", "gs://a/b/c"),
@@ -338,9 +328,7 @@ def _convert_az_to_https(path):
     return re.sub(r"^az://(.*?)/", r"https://\1.blob.core.windows.net/", path)
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_get_url(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -356,9 +344,7 @@ def test_azure_public_get_url():
     assert urllib.request.urlopen(url).read() == contents
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 @pytest.mark.parametrize("streaming", [True, False])
 def test_read_write(ctx, streaming):
     contents = b"meow!\npurr\n"
@@ -407,9 +393,7 @@ def test_az_path():
             assert b"".join(lines) == contents
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_append(ctx):
     contents = b"meow!\n"
     additional_contents = b"purr\n"
@@ -422,9 +406,7 @@ def test_append(ctx):
             assert r.read() == contents + additional_contents
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_stat(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -434,9 +416,7 @@ def test_stat(ctx):
         assert abs(time.time() - s.mtime) <= 30
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_set_mtime(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -465,9 +445,7 @@ def test_azure_metadata(ctx):
         assert st.mtime == 1
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_remove(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -507,9 +485,7 @@ def test_rmdir(ctx):
         bf.rmdir(new_dirpath)
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_makedirs(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -519,9 +495,7 @@ def test_makedirs(ctx):
         _write_contents(bf.join(dirpath, "testfile"), contents)
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_isdir(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -544,9 +518,7 @@ def test_isdir(ctx):
         assert not bf.isdir(dirpath[:-1])
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_listdir(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -565,9 +537,7 @@ def test_listdir(ctx):
         assert sorted(list(bf.listdir(dirpath))) == expected
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_scandir(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -581,9 +551,7 @@ def test_scandir(ctx):
         bf.makedirs(bf.join(dirpath, "c"))
         entries = sorted(list(bf.scandir(dirpath)))
         assert [e.name for e in entries] == ["a", "b", "c"]
-        assert [e.path for e in entries] == [
-            bf.join(dirpath, name) for name in ["a", "b", "c"]
-        ]
+        assert [e.path for e in entries] == [bf.join(dirpath, name) for name in ["a", "b", "c"]]
         assert [e.is_dir for e in entries] == [False, False, True]
         assert [e.is_file for e in entries] == [True, True, False]
         assert entries[0].stat.size == len(contents)
@@ -591,9 +559,7 @@ def test_scandir(ctx):
         assert entries[2].stat is None
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_listdir_sharded(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -619,9 +585,7 @@ def test_listdir_sharded(ctx):
         ]
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 @pytest.mark.parametrize("topdown", [False, True])
 def test_walk(ctx, topdown):
     contents = b"meow!"
@@ -689,9 +653,7 @@ def test_local_glob(ctx):
             assert_listing_equal("bb", ["bb"])
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 @pytest.mark.parametrize("parallel", [False, True])
 def test_glob(ctx, parallel):
     contents = b"meow!"
@@ -732,20 +694,16 @@ def test_glob(ctx, parallel):
         assert_listing_equal(bf.join(dirpath, "*/test.txt"), ["subdir/test.txt"])
         assert_listing_equal(bf.join(dirpath, "*/*.txt"), ["subdir/test.txt"])
         assert_listing_equal(
-            bf.join(dirpath, "**.txt"),
-            ["test.txt", "subdir/test.txt", "subdir/subsubdir/test.txt"],
+            bf.join(dirpath, "**.txt"), ["test.txt", "subdir/test.txt", "subdir/subsubdir/test.txt"]
         )
         assert_listing_equal(
-            bf.join(dirpath, "sub**.txt"),
-            ["subdir/test.txt", "subdir/subsubdir/test.txt"],
+            bf.join(dirpath, "sub**.txt"), ["subdir/test.txt", "subdir/subsubdir/test.txt"]
         )
         assert_listing_equal(
-            bf.join(dirpath, "subdir/**.txt"),
-            ["subdir/test.txt", "subdir/subsubdir/test.txt"],
+            bf.join(dirpath, "subdir/**.txt"), ["subdir/test.txt", "subdir/subsubdir/test.txt"]
         )
         assert_listing_equal(
-            bf.join(dirpath, "**/*.txt"),
-            ["subdir/test.txt", "subdir/subsubdir/test.txt"],
+            bf.join(dirpath, "**/*.txt"), ["subdir/test.txt", "subdir/subsubdir/test.txt"]
         )
 
         assert_listing_equal(bf.join(dirpath, "*/test"), [])
@@ -762,9 +720,7 @@ def test_glob(ctx, parallel):
         assert_listing_equal(bf.join(dirpath, "su*ir/*dir/"), ["subdir/subsubdir"])
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_scanglob(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -810,9 +766,7 @@ def test_scanglob(ctx):
             assert entries[2].name == "subdir" and entries[2].is_dir
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 @pytest.mark.parametrize("parallel", [False, True])
 def test_rmtree(ctx, parallel):
     contents = b"meow!"
@@ -824,7 +778,7 @@ def test_rmtree(ctx, parallel):
         bf.makedirs(save_path)
 
         # implicit dir
-        if not "://" in path:
+        if "://" not in path:
             bf.makedirs(bf.join(destroy_path, "adir"))
         with bf.BlobFile(bf.join(destroy_path, "adir/b"), "wb") as w:
             w.write(contents)
@@ -869,7 +823,7 @@ def test_rmtree(ctx, parallel):
 
 @pytest.mark.parametrize("parallel", [False, True])
 def test_copy(parallel):
-    for contents in [b"", b"meow!", b"meow!" * (2 * 2 ** 20)]:
+    for contents in [b"", b"meow!", b"meow!" * (2 * 2**20)]:
         with _get_temp_local_path() as local_path1, _get_temp_local_path() as local_path2, _get_temp_local_path() as local_path3, _get_temp_gcs_path() as gcs_path1, _get_temp_gcs_path() as gcs_path2, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2, _get_temp_as_path(
             account=AS_TEST_ACCOUNT2, container=AS_TEST_CONTAINER2
         ) as as_path3, _get_temp_as_path() as as_path4:
@@ -903,7 +857,7 @@ def test_copy(parallel):
 
 @pytest.mark.parametrize("parallel", [False, True])
 def test_copy_invalid(parallel):
-    for contents in [b"", b"meow!", b"meow!" * (2 * 2 ** 20)]:
+    for contents in [b"", b"meow!", b"meow!" * (2 * 2**20)]:
         with _get_temp_local_path() as local_path, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2:
             invalid_container_as_path = _convert_az_to_https(
                 bf.join(AZURE_INVALID_CONTAINER, "file.bin")
@@ -964,9 +918,7 @@ def test_gcs_public():
     assert len(bf.BlobFile(filepath, "rb").read()) > 0
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_exists(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -977,8 +929,8 @@ def test_exists(ctx):
 
 def test_concurrent_write_gcs():
     with _get_temp_gcs_path() as path:
-        outer_contents = b"miso" * (2 ** 20 + 1)
-        inner_contents = b"momo" * (2 ** 20 + 1)
+        outer_contents = b"miso" * (2**20 + 1)
+        inner_contents = b"momo" * (2**20 + 1)
         with bf.BlobFile(path, "wb", streaming=True) as f:
             f.write(outer_contents)
             with bf.BlobFile(path, "wb", streaming=True) as f:
@@ -992,9 +944,9 @@ def test_concurrent_write_gcs():
 
 def test_concurrent_write_as():
     with _get_temp_as_path() as path:
-        b = bf.create_context(azure_write_chunk_size=2 ** 20)
-        outer_contents = b"miso" * (2 ** 20 + 1)
-        inner_contents = b"momo" * (2 ** 20 + 1)
+        b = bf.create_context(azure_write_chunk_size=2**20)
+        outer_contents = b"miso" * (2**20 + 1)
+        inner_contents = b"momo" * (2**20 + 1)
         # the inner write will invalidate the outer one, the last writer
         # to start wins with this setup
         with pytest.raises(bf.ConcurrentWriteFailure):
@@ -1037,16 +989,15 @@ def test_more_exists():
         (GCS_VALID_BUCKET + "/", True),
         (GCS_VALID_BUCKET + "//", False),
         (GCS_VALID_BUCKET + "/invalid.file", False),
-        (f"/does-not-exist", False),
-        (f"/", True),
+        ("/does-not-exist", False),
+        ("/", True),
     ]
     for path, should_exist in testcases:
         assert bf.exists(path) == should_exist
 
 
 @pytest.mark.parametrize(
-    "base_path",
-    [AZURE_INVALID_CONTAINER_NO_ACCOUNT, AZURE_INVALID_CONTAINER, GCS_INVALID_BUCKET],
+    "base_path", [AZURE_INVALID_CONTAINER_NO_ACCOUNT, AZURE_INVALID_CONTAINER, GCS_INVALID_BUCKET]
 )
 def test_invalid_paths(base_path):
     for suffix in ["", "/", "//", "/invalid.file", "/invalid/dir/"]:
@@ -1172,12 +1123,10 @@ def test_cache_dir(ctx):
             assert len(f.read()) > 0
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 @pytest.mark.parametrize("use_random", [False, True])
 def test_change_file_size(ctx, use_random):
-    chunk_size = 8 * 2 ** 20
+    chunk_size = 8 * 2**20
     long_contents = b"\x00" * chunk_size * 3
     short_contents = b"\xFF" * chunk_size * 2
     if use_random:
@@ -1195,10 +1144,7 @@ def test_change_file_size(ctx, use_random):
             f.raw._f = None  # type: ignore
             read_contents += f.read()
             assert len(f.read()) == 0
-            assert (
-                read_contents
-                == long_contents[:chunk_size] + short_contents[chunk_size:]
-            )
+            assert read_contents == long_contents[:chunk_size] + short_contents[chunk_size:]
 
         # make file longer
         with bf.BlobFile(path, "wb") as f:
@@ -1211,9 +1157,7 @@ def test_change_file_size(ctx, use_random):
             f.raw._f = None  # type: ignore
             read_contents += f.read()
             assert len(f.read()) == 0
-            expected = (
-                short_contents[:chunk_size] + long_contents[chunk_size : chunk_size * 2]
-            )
+            expected = short_contents[:chunk_size] + long_contents[chunk_size : chunk_size * 2]
             # local files behave differently and read the new contents until the
             # end of the new file size
             if not path.startswith("gs://") and not path.startswith("https://"):
@@ -1221,11 +1165,9 @@ def test_change_file_size(ctx, use_random):
             assert read_contents == expected
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_overwrite_while_reading(ctx):
-    chunk_size = 8 * 2 ** 20
+    chunk_size = 8 * 2**20
     contents = b"\x00" * chunk_size * 2
     alternative_contents = b"\xFF" * chunk_size * 4
     with ctx() as path:
@@ -1240,8 +1182,7 @@ def test_overwrite_while_reading(ctx):
             read_contents += f.read(chunk_size)
             assert (
                 read_contents
-                == contents[:chunk_size]
-                + alternative_contents[chunk_size : chunk_size * 2]
+                == contents[:chunk_size] + alternative_contents[chunk_size : chunk_size * 2]
             )
 
 
@@ -1262,9 +1203,7 @@ def test_create_local_intermediate_dirs():
 
 @pytest.mark.parametrize("binary", [True, False])
 @pytest.mark.parametrize("streaming", [True, False])
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_more_read_write(binary, streaming, ctx):
     rng = np.random.RandomState(0)
 
@@ -1316,7 +1255,7 @@ def test_more_read_write(binary, streaming, ctx):
             assert [line for line in r] == lines
 
         if binary:
-            for size in [2 * 2 ** 20, 12_345_678]:
+            for size in [2 * 2**20, 12_345_678]:
                 contents = rng.randint(0, 256, size=size, dtype=np.uint8).tobytes()
 
                 with bf.BlobFile(path, write_mode, streaming=streaming) as w:
@@ -1342,9 +1281,7 @@ def test_more_read_write(binary, streaming, ctx):
 
 
 @pytest.mark.parametrize("streaming", [True, False])
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_video(streaming, ctx):
     rng = np.random.RandomState(0)
     shape = (256, 64, 64, 3)
@@ -1364,9 +1301,7 @@ def test_video(streaming, ctx):
                     w.append_data(frame)
 
         with bf.BlobFile(path, mode="rb", streaming=streaming) as rf:
-            with imageio.get_reader(
-                rf, format="ffmpeg", input_params=["-f", "mp4"]
-            ) as r:
+            with imageio.get_reader(rf, format="ffmpeg", input_params=["-f", "mp4"]) as r:
                 for idx, frame in enumerate(r):
                     assert np.array_equal(frame, video_data[idx])
 
@@ -1379,11 +1314,9 @@ def test_video(streaming, ctx):
 
 # this is pretty slow and docker will often run out of memory
 @pytest.mark.slow
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_large_file(ctx):
-    contents = b"0" * 2 ** 32
+    contents = b"0" * 2**32
     with ctx() as path:
         with bf.BlobFile(path, "wb", streaming=True) as f:
             f.write(contents)
@@ -1394,7 +1327,7 @@ def test_large_file(ctx):
 def test_composite_objects():
     with _get_temp_gcs_path() as remote_path:
         with _get_temp_local_path() as local_path:
-            contents = b"0" * 2 * 2 ** 20
+            contents = b"0" * 2 * 2**20
             with open(local_path, "wb") as f:
                 f.write(contents)
 
@@ -1423,16 +1356,12 @@ def test_composite_objects():
             assert bf.stat(remote_path).md5 is None
 
             with tempfile.TemporaryDirectory() as tmpdir:
-                with bf.BlobFile(
-                    remote_path, "rb", cache_dir=tmpdir, streaming=False
-                ) as f:
+                with bf.BlobFile(remote_path, "rb", cache_dir=tmpdir, streaming=False) as f:
                     assert f.read() == contents
             assert bf.stat(remote_path).md5 == local_md5
 
 
-@pytest.mark.parametrize(
-    "ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path]
-)
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_md5(ctx):
     contents = b"meow!"
     meow_hash = hashlib.md5(contents).hexdigest()
@@ -1458,19 +1387,13 @@ def test_azure_maybe_update_md5(ctx):
     with ctx() as path:
         _write_contents(path, contents)
         st = azure.maybe_stat(ops.default_context._conf, path)
-        assert azure.maybe_update_md5(
-            ops.default_context._conf, path, st.version, meow_hash
-        )
+        assert azure.maybe_update_md5(ops.default_context._conf, path, st.version, meow_hash)
         _write_contents(path, alternative_contents)
-        assert not azure.maybe_update_md5(
-            ops.default_context._conf, path, st.version, meow_hash
-        )
+        assert not azure.maybe_update_md5(ops.default_context._conf, path, st.version, meow_hash)
         st = azure.maybe_stat(ops.default_context._conf, path)
         assert st.md5 == purr_hash
         bf.remove(path)
-        assert not azure.maybe_update_md5(
-            ops.default_context._conf, path, st.version, meow_hash
-        )
+        assert not azure.maybe_update_md5(ops.default_context._conf, path, st.version, meow_hash)
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_as_path])
@@ -1539,10 +1462,7 @@ def test_fork():
 
 def test_azure_public_container():
     for error, path in [
-        (
-            None,
-            f"https://{AS_EXTERNAL_ACCOUNT}.blob.core.windows.net/publiccontainer/test_cat.png",
-        ),
+        (None, f"https://{AS_EXTERNAL_ACCOUNT}.blob.core.windows.net/publiccontainer/test_cat.png"),
         (
             bf.Error,
             f"https://{AS_EXTERNAL_ACCOUNT}.blob.core.windows.net/private/test_cat.png",

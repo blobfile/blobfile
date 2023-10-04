@@ -4,3 +4,7 @@ requires = [
     "wheel == 0.33.6",
     "astor == 0.8.0",
 ]
+
+[tool.black]
+line-length = 100
+skip-magic-trailing-comma = true

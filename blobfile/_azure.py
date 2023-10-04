@@ -76,11 +76,7 @@ def _load_credentials() -> Dict[str, Any]:
             account = {}
             if "AZURE_STORAGE_ACCOUNT" in os.environ:
                 account["account"] = os.environ["AZURE_STORAGE_ACCOUNT"]
-            return {
-                "_azure_auth": "sakey",
-                "storage_account_key": os.environ[varname],
-                **account,
-            }
+            return {"_azure_auth": "sakey", "storage_account_key": os.environ[varname], **account}
 
     if "AZURE_STORAGE_CONNECTION_STRING" in os.environ:
         connection_data = {}
@@ -137,10 +133,7 @@ def _load_credentials() -> Dict[str, Any]:
             for token in tokens:
                 if "refreshToken" not in token:
                     continue
-                creds = {
-                    "_azure_auth": "refresh",
-                    "refresh_token": token["refreshToken"],
-                }
+                creds = {"_azure_auth": "refresh", "refresh_token": token["refreshToken"]}
                 if best_token is None:
                     best_token = creds
                 else:
@@ -176,9 +169,7 @@ def load_subscription_ids() -> List[str]:
 
 
 def build_url(account: str, template: str, **data: str) -> str:
-    return common.build_url(
-        f"https://{account}.blob.core.windows.net", template, **data
-    )
+    return common.build_url(f"https://{account}.blob.core.windows.net", template, **data)
 
 
 def _create_access_token_request(
@@ -230,9 +221,7 @@ def create_api_request(req: Request, auth: Tuple[str, str]) -> Request:
 
     # https://docs.microsoft.com/en-us/rest/api/storageservices/previous-azure-storage-service-versions
     headers["x-ms-version"] = "2019-02-02"
-    headers["x-ms-date"] = datetime.datetime.utcnow().strftime(
-        "%a, %d %b %Y %H:%M:%S GMT"
-    )
+    headers["x-ms-date"] = datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
     data = req.data
     if data is not None and isinstance(data, dict):
         data = xml.unparse(data)
@@ -287,9 +276,7 @@ def generate_signed_url(key: Mapping[str, str], url: str) -> Tuple[str, float]:
     }
     u = urllib.parse.urlparse(url)
     storage_account = u.netloc.split(".")[0]
-    canonicalized_resource = urllib.parse.unquote(
-        f"/blob/{storage_account}/{u.path[1:]}"
-    )
+    canonicalized_resource = urllib.parse.unquote(f"/blob/{storage_account}/{u.path[1:]}")
     parts_to_sign = (
         params["sp"],
         params["st"],
@@ -316,9 +303,7 @@ def generate_signed_url(key: Mapping[str, str], url: str) -> Tuple[str, float]:
     )
     string_to_sign = "\n".join(parts_to_sign)
     params["sig"] = base64.b64encode(
-        hmac.digest(
-            base64.b64decode(key["Value"]), string_to_sign.encode("utf8"), "sha256"
-        )
+        hmac.digest(base64.b64decode(key["Value"]), string_to_sign.encode("utf8"), "sha256")
     ).decode("utf8")
     query = urllib.parse.urlencode({k: v for k, v in params.items() if v != ""})
     # convert to a utc struct_time by replacing the timezone
@@ -388,9 +373,7 @@ def mkdirfile(conf: Config, path: str) -> None:
     )
     resp = execute_api_request(conf, req)
     if resp.status == 400:
-        raise Error(
-            f"Unable to create directory, account/container does not exist: '{path}'"
-        )
+        raise Error(f"Unable to create directory, account/container does not exist: '{path}'")
 
 
 def sign_with_shared_key(req: Request, key: str) -> str:
@@ -560,9 +543,7 @@ def _get_storage_account_id(
     while True:
 
         def build_req() -> Request:
-            req = Request(
-                method="GET", url=url, params=params, success_codes=(200, 401, 403)
-            )
+            req = Request(method="GET", url=url, params=params, success_codes=(200, 401, 403))
             return create_api_request(req, auth=auth)
 
         resp = common.execute_request(conf, build_req)
@@ -617,12 +598,12 @@ def _get_storage_account_key(
     # giving it access to the bucket
 
     # get an access token for the management service
-    def build_req() -> Request:
+    def build_req_access_token() -> Request:
         return _create_access_token_request(
             creds=creds, scope="https://management.azure.com/.default"
         )
 
-    resp = common.execute_request(conf, build_req)
+    resp = common.execute_request(conf, build_req_access_token)
     result = json.loads(resp.data)
     auth = (OAUTH_TOKEN, result["access_token"])
 
@@ -631,9 +612,7 @@ def _get_storage_account_key(
 
     storage_account_id = None
     for subscription_id in stored_subscription_ids:
-        storage_account_id = _get_storage_account_id(
-            conf, subscription_id, account, auth
-        )
+        storage_account_id = _get_storage_account_id(conf, subscription_id, account, auth)
         if storage_account_id is not None:
             break
     else:
@@ -645,16 +624,14 @@ def _get_storage_account_key(
         ]
 
         for subscription_id in unchecked_subscription_ids:
-            storage_account_id = _get_storage_account_id(
-                conf, subscription_id, account, auth
-            )
+            storage_account_id = _get_storage_account_id(conf, subscription_id, account, auth)
             if storage_account_id is not None:
                 break
         else:
             # we failed to find the storage account, give up
             return None
 
-    def build_req() -> Request:
+    def build_req_list_keys() -> Request:
         req = Request(
             method="POST",
             url=f"https://management.azure.com{storage_account_id}/listKeys",
@@ -662,7 +639,7 @@ def _get_storage_account_key(
         )
         return create_api_request(req, auth=auth)
 
-    resp = common.execute_request(conf, build_req)
+    resp = common.execute_request(conf, build_req_list_keys)
     result = json.loads(resp.data)
     for key in result["keys"]:
         if key["permissions"] == "FULL":
@@ -675,9 +652,7 @@ def _get_storage_account_key(
                 raise Error(
                     f"Found storage account key, but it was unable to access storage account: '{account}' and container: '{container}'"
                 )
-    raise Error(
-        f"Storage account was found, but storage account keys were missing: '{account}'"
-    )
+    raise Error(f"Storage account was found, but storage account keys were missing: '{account}'")
 
 
 def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
@@ -694,9 +669,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
                     f"but needed credentials for account '{account}'"
                 )
         auth = (SHARED_KEY, creds["storage_account_key"])
-        if _can_access_container(
-            conf, account, container, auth, out_failures=access_failures
-        ):
+        if _can_access_container(conf, account, container, auth, out_failures=access_failures):
             return (auth, now + SHARED_KEY_EXPIRATION_SECONDS)
     elif azure_auth == "refresh":
         # we have a refresh token, convert it into an access token for this account
@@ -735,9 +708,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
         auth = (OAUTH_TOKEN, result["access_token"])
 
         # for some azure accounts this access token does not work, check if it works
-        if _can_access_container(
-            conf, account, container, auth, out_failures=access_failures
-        ):
+        if _can_access_container(conf, account, container, auth, out_failures=access_failures):
             return (auth, now + float(result["expires_in"]))
 
         if conf.use_azure_storage_account_key_fallback:
@@ -761,9 +732,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
         resp = common.execute_request(conf, build_req)
         result = json.loads(resp.data)
         auth = (OAUTH_TOKEN, result["access_token"])
-        if _can_access_container(
-            conf, account, container, auth, out_failures=access_failures
-        ):
+        if _can_access_container(conf, account, container, auth, out_failures=access_failures):
             return (auth, now + float(result["expires_in"]))
 
         if conf.use_azure_storage_account_key_fallback:
@@ -876,7 +845,7 @@ def _get_sas_token(conf: Config, key: Any) -> Tuple[Any, float]:
     return out["UserDelegationKey"], t
 
 
-def execute_api_request(conf: Config, req: Request) -> urllib3.HTTPResponse:
+def execute_api_request(conf: Config, req: Request) -> "urllib3.BaseHTTPResponse":
     u = urllib.parse.urlparse(req.url)
     account = u.netloc.split(".")[0]
     path_parts = u.path.split("/")
@@ -893,21 +862,19 @@ def execute_api_request(conf: Config, req: Request) -> urllib3.HTTPResponse:
 
 
 def _block_index_to_block_id(index: int, upload_id: int) -> str:
-    assert index < 2 ** 17
+    assert index < 2**17
     id_plus_index = (upload_id << 17) + index
-    assert id_plus_index < 2 ** 64
+    assert id_plus_index < 2**64
     return base64.b64encode(id_plus_index.to_bytes(8, byteorder="big")).decode("utf8")
 
 
 def _clear_uncommitted_blocks(
     conf: Config, url: str, metadata: Dict[str, str]
-) -> Optional[urllib3.HTTPResponse]:
+) -> Optional["urllib3.BaseHTTPResponse"]:
     # to avoid leaking uncommitted blocks, we can do a Put Block List with
     # all the existing blocks for a file
     # this will change the last-modified timestamp and the etag
-    req = Request(
-        url=url, params=dict(comp="blocklist"), method="GET", success_codes=(200, 404)
-    )
+    req = Request(url=url, params=dict(comp="blocklist"), method="GET", success_codes=(200, 404))
     resp = execute_api_request(conf, req)
     if resp.status != 200:
         return
@@ -919,9 +886,7 @@ def _clear_uncommitted_blocks(
     blocks = result["BlockList"]["CommittedBlocks"]["Block"]
     body = {"BlockList": {"Latest": [b["Name"] for b in blocks]}}
     # make sure to preserve metadata for the file
-    headers: Dict[str, str] = {
-        k: v for k, v in metadata.items() if k.startswith("x-ms-meta-")
-    }
+    headers: Dict[str, str] = {k: v for k, v in metadata.items() if k.startswith("x-ms-meta-")}
     for src, dst in RESPONSE_HEADER_TO_REQUEST_HEADER.items():
         if src in metadata:
             headers[dst] = metadata[src]
@@ -989,7 +954,7 @@ def _finalize_blob(
             )
         else:
             raise VersionMismatch.create_from_request_response(
-                message=f"etag mismatch", request=req, response=resp
+                message="etag mismatch", request=req, response=resp
             )
 
 
@@ -1017,11 +982,7 @@ def isdir(conf: Config, path: str) -> bool:
             url=build_url(account, "/{container}", container=container),
             method="GET",
             params=dict(
-                comp="list",
-                restype="container",
-                prefix=blob,
-                delimiter="/",
-                maxresults="1",
+                comp="list", restype="container", prefix=blob, delimiter="/", maxresults="1"
             ),
         )
         for result in it:
@@ -1056,9 +1017,7 @@ def create_page_iterator(
         resp = execute_api_request(conf, req)
         if resp.status in (404, INVALID_HOSTNAME_STATUS):
             return
-        result = xml.parse(resp.data, repeated_tags={"BlobPrefix", "Blob"})[
-            "EnumerationResults"
-        ]
+        result = xml.parse(resp.data, repeated_tags={"BlobPrefix", "Blob"})["EnumerationResults"]
         yield result
         if result["NextMarker"] is None:
             break
@@ -1076,12 +1035,10 @@ class StreamingReadFile(BaseStreamingReadFile):
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
-    ) -> urllib3.response.HTTPResponse:
+    ) -> "urllib3.BaseHTTPResponse":
         account, container, blob = split_path(self._path)
         req = Request(
-            url=build_url(
-                account, "/{container}/{blob}", container=container, blob=blob
-            ),
+            url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
             method="GET",
             headers={"Range": common.calc_range(start=start, end=end)},
             success_codes=(206, 416),
@@ -1097,9 +1054,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
     def __init__(self, conf: Config, path: str, version: Optional[str]) -> None:
         self._path = path
         account, container, blob = split_path(path)
-        self._url = build_url(
-            account, "/{container}/{blob}", container=container, blob=blob
-        )
+        self._url = build_url(account, "/{container}/{blob}", container=container, blob=blob)
         # block blobs let you upload up to 100,000 "uncommitted" blocks with user-chosen block ids
         # using the "Put Block" call
         # you may then call "Put Block List" with up to 50,000 block ids of the blocks you
@@ -1174,7 +1129,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
         #   without automatic expiry, we'd leak temp files
         # we can use the lease system, but then we have to deal with leases
 
-        self._upload_id = rng.randint(0, 2 ** 47 - 1)
+        self._upload_id = rng.randint(0, 2**47 - 1)
         self._block_index = 0
         self._version = version  # for azure, this is an etag
         # check to see if there is an existing blob at this location with the wrong type
@@ -1194,31 +1149,24 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 # with ConcurrentWriteFailure
                 resp = _clear_uncommitted_blocks(conf, self._url, resp.headers)
                 if resp:
-                    self._version = resp.headers[
-                        "ETag"
-                    ]  # update the version according to new etag
+                    self._version = resp.headers["ETag"]  # update the version according to new etag
             else:
                 # if the existing blob type is not compatible with the block blob we are about to write
                 # we have to delete the file before writing our block blob or else we will get a 409
                 # error when putting the first block
                 remove(conf, path)
         elif resp.status in (400, INVALID_HOSTNAME_STATUS) or (
-            resp.status == 404
-            and resp.headers["x-ms-error-code"] == "ContainerNotFound"
+            resp.status == 404 and resp.headers["x-ms-error-code"] == "ContainerNotFound"
         ):
-            raise FileNotFoundError(
-                f"No such file or container/account does not exist: '{path}'"
-            )
+            raise FileNotFoundError(f"No such file or container/account does not exist: '{path}'")
         elif resp.status == 412:
             if resp.headers["x-ms-error-code"] != "ConditionNotMet":
                 raise RequestFailure.create_from_request_response(
-                    message=f"unexpected status {resp.status}",
-                    request=req,
-                    response=resp,
+                    message=f"unexpected status {resp.status}", request=req, response=resp
                 )
             else:
                 raise VersionMismatch.create_from_request_response(
-                    message=f"etag mismatch", request=req, response=resp
+                    message="etag mismatch", request=req, response=resp
                 )
         self._md5 = hashlib.md5()
         super().__init__(conf=conf, chunk_size=conf.azure_write_chunk_size)
@@ -1237,14 +1185,10 @@ class StreamingWriteFile(BaseStreamingWriteFile):
             req = Request(
                 url=self._url,
                 method="PUT",
-                headers={
-                    "Content-MD5": base64.b64encode(block_md5.digest()).decode("utf8")
-                },
+                headers={"Content-MD5": base64.b64encode(block_md5.digest()).decode("utf8")},
                 params=dict(
                     comp="block",
-                    blockid=_block_index_to_block_id(
-                        self._block_index, self._upload_id
-                    ),
+                    blockid=_block_index_to_block_id(self._block_index, self._upload_id),
                 ),
                 data=data,
                 success_codes=(201,),
@@ -1263,8 +1207,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
 
         if finalize:
             block_ids = [
-                _block_index_to_block_id(i, self._upload_id)
-                for i in range(self._block_index)
+                _block_index_to_block_id(i, self._upload_id) for i in range(self._block_index)
             ]
             _finalize_blob(
                 conf=self._conf,
@@ -1276,9 +1219,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
             )
 
 
-def _upload_chunk(
-    conf: Config, path: str, start: int, size: int, url: str, block_id: str
-) -> None:
+def _upload_chunk(conf: Config, path: str, start: int, size: int, url: str, block_id: str) -> None:
     req = Request(
         url=url,
         method="PUT",
@@ -1308,7 +1249,7 @@ def parallel_upload(
     account, container, blob = split_path(dst)
     dst_url = build_url(account, "/{container}/{blob}", container=container, blob=blob)
 
-    upload_id = rng.randint(0, 2 ** 47 - 1)
+    upload_id = rng.randint(0, 2**47 - 1)
     s = os.stat(src)
     block_ids = []
     max_workers = getattr(executor, "_max_workers", os.cpu_count() or 1)
@@ -1322,13 +1263,7 @@ def parallel_upload(
     while start < s.st_size:
         block_id = _block_index_to_block_id(i, upload_id)
         future = executor.submit(
-            _upload_chunk,
-            conf,
-            src,
-            start,
-            min(part_size, s.st_size - start),
-            dst_url,
-            block_id,
+            _upload_chunk, conf, src, start, min(part_size, s.st_size - start), dst_url, block_id
         )
         futures.append(future)
         block_ids.append(block_id)
@@ -1394,9 +1329,9 @@ def maybe_update_md5(conf: Config, path: str, etag: str, hexdigest: str) -> bool
     for src, dst in RESPONSE_HEADER_TO_REQUEST_HEADER.items():
         if src in resp.headers:
             headers[dst] = resp.headers[src]
-    headers["x-ms-blob-content-md5"] = base64.b64encode(
-        binascii.unhexlify(hexdigest)
-    ).decode("utf8")
+    headers["x-ms-blob-content-md5"] = base64.b64encode(binascii.unhexlify(hexdigest)).decode(
+        "utf8"
+    )
 
     req = Request(
         url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
@@ -1417,9 +1352,7 @@ def maybe_update_md5(conf: Config, path: str, etag: str, hexdigest: str) -> bool
     return resp.status == 200
 
 
-def list_blobs(
-    conf: Config, path: str, delimiter: Optional[str] = None
-) -> Iterator[DirEntry]:
+def list_blobs(conf: Config, path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
     params = {}
     if delimiter is not None:
         params["delimiter"] = delimiter
@@ -1432,8 +1365,7 @@ def list_blobs(
         params=dict(comp="list", restype="container", prefix=prefix, **params),
     )
     for result in it:
-        for entry in _get_entries(conf, account, container, result):
-            yield entry
+        yield from _get_entries(conf, account, container, result)
 
 
 def entry_from_dirpath(path: str) -> DirEntry:
@@ -1481,9 +1413,7 @@ def get_url(conf: Config, path: str) -> Tuple[str, Optional[float]]:
     return generate_signed_url(key=token, url=url)
 
 
-def set_mtime(
-    conf: Config, path: str, mtime: float, version: Optional[str] = None
-) -> bool:
+def set_mtime(conf: Config, path: str, mtime: float, version: Optional[str] = None) -> bool:
     account, container, blob = split_path(path)
     headers = {}
     if version is not None:
@@ -1540,9 +1470,7 @@ def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> Optional[
         if src_account != dst_account:
             # the signed url can expire, so technically we should get the sas_token and build the signed url
             # each time we build a new request
-            sas_token = sas_token_manager.get_token(
-                conf=conf, key=(src_account, src_container)
-            )
+            sas_token = sas_token_manager.get_token(conf=conf, key=(src_account, src_container))
             # if we don't get a token, it's likely we have anonymous access to the container
             # if we do get a token, the container is likely private and we need to use
             # a signed url as the source
@@ -1550,20 +1478,14 @@ def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> Optional[
                 src_url, _ = generate_signed_url(key=sas_token, url=src_url)
         req = Request(
             url=build_url(
-                dst_account,
-                "/{container}/{blob}",
-                container=dst_container,
-                blob=dst_blob,
+                dst_account, "/{container}/{blob}", container=dst_container, blob=dst_blob
             ),
             method="PUT",
             headers={"x-ms-copy-source": src_url},
             success_codes=(202, 404, 409, INVALID_HOSTNAME_STATUS),
         )
         return create_api_request(
-            req,
-            auth=access_token_manager.get_token(
-                conf=conf, key=(dst_account, dst_container)
-            ),
+            req, auth=access_token_manager.get_token(conf=conf, key=(dst_account, dst_container))
         )
 
     copy_id = None
@@ -1594,9 +1516,7 @@ def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> Optional[
             result = xml.parse(resp.data)
             if result["Error"]["Code"] != "PendingCopyOperation":
                 raise RequestFailure.create_from_request_response(
-                    message=f"unexpected status {resp.status}",
-                    request=build_req(),
-                    response=resp,
+                    message=f"unexpected status {resp.status}", request=build_req(), response=resp
                 )
             # if we got a pending copy operation, continue to wait
         else:
@@ -1611,10 +1531,7 @@ def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> Optional[
         time.sleep(next(backoff_generator))
         req = Request(
             url=build_url(
-                dst_account,
-                "/{container}/{blob}",
-                container=dst_container,
-                blob=dst_blob,
+                dst_account, "/{container}/{blob}", container=dst_container, blob=dst_blob
             ),
             method="GET",
         )
@@ -1650,20 +1567,14 @@ def _put_block_from_url(
     src_account, src_container, src_blob = split_path(src)
     dst_account, dst_container, dst_blob = split_path(dst)
 
-    src_url = build_url(
-        src_account, "/{container}/{blob}", container=src_container, blob=src_blob
-    )
+    src_url = build_url(src_account, "/{container}/{blob}", container=src_container, blob=src_blob)
 
-    dst_url = build_url(
-        dst_account, "/{container}/{blob}", container=dst_container, blob=dst_blob
-    )
+    dst_url = build_url(dst_account, "/{container}/{blob}", container=dst_container, blob=dst_blob)
 
     def build_req() -> Request:
         # the signed url can expire, so technically we should get the sas_token and build the signed url
         # each time we build a new request
-        sas_token = sas_token_manager.get_token(
-            conf=conf, key=(src_account, src_container)
-        )
+        sas_token = sas_token_manager.get_token(conf=conf, key=(src_account, src_container))
         # if we don't get a token, it's likely we have anonymous access to the container
         # if we do get a token, the container is likely private and we need to use
         # a signed url as the source
@@ -1683,10 +1594,7 @@ def _put_block_from_url(
             success_codes=(201, 404, INVALID_HOSTNAME_STATUS),
         )
         return create_api_request(
-            req,
-            auth=access_token_manager.get_token(
-                conf=conf, key=(dst_account, dst_container)
-            ),
+            req, auth=access_token_manager.get_token(conf=conf, key=(dst_account, dst_container))
         )
 
     resp = common.execute_request(conf, build_req)
@@ -1718,7 +1626,7 @@ def parallel_remote_copy(
     md5_digest = None
     if st.md5 is not None:
         md5_digest = binascii.unhexlify(st.md5)
-    upload_id = rng.randint(0, 2 ** 47 - 1)
+    upload_id = rng.randint(0, 2**47 - 1)
     block_ids = []
     min_block_size = st.size // BLOCK_COUNT_LIMIT
     assert min_block_size <= MAX_BLOCK_SIZE
@@ -1729,13 +1637,7 @@ def parallel_remote_copy(
     while start < st.size:
         block_id = _block_index_to_block_id(i, upload_id)
         future = executor.submit(
-            _put_block_from_url,
-            conf,
-            src,
-            start,
-            min(part_size, st.size - start),
-            dst,
-            block_id,
+            _put_block_from_url, conf, src, start, min(part_size, st.size - start), dst, block_id
         )
         futures.append(future)
         block_ids.append(block_id)
@@ -1745,9 +1647,7 @@ def parallel_remote_copy(
         future.result()
 
     dst_account, dst_container, dst_blob = split_path(dst)
-    dst_url = build_url(
-        dst_account, "/{container}/{blob}", container=dst_container, blob=dst_blob
-    )
+    dst_url = build_url(dst_account, "/{container}/{blob}", container=dst_container, blob=dst_blob)
 
     _finalize_blob(
         conf=conf,

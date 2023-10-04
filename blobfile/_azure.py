@@ -31,10 +31,10 @@ from blobfile._common import (
     RequestFailure,
     Stat,
     TokenManager,
-    path_join,
-    strip_slashes,
-    rng,
     VersionMismatch,
+    path_join,
+    rng,
+    strip_slashes,
 )
 
 SHARED_KEY = "shared_key"
@@ -746,12 +746,12 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
             )
             if storage_account_key_auth is not None:
                 return (storage_account_key_auth, now + SHARED_KEY_EXPIRATION_SECONDS)
-    
+
     # If opted into using azure-identity, use DefaultAzureCredential to get a token
     # This enables the use of Managed Identity, Workload Identity, and other auth methods not implemented here
     elif azure_auth == "azure-identity":
         try:
-            from azure.identity import DefaultAzureCredential
+            from azure.identity import DefaultAzureCredential  # pyright: ignore
         except ImportError:
             raise RuntimeError(
                 "When setting AZURE_USE_IDENTITY=1, you must also install the azure-identity package"
@@ -760,9 +760,7 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
         with DefaultAzureCredential() as cred:
             token = cred.get_token("https://storage.azure.com/.default")
         auth = (OAUTH_TOKEN, token.token)
-        if _can_access_container(
-            conf, account, container, auth, out_failures=access_failures
-        ):
+        if _can_access_container(conf, account, container, auth, out_failures=access_failures):
             return (auth, token.expires_on)
 
         if conf.use_azure_storage_account_key_fallback:
@@ -776,7 +774,6 @@ def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
             )
             if storage_account_key_auth is not None:
                 return (storage_account_key_auth, now + SHARED_KEY_EXPIRATION_SECONDS)
-    
 
     # oddly, it seems that if you request a public container with a valid azure account, you cannot list the bucket
     # but if you list it with no account, that works fine

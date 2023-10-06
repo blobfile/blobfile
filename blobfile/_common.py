@@ -281,8 +281,7 @@ class PoolDirector:
             if self.pool_manager is None or self.creation_pid != os.getpid():
                 self.creation_pid = os.getpid()
                 self.pool_manager = urllib3.PoolManager(
-                    maxsize=self.connection_pool_max_size,
-                    num_pools=self.max_connection_pool_count,
+                    maxsize=self.connection_pool_max_size, num_pools=self.max_connection_pool_count
                 )
                 # for debugging with mitmproxy
                 # self.http = urllib3.ProxyManager('http://localhost:8080/', ssl_context=context)

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.0
 
 * Support resolving objects that define `__blobpath__`
 * Drop support for Python 3.7

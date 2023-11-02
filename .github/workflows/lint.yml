@@ -16,7 +16,7 @@ jobs:
       - run: pip install -e .
       - run: pip install pytest lxml-stubs
       - run: pip install pyright
-      - run: pyright .
+      - run: pyright
   format:
     runs-on: ubuntu-latest
     steps:

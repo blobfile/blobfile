@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+* Restore support for Python 3.8
+
 ## 2.1.0
 
 * Support resolving objects that define `__blobpath__`

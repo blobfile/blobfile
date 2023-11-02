@@ -1022,7 +1022,7 @@ class BlobPathLike(Protocol):
         ...
 
 
-RemoteOrLocalPath = Union[str, BlobPathLike, os.PathLike[str]]
+RemoteOrLocalPath = Union[str, BlobPathLike, "os.PathLike[str]"]
 
 
 def path_to_str(path: RemoteOrLocalPath) -> str:

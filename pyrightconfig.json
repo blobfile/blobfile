@@ -1,15 +1,16 @@
 {
     "venv": "blobfile",
     "include": [
-        "blobfile"
+        "blobfile",
+        "setup.py"
     ],
     "exclude": [
         "blobfile/**/*_test.py",
         "conftest.py",
-        "setup.py",
         "scripts/**",
         "testing/**",
     ],
+    "pythonVersion": "3.8",
     "disableBytesTypePromotions": true,
     "reportAssertAlwaysTrue": "error",
     "reportInvalidStringEscapeSequence": "error",

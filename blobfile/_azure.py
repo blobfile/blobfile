@@ -1193,7 +1193,12 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 # from the 400 status code)
                 retry_codes=(400,) + DEFAULT_RETRY_CODES,
             )
-            execute_api_request(self._conf, req)
+            try:
+                execute_api_request(self._conf, req)
+            except Exception:
+                del chunk, data, req.data, req
+                raise
+
             self._block_index += 1
             if self._block_index >= BLOCK_COUNT_LIMIT:
                 raise Error(

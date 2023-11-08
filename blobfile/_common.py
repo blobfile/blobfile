@@ -599,7 +599,7 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
                     else:
                         raise RequestFailure.create_from_request_response(
                             "host does not exist", request=req, response=fake_resp
-                        )
+                        ) from e
 
             err = RequestFailure.create_from_request_response(
                 message=f"request failed with exception {e}",
@@ -730,9 +730,12 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
             size = (len(buf) // self._chunk_size) * self._chunk_size
             assert size > 0
 
-        chunk = buf[:size]
-        self._upload_chunk(chunk, finalize)
-        self._offset += len(chunk)
+        try:
+            chunk = buf[:size]
+            self._upload_chunk(chunk, finalize)
+            self._offset += len(chunk)
+        finally:
+            del chunk, buf  # pyright: ignore[reportUnboundVariable]
         return size
 
     def close(self) -> None:
@@ -761,9 +764,12 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         else:
             self._buf += b
             if len(self._buf) >= self._chunk_size:
-                mv = memoryview(self._buf)
-                size = self._upload_buf(mv)
-                self._buf = bytearray(mv[size:])
+                try:
+                    mv = memoryview(self._buf)
+                    size = self._upload_buf(mv)
+                    self._buf = bytearray(mv[size:])
+                finally:
+                    del mv  # pyright: ignore[reportUnboundVariable]
         assert len(self._buf) < self._chunk_size
         return len(b)
 

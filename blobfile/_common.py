@@ -554,7 +554,7 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
                     if resp.status in (429, 503):
                         message += ": if you are writing a blob this error may be due to multiple concurrent writers - make sure you are not writing to the same blob from multiple processes simultaneously"
                     elif resp.status == 401:
-                        message += ": no valid credentials were found, please login with 'gcloud auth application-default login' or else set the 'GOOGLE_APPLICATION_CREDENTIALS' environment variable to the path of a JSON format service account key"
+                        message += ": no valid credentials were found, please (Anthropic specific): enabled Workload Identity Federation with `wif_enable`, OR login with 'gcloud auth application-default login' or else set the 'GOOGLE_APPLICATION_CREDENTIALS' environment variable to the path of a JSON format service account key"
                     elif resp.status == 403:
                         message += ": credentials were found but do not grant access to this resource, please make sure the account you are using (either via 'gcloud auth application-default login' or the 'GOOGLE_APPLICATION_CREDENTIALS' environment variable) has access"
                 err = RequestFailure.create_from_request_response(

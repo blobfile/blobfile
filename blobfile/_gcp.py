@@ -10,6 +10,7 @@ import platform
 import socket
 import time
 import urllib.parse
+import io
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
 import urllib3
@@ -144,6 +145,30 @@ def _create_access_token_request(creds: Dict[str, Any], scopes: List[str]) -> Re
         )
     else:
         raise Error("Credentials not recognized")
+
+
+# Derived from:
+# - https://github.com/googleapis/google-auth-library-python/blob/0afc61a3a9c3d5035c913ad4a7568e8a888e2ec9/google/auth/external_account.py#L361
+# - https://github.com/googleapis/google-auth-library-python/blob/0afc61a3a9c3d5035c913ad4a7568e8a888e2ec9/google/oauth2/sts.py#L95
+def _create_sts_token_request(creds: Dict[str, Any]) -> Request:
+    data = {
+        "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+        "audience": creds["audience"],
+        "scope": "https://www.googleapis.com/auth/cloud-platform",
+        "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
+        "subject_token": retrieve_subject_token(
+            creds["credential_source"].get("file"),
+            creds["credential_source"].get("format", {}).get("type"),
+        ),
+        "subject_token_type": creds["subject_token_type"],
+    }
+
+    return Request(
+        url=creds["token_url"],
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data=urllib.parse.urlencode(data).encode("utf8"),
+    )
 
 
 def build_url(template: str, **data: str) -> str:
@@ -361,49 +386,112 @@ def make_stat(item: Mapping[str, Any]) -> Stat:
     )
 
 
-def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
-    if os.environ.get("BLOBFILE_FORCE_GOOGLE_ANONYMOUS_AUTH", "0") == "1":
-        return (ANONYMOUS, ""), float("inf")
+# cribbed from https://github.com/googleapis/google-auth-library-python/blob/0afc61a3a9c3d5035c913ad4a7568e8a888e2ec9/google/auth/identity_pool.py#L156
+def retrieve_subject_token(credential_source_file: str, credential_source_format_type: str):
+    return _parse_token_data(_get_token_data(credential_source_file), credential_source_format_type)
+
+
+def _get_token_data(credential_source_file: str) -> Tuple[str, str]:
+    if credential_source_file:
+        return _get_file_data(credential_source_file)
+    else:
+        raise ValueError("url-sourced credential_source is not supported yet.")
+
+
+def _get_file_data(filename: str) -> Tuple[str, str]:
+    if not os.path.exists(filename):
+        raise ValueError("File '{}' was not found.".format(filename))
+
+    with io.open(filename, "r", encoding="utf-8") as file_obj:
+        return file_obj.read(), filename
+
+
+def _parse_token_data(token_content: Tuple[str, str], format_type: str = "text") -> str:
+    content, _ = token_content
+    if format_type == "text":
+        token = content
+    else:
+        raise ValueError("JSON format credential_source is not supported yet.")
+    if not token:
+        raise ValueError("Missing subject_token in the credential_source file")
+    return token
+
+
+def _get_wif_access_token(conf: Config, creds: Dict[str, Any]):
+    now = time.time()
+
+    def build_req() -> Request:
+        return _create_sts_token_request(creds=creds)
+
+    resp = common.execute_request(conf, build_req)
+    result = json.loads(resp.data)
+
+    print(result)
+
+    return (OAUTH_TOKEN, result["access_token"]), now + float(result["expires_in"])
+
+
+def _get_service_account_access_token(conf: Config, creds: Dict[str, Any]):
+    """
+    Corresponds to https://github.com/googleapis/google-auth-library-python/blob/main/google/oauth2/credentials.py#L336
+    """
 
     now = time.time()
+
+    def build_req() -> Request:
+        req = _create_access_token_request(
+            creds=creds, scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
+        )
+        req.success_codes = (200, 400)
+        return req
+
+    resp = common.execute_request(conf, build_req)
+    result = json.loads(resp.data)
+    if resp.status == 400:
+        error = result["error"]
+        description = result.get("error_description", "<missing description>")
+        msg = f"Error with google credentials: [{error}] {description}"
+        if error == "invalid_grant":
+            if description.startswith("Invalid JWT:"):
+                msg += "\nPlease verify that your system clock is correct."
+            elif description == "Bad Request":
+                msg += "\nYour credentials may be expired, please run the following commands: `gcloud auth application-default revoke` (this may fail but ignore the error) then `gcloud auth application-default login`"
+        raise Error(msg)
+    assert resp.status == 200
+    return (OAUTH_TOKEN, result["access_token"]), now + float(result["expires_in"])
+
+
+def _get_gce_access_token(conf: Config, creds: Dict[str, Any]):
+    now = time.time()
+
+    # see if the metadata server has a token for us
+    def build_req() -> Request:
+        return Request(
+            method="GET",
+            url="http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+            headers={"Metadata-Flavor": "Google"},
+        )
+
+    resp = common.execute_request(conf, build_req)
+    result = json.loads(resp.data)
+    return (OAUTH_TOKEN, result["access_token"]), now + float(result["expires_in"])
+
+
+def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
+    print("_get_access_token", conf, key)
+    if os.environ.get("BLOBFILE_FORCE_GOOGLE_ANONYMOUS_AUTH", "0") == "1":
+        return (ANONYMOUS, ""), float("inf")
 
     # https://github.com/googleapis/google-auth-library-java/blob/master/README.md#application-default-credentials
     creds = _load_credentials()
     if len(creds) > 0:
+        if creds.get("type") == "external_account":
+            return _get_wif_access_token(conf, creds)
+        else:  # assumes creds.get("type") == "authorized_user", I think
+            return _get_service_account_access_token(conf, creds)
 
-        def build_req() -> Request:
-            req = _create_access_token_request(
-                creds=creds, scopes=["https://www.googleapis.com/auth/devstorage.full_control"]
-            )
-            req.success_codes = (200, 400)
-            return req
-
-        resp = common.execute_request(conf, build_req)
-        result = json.loads(resp.data)
-        if resp.status == 400:
-            error = result["error"]
-            description = result.get("error_description", "<missing description>")
-            msg = f"Error with google credentials: [{error}] {description}"
-            if error == "invalid_grant":
-                if description.startswith("Invalid JWT:"):
-                    msg += "\nPlease verify that your system clock is correct."
-                elif description == "Bad Request":
-                    msg += "\nYour credentials may be expired, please run the following commands: `gcloud auth application-default revoke` (this may fail but ignore the error) then `gcloud auth application-default login`"
-            raise Error(msg)
-        assert resp.status == 200
-        return (OAUTH_TOKEN, result["access_token"]), now + float(result["expires_in"])
     elif os.environ.get("NO_GCE_CHECK", "false").lower() != "true" and _is_gce_instance():
-        # see if the metadata server has a token for us
-        def build_req() -> Request:
-            return Request(
-                method="GET",
-                url="http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
-                headers={"Metadata-Flavor": "Google"},
-            )
-
-        resp = common.execute_request(conf, build_req)
-        result = json.loads(resp.data)
-        return (OAUTH_TOKEN, result["access_token"]), now + float(result["expires_in"])
+        return _get_gce_access_token(conf, creds)
     else:
         return (ANONYMOUS, ""), float("inf")
 

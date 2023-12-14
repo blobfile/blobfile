@@ -94,7 +94,7 @@ There are a few bonus functions:
 
 The following methods will be tried in order:
 
-1) Check the environment variable `GOOGLE_APPLICATION_CREDENTIALS` for a path to service account credentials in JSON format.
+1) Check the environment variable `GOOGLE_APPLICATION_CREDENTIALS` for a path to service account credentials or workload identity federation credentials (type == "external_account") in JSON format.
 2) Check for "application default credentials".  To setup application default credentials, run `gcloud auth application-default login`.
 3) Check for a GCE metadata server (if running on GCE) and get credentials from that service.
 

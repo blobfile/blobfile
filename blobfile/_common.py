@@ -2,7 +2,6 @@ import hashlib
 import io
 import json
 import os
-import platform
 import random
 import socket
 import ssl
@@ -400,35 +399,45 @@ class WindowedFile:
         return buf
 
 
+_hostname_check_cache: Dict[str, Tuple[float, int]] = {}
+
+
 def _check_hostname(hostname: str) -> int:
-    try:
-        socket.getaddrinfo(hostname, None, family=socket.AF_INET)
-    except socket.gaierror as e:
-        if e.errno == socket.EAI_NONAME:
-            if platform.system() == "Linux":
-                # on linux we appear to get EAI_NONAME if the host does not exist
-                # and EAI_AGAIN if there is a temporary failure in resolution
-                return HOSTNAME_DOES_NOT_EXIST
-            else:
-                # it's not clear on other platforms how to differentiate a temporary
-                # name resolution failure from a permanent one, EAI_NONAME seems to be
-                # returned for either case
-                # if we cannot look up the hostname, but we
-                # can look up google, then it's likely the hostname does not exist
-                try:
-                    socket.getaddrinfo("www.google.com", None, family=socket.AF_INET)
-                except socket.gaierror:
-                    # if we can't resolve google, then the network is likely down and
-                    # we don't know if the hostname exists or not
-                    return HOSTNAME_STATUS_UNKNOWN
-                # in this case, we could resolve google, but not the original hostname
-                # likely the hostname does not exist (though this is definitely not a foolproof check)
-                return HOSTNAME_DOES_NOT_EXIST
-        else:
-            # we got some sort of other socket error, so it's unclear if the host exists or not
-            return HOSTNAME_STATUS_UNKNOWN
-    # no errors encountered, the hostname exists
-    return HOSTNAME_EXISTS
+    def inner(hostname: str) -> int:
+        try:
+            socket.getaddrinfo(hostname, None, family=socket.AF_INET)
+        except socket.gaierror as e:
+            if e.errno != socket.EAI_NONAME:
+                # we got some sort of other socket error, so it's unclear if the host exists or not
+                return HOSTNAME_STATUS_UNKNOWN
+
+            # On linux, most temporary name resolution failures return EAI_AGAIN, however it
+            # appears that some EAI_NONAME can be triggered by SERVFAIL, instead of just NXDOMAIN
+            # On other platforms, it's unclear how to differentiate between a temporary failure
+            # and a permanent one.
+            # Either way, assume that if we can lookup bing.com, then it's likely the hostname
+            # does not exist
+            try:
+                socket.getaddrinfo("www.bing.com", None, family=socket.AF_INET)
+            except socket.gaierror:
+                # if we can't resolve bing, then the network is likely down and we don't know if
+                # the hostname exists or not
+                return HOSTNAME_STATUS_UNKNOWN
+
+            # in this case, we could resolve bing, but not the original hostname. likely the
+            # hostname does not exist (though this is definitely not a foolproof check)
+            return HOSTNAME_DOES_NOT_EXIST
+
+        # no errors encountered, the hostname exists
+        return HOSTNAME_EXISTS
+
+    # maybe this cache is a little bit overkill...
+    now = time.time()
+    if hostname in _hostname_check_cache and _hostname_check_cache[hostname][0] >= now:
+        return _hostname_check_cache[hostname][1]
+    ret = inner(hostname)
+    _hostname_check_cache[hostname] = (now + 10, ret)
+    return ret
 
 
 class Timeout(Exception):

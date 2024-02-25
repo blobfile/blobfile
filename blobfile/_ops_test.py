@@ -21,10 +21,7 @@ import pickle
 import zipfile
 import re
 
-import av
 import pytest
-from tensorflow.io import gfile
-import imageio
 import numpy as np
 
 import blobfile as bf
@@ -84,6 +81,8 @@ def _get_temp_local_path():
 
 @contextlib.contextmanager
 def _get_temp_gcs_path():
+    from tensorflow.io import gfile
+
     path = f"gs://{GCS_TEST_BUCKET}/" + "".join(
         random.choice(string.ascii_lowercase) for i in range(16)
     )
@@ -97,21 +96,23 @@ def _get_temp_as_path(account=AS_TEST_ACCOUNT, container=AS_TEST_CONTAINER):
     random_id = "".join(random.choice(string.ascii_lowercase) for i in range(16))
     path = f"https://{account}.blob.core.windows.net/{container}/" + random_id
     yield path + "/file.name"
+    cmd = [
+        "az",
+        "storage",
+        "blob",
+        "delete-batch",
+        "--account-name",
+        account,
+        "--source",
+        container,
+        "--pattern",
+        f"{random_id}/*",
+    ]
     sp.run(
-        [
-            "az",
-            "storage",
-            "blob",
-            "delete-batch",
-            "--account-name",
-            account,
-            "--source",
-            container,
-            "--pattern",
-            f"{random_id}/*",
-        ],
+        cmd,
         check=True,
         shell=platform.system() == "Windows",
+        timeout=30,
     )
 
 
@@ -123,28 +124,32 @@ def _write_contents(path, contents):
             filepath = os.path.join(tmpdir, "tmp")
             with open(filepath, "wb") as f:
                 f.write(contents)
+            cmd = [
+                "az",
+                "storage",
+                "blob",
+                "upload",
+                "--overwrite",
+                "--account-name",
+                account,
+                "--container-name",
+                container,
+                "--name",
+                blob,
+                "--file",
+                filepath,
+            ]
             sp.run(
-                [
-                    "az",
-                    "storage",
-                    "blob",
-                    "upload",
-                    "--overwrite",
-                    "--account-name",
-                    account,
-                    "--container-name",
-                    container,
-                    "--name",
-                    blob,
-                    "--file",
-                    filepath,
-                ],
+                cmd,
                 check=True,
                 shell=platform.system() == "Windows",
                 stdout=sp.DEVNULL,
                 stderr=sp.DEVNULL,
+                timeout=30,
             )
     else:
+        from tensorflow.io import gfile
+
         with gfile.GFile(path, "wb") as f:
             f.write(contents)
 
@@ -155,29 +160,33 @@ def _read_contents(path):
             assert isinstance(tmpdir, str)
             account, container, blob = azure.split_path(path)
             filepath = os.path.join(tmpdir, "tmp")
+            cmd = [
+                "az",
+                "storage",
+                "blob",
+                "download",
+                "--account-name",
+                account,
+                "--container-name",
+                container,
+                "--name",
+                blob,
+                "--file",
+                filepath,
+            ]
             sp.run(
-                [
-                    "az",
-                    "storage",
-                    "blob",
-                    "download",
-                    "--account-name",
-                    account,
-                    "--container-name",
-                    container,
-                    "--name",
-                    blob,
-                    "--file",
-                    filepath,
-                ],
+                cmd,
                 check=True,
                 shell=platform.system() == "Windows",
                 stdout=sp.DEVNULL,
                 stderr=sp.DEVNULL,
+                timeout=30,
             )
             with open(filepath, "rb") as f:
                 return f.read()
     else:
+        from tensorflow.io import gfile
+
         with gfile.GFile(path, "rb") as f:
             return f.read()
 
@@ -1283,6 +1292,9 @@ def test_more_read_write(binary, streaming, ctx):
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_video(streaming, ctx):
+    import av
+    import imageio
+
     rng = np.random.RandomState(0)
     shape = (256, 64, 64, 3)
     video_data = rng.randint(0, 256, size=np.prod(shape), dtype=np.uint8).reshape(shape)

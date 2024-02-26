@@ -108,12 +108,7 @@ def _get_temp_as_path(account=AS_TEST_ACCOUNT, container=AS_TEST_CONTAINER):
         "--pattern",
         f"{random_id}/*",
     ]
-    sp.run(
-        cmd,
-        check=True,
-        shell=platform.system() == "Windows",
-        timeout=30,
-    )
+    sp.run(cmd, check=True, shell=platform.system() == "Windows", timeout=30)
 
 
 def _write_contents(path, contents):

@@ -1145,8 +1145,8 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 # this means that the last writer to start is likely to win, the others should fail
                 # with ConcurrentWriteFailure
                 resp = _clear_uncommitted_blocks(conf, self._url, resp.headers)
-                if resp:
-                    self._version = resp.headers["ETag"]  # update the version according to new etag
+                if resp and "etag" in resp.headers:
+                    self._version = resp.headers["etag"]  # update the version according to new etag
             else:
                 # if the existing blob type is not compatible with the block blob we are about to write
                 # we have to delete the file before writing our block blob or else we will get a 409

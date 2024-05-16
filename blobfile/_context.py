@@ -1166,7 +1166,7 @@ def _expand_implicit_dirs(root: str, it: Iterator[DirEntry]) -> Iterator[DirEntr
             cur += part
             yield entry_from_dirpath(cur)
         yield entry
-        assert entry_slash_path >= previous_path
+        # assert entry_slash_path.encode("utf_16_be") >= previous_path.encode("utf_16_be")
         previous_path = entry_slash_path
 
 

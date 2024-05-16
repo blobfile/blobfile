@@ -221,7 +221,9 @@ def create_api_request(req: Request, auth: Tuple[str, str]) -> Request:
 
     # https://docs.microsoft.com/en-us/rest/api/storageservices/previous-azure-storage-service-versions
     headers["x-ms-version"] = "2019-02-02"
-    headers["x-ms-date"] = datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
+    headers["x-ms-date"] = datetime.datetime.now(tz=datetime.timezone.utc).strftime(
+        "%a, %d %b %Y %H:%M:%S GMT"
+    )
     data = req.data
     if data is not None and isinstance(data, dict):
         data = xml.unparse(data)
@@ -809,10 +811,9 @@ def _get_sas_token(conf: Config, key: Any) -> Tuple[Any, float]:
 
     def build_req() -> Request:
         # https://docs.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(tz=datetime.timezone.utc)
         start = (now + datetime.timedelta(hours=-1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        expiration = now + datetime.timedelta(days=6)
-        expiry = expiration.strftime("%Y-%m-%dT%H:%M:%SZ")
+        expiry = (now + datetime.timedelta(days=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
         req = Request(
             url=f"https://{account}.blob.core.windows.net/",
             method="POST",
@@ -866,7 +867,7 @@ def _block_index_to_block_id(index: int, upload_id: int) -> str:
 
 
 def _clear_uncommitted_blocks(
-    conf: Config, url: str, metadata: Dict[str, str]
+    conf: Config, url: str, metadata: Mapping[str, str]
 ) -> Optional["urllib3.BaseHTTPResponse"]:
     # to avoid leaking uncommitted blocks, we can do a Put Block List with
     # all the existing blocks for a file

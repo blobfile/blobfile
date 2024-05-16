@@ -221,7 +221,9 @@ def create_api_request(req: Request, auth: Tuple[str, str]) -> Request:
 
     # https://docs.microsoft.com/en-us/rest/api/storageservices/previous-azure-storage-service-versions
     headers["x-ms-version"] = "2019-02-02"
-    headers["x-ms-date"] = datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
+    headers["x-ms-date"] = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%a, %d %b %Y %H:%M:%S GMT"
+    )
     data = req.data
     if data is not None and isinstance(data, dict):
         data = xml.unparse(data)
@@ -809,7 +811,7 @@ def _get_sas_token(conf: Config, key: Any) -> Tuple[Any, float]:
 
     def build_req() -> Request:
         # https://docs.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
         start = (now + datetime.timedelta(hours=-1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         expiration = now + datetime.timedelta(days=6)
         expiry = expiration.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -866,7 +868,7 @@ def _block_index_to_block_id(index: int, upload_id: int) -> str:
 
 
 def _clear_uncommitted_blocks(
-    conf: Config, url: str, metadata: Dict[str, str]
+    conf: Config, url: str, metadata: urllib3.HTTPHeaderDict
 ) -> Optional["urllib3.BaseHTTPResponse"]:
     # to avoid leaking uncommitted blocks, we can do a Put Block List with
     # all the existing blocks for a file
@@ -1145,8 +1147,8 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 # this means that the last writer to start is likely to win, the others should fail
                 # with ConcurrentWriteFailure
                 resp = _clear_uncommitted_blocks(conf, self._url, resp.headers)
-                if resp:
-                    self._version = resp.headers["ETag"]  # update the version according to new etag
+                if resp and "etag" in resp.headers:
+                    self._version = resp.headers["etag"]  # update the version according to new etag
             else:
                 # if the existing blob type is not compatible with the block blob we are about to write
                 # we have to delete the file before writing our block blob or else we will get a 409

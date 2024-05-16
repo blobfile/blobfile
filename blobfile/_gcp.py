@@ -217,7 +217,7 @@ def generate_signed_url(
     escaped_object_name = urllib.parse.quote(name, safe="")
     canonical_uri = f"/{bucket}/{escaped_object_name}"
 
-    datetime_now = datetime.datetime.utcnow()
+    datetime_now = datetime.datetime.now(datetime.timezone.utc)
     request_timestamp = datetime_now.strftime("%Y%m%dT%H%M%SZ")
     datestamp = datetime_now.strftime("%Y%m%d")
 

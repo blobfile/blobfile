@@ -221,7 +221,9 @@ def create_api_request(req: Request, auth: Tuple[str, str]) -> Request:
 
     # https://docs.microsoft.com/en-us/rest/api/storageservices/previous-azure-storage-service-versions
     headers["x-ms-version"] = "2019-02-02"
-    headers["x-ms-date"] = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    headers["x-ms-date"] = datetime.datetime.now(tz=datetime.timezone.utc).strftime(
+        "%a, %d %b %Y %H:%M:%S GMT"
+    )
     data = req.data
     if data is not None and isinstance(data, dict):
         data = xml.unparse(data)

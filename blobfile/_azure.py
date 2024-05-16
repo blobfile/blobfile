@@ -867,7 +867,7 @@ def _block_index_to_block_id(index: int, upload_id: int) -> str:
 
 
 def _clear_uncommitted_blocks(
-    conf: Config, url: str, metadata: Dict[str, str]
+    conf: Config, url: str, metadata: Mapping[str, str]
 ) -> Optional["urllib3.BaseHTTPResponse"]:
     # to avoid leaking uncommitted blocks, we can do a Put Block List with
     # all the existing blocks for a file

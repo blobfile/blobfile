@@ -15,7 +15,7 @@ jobs:
           python-version: "3.10"
       - run: pip install -e .
       - run: pip install pytest lxml-stubs
-      - run: pip install pyright
+      - run: pip install 'pyright>=1.1.363'
       - run: pyright
   format:
     runs-on: ubuntu-latest

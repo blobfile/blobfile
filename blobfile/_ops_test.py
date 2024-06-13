@@ -107,6 +107,8 @@ def _get_temp_as_path(account=AS_TEST_ACCOUNT, container=AS_TEST_CONTAINER):
         container,
         "--pattern",
         f"{random_id}/*",
+        "--auth-mode",
+        "login",
     ]
     sp.run(cmd, check=True, shell=platform.system() == "Windows", timeout=30)
 
@@ -562,6 +564,30 @@ def test_scandir(ctx):
         assert entries[1].stat.size == len(contents)
         assert entries[2].stat is None
 
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+def test_scandir_auto_parallel(ctx):
+    contents = b"meow!"
+    with ctx() as path:
+        dirpath = bf.dirname(path)
+        num_of_each = 50
+        a_names = [f"abcdefg{i}" for i in range(num_of_each)]
+        b_names = [f"hijklmnop{i}" for i in range(num_of_each)]
+        c_names = [f"qrstuvwxyz{i}" for i in range(num_of_each)]
+        all_names = sorted(a_names + b_names + c_names)
+        for i in range(num_of_each):
+            with bf.BlobFile(bf.join(dirpath,a_names[i]), "wb") as w:
+                w.write(contents)
+            with bf.BlobFile(bf.join(dirpath, b_names[i]), "wb") as w:
+                w.write(contents)
+            bf.makedirs(bf.join(dirpath, c_names[i]))
+        entries = sorted(list(bf.scandir_auto_parallel(dirpath, target_parallelism=2)))
+        assert [e.name for e in entries] == all_names
+        assert [e.path for e in entries] == [bf.join(dirpath, name) for name in all_names]
+        assert [e.is_dir for e in entries] == [False] * 2 * num_of_each  + [True] * num_of_each
+        assert [e.is_file for e in entries] == [True] * 2 * num_of_each + [False] * num_of_each
+        assert entries[0].stat.size == len(contents)
+        assert entries[num_of_each+1].stat.size == len(contents)
+        assert entries[-1].stat is None
 
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_listdir_sharded(ctx):

@@ -27,6 +27,7 @@ from blobfile._context import (
     DEFAULT_READ_TIMEOUT,
     DEFAULT_RETRY_COMMON_LOG_THRESHOLD,
     DEFAULT_RETRY_LOG_THRESHOLD,
+    AUTO_PARALLEL_DEFAULT_CHAR_SET,
     create_context,
     default_log_fn,
 )
@@ -203,6 +204,29 @@ def scandir(path: RemoteOrLocalPath, shard_prefix_length: int = 0) -> Iterator[D
     return default_context.scandir(path=path, shard_prefix_length=shard_prefix_length)
 
 
+def scandir_auto_parallel(path: RemoteOrLocalPath, target_parallelism: int = 10, valid_path_chars = None) -> Iterator[DirEntry]:
+    """Attempts to automatically parallelize the scandir operation.
+
+    This attempts to improve the speed of scanning a directory with a very large number of files.
+    It works by building out a tree of prefixes and then scanning each prefix in parallel.
+    Assumes that branches which have no files return quickly so the search can be narrowed down.
+
+    Cases where this doesn't work well:
+       - If your filenames share a very long common prefix (tree will need to be very deep).
+       - Your filenames use a large # of potential characters (tree will need to be very wide).
+
+    Args:
+        path: The directory to scan.
+        target_parallelism: Target number of concurrent requests to make to the storage backend.
+        valid_path_chars: A set of characters that could be in paths. If None (default), uses a-zA-Z0-9_-.
+    """
+
+    if valid_path_chars is None:
+        valid_path_chars = AUTO_PARALLEL_DEFAULT_CHAR_SET
+
+    return default_context.scan_dir_auto_parallel(path=path, target_parallelism=target_parallelism, char_set=valid_path_chars)
+
+
 def makedirs(path: RemoteOrLocalPath) -> None:
     """
     Make any directories necessary to ensure that path is a directory
@@ -308,8 +332,7 @@ def BlobFile(
     cache_dir: Optional[str] = ...,
     file_size: Optional[int] = None,
     version: Optional[str] = None,
-) -> BinaryIO:
-    ...
+) -> BinaryIO: ...
 
 
 @overload
@@ -321,8 +344,7 @@ def BlobFile(
     cache_dir: Optional[str] = ...,
     file_size: Optional[int] = None,
     version: Optional[str] = None,
-) -> TextIO:
-    ...
+) -> TextIO: ...
 
 
 def BlobFile(

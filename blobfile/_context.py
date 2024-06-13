@@ -19,10 +19,12 @@ import time
 import urllib.parse
 from functools import partial
 from types import ModuleType
+import string
 from typing import (
     Any,
     BinaryIO,
     Callable,
+    Iterable,
     Iterator,
     List,
     Literal,
@@ -57,10 +59,14 @@ from blobfile._common import (
     get_log_threshold_for_error,
     path_to_str,
 )
+from blobfile import _auto_parallelizer as parallelizer
 
 # https://cloud.google.com/storage/docs/naming
 # https://www.w3.org/TR/xml/#charsets
 INVALID_CHARS = set().union(range(0x0, 0x9)).union(range(0xB, 0xE)).union(range(0xE, 0x20))
+
+# Azure is more permissive than this set, but this more limited set will improve performance.
+AUTO_PARALLEL_DEFAULT_CHAR_SET = set(string.ascii_letters + string.digits + "_-.")
 
 DEFAULT_AZURE_WRITE_CHUNK_SIZE = 8 * 2**20
 DEFAULT_GOOGLE_WRITE_CHUNK_SIZE = 8 * 2**20
@@ -73,6 +79,20 @@ DEFAULT_BUFFER_SIZE = 8 * 2**20
 
 def _execute_fn_and_ignore_result(fn: Callable[..., object], *args: Any):
     fn(*args)
+
+
+# Functions used for auto parallelization, module level functions for pickling
+def _generate_path_possible_postfixes(path: str, char_set: Iterable[chr]) -> List[str]:
+    assert path[-1] == "*", f"Cannot split a non-glob path: {path}"
+    exact_path = path[:-1]
+    additional_paths = [
+        exact_path + c + "*" for c in char_set
+    ]
+    return [exact_path] + additional_paths
+
+
+def _join_glob_results(results: List[List[DirEntry]]) -> List[DirEntry]:
+    return [entry for sublist in results for entry in sublist]
 
 
 class Context:
@@ -239,10 +259,16 @@ class Context:
                     name=self.basename(filepath),
                     is_dir=is_dir,
                     is_file=not is_dir,
-                    stat=None
-                    if is_dir
-                    else Stat(
-                        size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None, version=None
+                    stat=(
+                        None
+                        if is_dir
+                        else Stat(
+                            size=s.st_size,
+                            mtime=s.st_mtime,
+                            ctime=s.st_ctime,
+                            md5=None,
+                            version=None,
+                        )
                     ),
                 )
         elif _is_gcp_path(pattern) or _is_azure_path(pattern):
@@ -415,6 +441,21 @@ class Context:
                         yield entry
         else:
             raise Error(f"Unrecognized path: '{path}'")
+
+    def scan_dir_auto_parallel(self, path: RemoteOrLocalPath, target_parallelism: int, char_set: Iterable[chr]) -> Iterator[DirEntry]:
+        split_func = partial(_generate_path_possible_postfixes, char_set=char_set)
+        root_scan = path_to_str(path)
+        if not root_scan.endswith("/"):
+            root_scan += "/"
+        root_scan += "*"
+        return parallelizer.parallelize(
+            func=self.scanglob,
+            root_input=root_scan,
+            split=split_func,
+            join=_join_glob_results,
+            min_time_per_task_secs=1,
+            target_parallelism=target_parallelism,
+        )
 
     def makedirs(self, path: RemoteOrLocalPath) -> None:
         path = path_to_str(path)
@@ -786,8 +827,7 @@ class Context:
         cache_dir: Optional[str] = ...,
         file_size: Optional[int] = None,
         version: Optional[str] = None,
-    ) -> BinaryIO:
-        ...
+    ) -> BinaryIO: ...
 
     @overload
     def BlobFile(
@@ -799,8 +839,7 @@ class Context:
         cache_dir: Optional[str] = ...,
         file_size: Optional[int] = None,
         version: Optional[str] = None,
-    ) -> TextIO:
-        ...
+    ) -> TextIO: ...
 
     def BlobFile(
         self,

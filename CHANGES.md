@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+* Replace parallelization mechanism with new DFS-like parallelization. This replaces the old shard prefix parallelization.
+
 ## 2.1.1
 
 * Restore support for Python 3.8

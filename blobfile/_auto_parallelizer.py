@@ -3,17 +3,21 @@ Module for automatically parallelizing a function that takes a long time to run 
 
 See doc string on `parallelize` for more details.
 """
+import abc
 from typing import Callable, Any, Generator, List
 import concurrent.futures
 import time
 from dataclasses import dataclass
 import multiprocessing
 from threading import Event
+from typing import TypeVar
+
 
 @dataclass
 class _FuncResult:
     did_complete: bool
     result: Any
+
 
 @dataclass
 class _CancellableFuncCall:
@@ -39,18 +43,28 @@ class _CancellableFuncCall:
         return _FuncResult(False, None)
 
 
+class SplittableInput(abc.ABC):
+    def is_splittable(self) -> bool:
+        raise NotImplementedError()
+
+    def split(self) -> List["SplittableInput"]:
+        raise NotImplementedError()
+
+
+SI = TypeVar("SI", bound="SplittableInput")
+
+
 @dataclass
 class _RunningTask:
     future: concurrent.futures.Future[Any]
-    input: Any
+    input: SI
     start_time: float
     cancel_event: Event
 
 
 def parallelize(
-    func: Callable[[Any], Any],
-    root_input: Any,
-    split: Callable[[Any], List[Any]],
+    func: Callable[[SI], Any],
+    root_input: SI,
     join: Callable[[List[Any]], Any],
     min_time_per_task_secs: float = 1,
     target_parallelism: int = 5,
@@ -104,10 +118,13 @@ def parallelize(
                         if task.future.done():
                             continue
 
-                        if time.time() - task.start_time > min_time_per_task_secs:
+                        if (
+                            task.input.is_splittable()
+                            and time.time() - task.start_time > min_time_per_task_secs
+                        ):
                             task.cancel_event.set()
                             running_tasks.remove(task)
-                            tasks.extend(split(task.input))
+                            tasks.extend(task.input.split())
                             break
 
                     # If we didn't manage to cancel a task, it might be because the tasks are done,

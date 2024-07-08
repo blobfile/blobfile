@@ -2,6 +2,9 @@
 import datetime
 import warnings
 
+from blobfile._common import Config
+from blobfile._context import _ListTaskInput
+
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -22,10 +25,11 @@ import zipfile
 import re
 
 import pytest
+from unittest.mock import patch
 import numpy as np
 
 import blobfile as bf
-from blobfile import _ops as ops, _azure as azure, _common as common
+from blobfile import _ops as ops, _azure as azure, _common as common, _context as context
 
 GCS_TEST_BUCKET = os.getenv("GCS_TEST_BUCKET", "csh-test-3")
 AS_TEST_ACCOUNT = os.getenv("AS_TEST_ACCOUNT", "cshteststorage2")
@@ -67,8 +71,10 @@ def setup_gcloud_auth():
 def chdir(path):
     original_path = os.getcwd()
     os.chdir(path)
-    yield
-    os.chdir(original_path)
+    try:
+        yield
+    finally:
+        os.chdir(original_path)
 
 
 @contextlib.contextmanager
@@ -91,6 +97,30 @@ def _get_temp_gcs_path():
     gfile.rmtree(path)
 
 
+_original_list_task = context._process_list_task
+
+
+def _slow_process_list_task(t: _ListTaskInput, conf: Config):
+    ret = list(_original_list_task(t, conf))
+    if not t.is_exact:
+        # to simulate slow responses that benefit from parallelization
+        time.sleep(len(ret))
+    yield from ret
+
+
+@contextlib.contextmanager
+def _mock_process_list_task():
+    with patch.object(context, "_process_list_task", _slow_process_list_task):
+        yield
+
+
+def maybe_simulate_slow_responses(should_simulate: bool):
+    if should_simulate:
+        return _mock_process_list_task()
+    else:
+        return contextlib.nullcontext()
+
+
 @contextlib.contextmanager
 def _get_temp_as_path(account=AS_TEST_ACCOUNT, container=AS_TEST_CONTAINER):
     random_id = "".join(random.choice(string.ascii_lowercase) for i in range(16))
@@ -107,8 +137,6 @@ def _get_temp_as_path(account=AS_TEST_ACCOUNT, container=AS_TEST_CONTAINER):
         container,
         "--pattern",
         f"{random_id}/*",
-        "--auth-mode",
-        "login",
     ]
     sp.run(cmd, check=True, shell=platform.system() == "Windows", timeout=30)
 
@@ -525,26 +553,10 @@ def test_isdir(ctx):
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
-def test_listdir(ctx):
-    contents = b"meow!"
-    with ctx() as path:
-        dirpath = bf.dirname(path)
-        bf.makedirs(dirpath)
-        a_path = bf.join(dirpath, "a")
-        with bf.BlobFile(a_path, "wb") as w:
-            w.write(contents)
-        b_path = bf.join(dirpath, "b")
-        with bf.BlobFile(b_path, "wb") as w:
-            w.write(contents)
-        bf.makedirs(bf.join(dirpath, "c"))
-        expected = ["a", "b", "c"]
-        assert sorted(list(bf.listdir(dirpath))) == expected
-        dirpath = _convert_https_to_az(dirpath)
-        assert sorted(list(bf.listdir(dirpath))) == expected
-
-
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
-def test_scandir(ctx):
+@pytest.mark.parametrize(
+    "simulate_slow_responses", [False, pytest.param(True, marks=pytest.mark.slow)]
+)
+def test_scandir(ctx, simulate_slow_responses):
     contents = b"meow!"
     with ctx() as path:
         dirpath = bf.dirname(path)
@@ -555,42 +567,29 @@ def test_scandir(ctx):
         with bf.BlobFile(b_path, "wb") as w:
             w.write(contents)
         bf.makedirs(bf.join(dirpath, "c"))
-        entries = sorted(list(bf.scandir(dirpath)))
-        assert [e.name for e in entries] == ["a", "b", "c"]
-        assert [e.path for e in entries] == [bf.join(dirpath, name) for name in ["a", "b", "c"]]
-        assert [e.is_dir for e in entries] == [False, False, True]
-        assert [e.is_file for e in entries] == [True, True, False]
-        assert entries[0].stat.size == len(contents)
-        assert entries[1].stat.size == len(contents)
-        assert entries[2].stat is None
+        # d should not be included as scandir is not recursive.
+        d_path = bf.join(dirpath, "c", "d")
+        with bf.BlobFile(d_path, "wb") as w:
+            w.write(contents)
+        with maybe_simulate_slow_responses(simulate_slow_responses):
+            for parallelism in [1, 8]:
+                entries = sorted(list(bf.scandir(dirpath, target_parallelism=parallelism)))
+                assert [e.name for e in entries] == ["a", "b", "c"]
+                assert [e.path for e in entries] == [
+                    bf.join(dirpath, name) for name in ["a", "b", "c"]
+                ]
+                assert [e.is_dir for e in entries] == [False, False, True]
+                assert [e.is_file for e in entries] == [True, True, False]
+                assert entries[0].stat.size == len(contents)
+                assert entries[1].stat.size == len(contents)
+                assert entries[2].stat is None
+
 
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
-def test_scandir_auto_parallel(ctx):
-    contents = b"meow!"
-    with ctx() as path:
-        dirpath = bf.dirname(path)
-        num_of_each = 50
-        a_names = [f"abcdefg{i}" for i in range(num_of_each)]
-        b_names = [f"hijklmnop{i}" for i in range(num_of_each)]
-        c_names = [f"qrstuvwxyz{i}" for i in range(num_of_each)]
-        all_names = sorted(a_names + b_names + c_names)
-        for i in range(num_of_each):
-            with bf.BlobFile(bf.join(dirpath,a_names[i]), "wb") as w:
-                w.write(contents)
-            with bf.BlobFile(bf.join(dirpath, b_names[i]), "wb") as w:
-                w.write(contents)
-            bf.makedirs(bf.join(dirpath, c_names[i]))
-        entries = sorted(list(bf.scandir_auto_parallel(dirpath, target_parallelism=2)))
-        assert [e.name for e in entries] == all_names
-        assert [e.path for e in entries] == [bf.join(dirpath, name) for name in all_names]
-        assert [e.is_dir for e in entries] == [False] * 2 * num_of_each  + [True] * num_of_each
-        assert [e.is_file for e in entries] == [True] * 2 * num_of_each + [False] * num_of_each
-        assert entries[0].stat.size == len(contents)
-        assert entries[num_of_each+1].stat.size == len(contents)
-        assert entries[-1].stat is None
-
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
-def test_listdir_sharded(ctx):
+@pytest.mark.parametrize(
+    "simulate_slow_responses", [False, pytest.param(True, marks=pytest.mark.slow)]
+)
+def test_listdir(ctx, simulate_slow_responses):
     contents = b"meow!"
     with ctx() as path:
         dirpath = bf.dirname(path)
@@ -605,14 +604,15 @@ def test_listdir_sharded(ctx):
         bf.makedirs(bf.join(dirpath, "c"))
         with bf.BlobFile(bf.join(dirpath, "c/a"), "wb") as w:
             w.write(contents)
-        # this should also test shard_prefix_length=2 but that takes too long
-        assert sorted(list(bf.listdir(dirpath, shard_prefix_length=1))) == [
-            "a",
-            "aa",
-            "b",
-            "c",
-            "ca",
-        ]
+        with maybe_simulate_slow_responses(simulate_slow_responses):
+            for parallelism in [1, 8]:
+                assert sorted(list(bf.listdir(dirpath, target_parallelism=parallelism))) == [
+                    "a",
+                    "aa",
+                    "b",
+                    "c",
+                    "ca",
+                ]
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
@@ -684,8 +684,10 @@ def test_local_glob(ctx):
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
-@pytest.mark.parametrize("parallel", [False, True])
-def test_glob(ctx, parallel):
+@pytest.mark.parametrize(
+    "simulate_slow_responses", [False, pytest.param(True, marks=pytest.mark.slow)]
+)
+def test_glob(ctx, simulate_slow_responses):
     contents = b"meow!"
     with ctx() as path:
         dirpath = bf.dirname(path)
@@ -698,8 +700,10 @@ def test_glob(ctx, parallel):
 
         def assert_listing_equal(path, desired):
             desired = sorted([bf.join(dirpath, p) for p in desired])
-            actual = sorted(list(bf.glob(path, parallel=parallel)))
-            assert actual == desired, f"{actual} != {desired}"
+            with maybe_simulate_slow_responses(simulate_slow_responses):
+                for parallelism in [1, 8]:
+                    actual = sorted(list(bf.glob(path, target_parallelism=parallelism)))
+                    assert actual == desired, f"{actual} != {desired} for {parallelism=}"
 
         assert_listing_equal(bf.join(dirpath, "*b"), ["ab", "bb"])
         assert_listing_equal(bf.join(dirpath, "a*"), ["ab"])
@@ -751,7 +755,11 @@ def test_glob(ctx, parallel):
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
-def test_scanglob(ctx):
+@pytest.mark.parametrize(
+    "simulate_slow_responses", [False, pytest.param(True, marks=pytest.mark.slow)]
+)
+@_mock_process_list_task()
+def test_scanglob(ctx, simulate_slow_responses):
     contents = b"meow!"
     with ctx() as path:
         dirpath = bf.dirname(path)
@@ -774,19 +782,14 @@ def test_scanglob(ctx):
         assert entries[1].name == "bb" and entries[1].is_file
         assert entries[2].name == "subdir" and entries[2].is_dir
 
-        for shard_prefix_length in [0, 1]:
-            for pattern in ["*b", "b*", "**", "b**", "**t", "*b*"]:
-                normal_entries = sorted(list(bf.scanglob(bf.join(dirpath, pattern))))
-                parallel_entries = sorted(
-                    list(
-                        bf.scanglob(
-                            bf.join(dirpath, pattern),
-                            parallel=True,
-                            shard_prefix_length=shard_prefix_length,
-                        )
+        for pattern in ["*b", "b*", "**", "b**", "**t", "*b*"]:
+            normal_entries = sorted(list(bf.scanglob(bf.join(dirpath, pattern))))
+            with maybe_simulate_slow_responses(simulate_slow_responses):
+                for parallelism in [1, 8]:
+                    parallel_entries = sorted(
+                        list(bf.scanglob(bf.join(dirpath, pattern), target_parallelism=parallelism))
                     )
-                )
-                assert parallel_entries == normal_entries
+                    assert parallel_entries == normal_entries
 
         if "://" in path:
             # ** behaves a bit differently on local paths, so don't check those

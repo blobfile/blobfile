@@ -27,7 +27,6 @@ from blobfile._context import (
     DEFAULT_READ_TIMEOUT,
     DEFAULT_RETRY_COMMON_LOG_THRESHOLD,
     DEFAULT_RETRY_LOG_THRESHOLD,
-    AUTO_PARALLEL_DEFAULT_CHAR_SET,
     create_context,
     default_log_fn,
 )
@@ -150,7 +149,9 @@ def basename(path: RemoteOrLocalPath) -> str:
     return default_context.basename(path=path)
 
 
-def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
+def glob(
+    pattern: str, target_parallelism: int = 1, parallel_char_set: Optional[set[chr]] = None
+) -> Iterator[str]:
     """
     Find files and directories matching a pattern. Supports * and **
 
@@ -159,20 +160,24 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
 
     Globs can have confusing performance, see https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#efficiency-consideration:-using-wildcards-over-many-objects for more information.
 
-    You can set `parallel=True` to use multiple processes to perform the glob.  It's likely
-    that the results will no longer be in order.
+    Setting `target_parallelism` attempts to improve the speed of scanning a directory with a very large number of files.
+    It works by building out a tree of prefixes and then scanning each prefix in parallel.
+    Assumes that branches which have no files return quickly so the search can be narrowed down.
+    Be sure that `parallel_char_set` is set to the set of characters that could be in your paths, otherwise this may miss paths.
     """
-    return default_context.glob(pattern=pattern, parallel=parallel)
+    return default_context.glob(
+        pattern=pattern, target_parallelism=target_parallelism, parallel_char_set=parallel_char_set
+    )
 
 
 def scanglob(
-    pattern: str, parallel: bool = False, shard_prefix_length: int = 0
+    pattern: str, target_parallelism: int = 1, parallel_char_set: Optional[set[chr]] = None
 ) -> Iterator[DirEntry]:
     """
     Same as `glob`, but returns `DirEntry` objects instead of strings
     """
     return default_context.scanglob(
-        pattern=pattern, parallel=parallel, shard_prefix_length=shard_prefix_length
+        pattern=pattern, target_parallelism=target_parallelism, parallel_char_set=parallel_char_set
     )
 
 
@@ -183,48 +188,41 @@ def isdir(path: RemoteOrLocalPath) -> bool:
     return default_context.isdir(path=path)
 
 
-def listdir(path: RemoteOrLocalPath, shard_prefix_length: int = 0) -> Iterator[str]:
+def listdir(
+    path: RemoteOrLocalPath,
+    target_parallelism: int = 1,
+    parallel_char_set: Optional[set[chr]] = None,
+) -> Iterator[str]:
     """
     Returns an iterator of the contents of the directory at `path`
 
-    If your filenames are uniformly distributed (like hashes) then you can use `shard_prefix_length`
-    to query them more quickly.  `shard_prefix_length` will do multiple queries in parallel,
-    querying each possible prefix independently.
-
-    Using `shard_prefix_length` will only consider prefixes that are not unusual characters
-    (mostly these are ascii values < 0x20) some of these could technically show up in a path.
-    """
-    return default_context.listdir(path=path, shard_prefix_length=shard_prefix_length)
-
-
-def scandir(path: RemoteOrLocalPath, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
-    """
-    Same as `listdir`, but returns `DirEntry` objects instead of strings
-    """
-    return default_context.scandir(path=path, shard_prefix_length=shard_prefix_length)
-
-
-def scandir_auto_parallel(path: RemoteOrLocalPath, target_parallelism: int = 10, valid_path_chars = None) -> Iterator[DirEntry]:
-    """Attempts to automatically parallelize the scandir operation.
-
-    This attempts to improve the speed of scanning a directory with a very large number of files.
+    Setting `target_parallelism` attempts to improve the speed of scanning a directory with a very large number of files.
     It works by building out a tree of prefixes and then scanning each prefix in parallel.
     Assumes that branches which have no files return quickly so the search can be narrowed down.
-
-    Cases where this doesn't work well:
-       - If your filenames share a very long common prefix (tree will need to be very deep).
-       - Your filenames use a large # of potential characters (tree will need to be very wide).
-
-    Args:
-        path: The directory to scan.
-        target_parallelism: Target number of concurrent requests to make to the storage backend.
-        valid_path_chars: A set of characters that could be in paths. If None (default), uses a-zA-Z0-9_-.
+    Be sure that `parallel_char_set` is set to the set of characters that could be in your paths, otherwise this may miss paths.
     """
+    return default_context.listdir(
+        path=path, target_parallelism=target_parallelism, parallel_char_set=parallel_char_set
+    )
 
-    if valid_path_chars is None:
-        valid_path_chars = AUTO_PARALLEL_DEFAULT_CHAR_SET
 
-    return default_context.scan_dir_auto_parallel(path=path, target_parallelism=target_parallelism, char_set=valid_path_chars)
+def scandir(
+    path: RemoteOrLocalPath,
+    target_parallelism: int = 1,
+    parallel_char_set: Optional[set[chr]] = None,
+) -> Iterator[DirEntry]:
+    """
+    Same as `listdir`, but returns `DirEntry` objects instead of strings
+
+    Setting `target_parallelism` attempts to improve the speed of scanning a directory with a very large number of files.
+    It works by building out a tree of prefixes and then scanning each prefix in parallel.
+    Assumes that branches which have no files return quickly so the search can be narrowed down.
+    Be sure that `parallel_char_set` is set to the set of characters that could be in your paths, otherwise this may miss paths.
+
+    """
+    return default_context.scandir(
+        path=path, target_parallelism=target_parallelism, parallel_char_set=parallel_char_set
+    )
 
 
 def makedirs(path: RemoteOrLocalPath) -> None:
@@ -332,7 +330,8 @@ def BlobFile(
     cache_dir: Optional[str] = ...,
     file_size: Optional[int] = None,
     version: Optional[str] = None,
-) -> BinaryIO: ...
+) -> BinaryIO:
+    ...
 
 
 @overload
@@ -344,7 +343,8 @@ def BlobFile(
     cache_dir: Optional[str] = ...,
     file_size: Optional[int] = None,
     version: Optional[str] = None,
-) -> TextIO: ...
+) -> TextIO:
+    ...
 
 
 def BlobFile(

@@ -1256,7 +1256,11 @@ def _list_blobs_auto_parallel(
 
 
 def _process_glob_task(
-    conf: Config, root: str, t: _GlobTask, target_parallelism: int, parallel_char_set: Optional[set[str]]
+    conf: Config,
+    root: str,
+    t: _GlobTask,
+    target_parallelism: int,
+    parallel_char_set: Optional[set[str]],
 ) -> Iterator[Union[_GlobTask, _GlobEntry]]:
     cur = t.cur + t.rem[0]
     rem = t.rem[1:]

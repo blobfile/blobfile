@@ -127,9 +127,10 @@ def parallelize(
                             tasks.extend(task.input.split())
                             break
 
-                    # If we didn't manage to cancel a task, it might be because the tasks are done,
-                    # and we just need to pull the results
                     if len(tasks) == 0:
+                        # If we didn't manage to cancel a task, we wait a little and then try again.
+                        # Tasks might be all done, so we go back to overall loop.
+                        time.sleep(0.1)
                         break
 
     return join(results)

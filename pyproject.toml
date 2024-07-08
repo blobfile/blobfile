@@ -8,5 +8,5 @@ skip-magic-trailing-comma = true
 
 [tool.pytest.ini_options]
 markers = [
-    "slow: tests that run slowly, often becuase they simulate slowness",
+    "slow",
 ]

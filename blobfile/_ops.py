@@ -150,7 +150,7 @@ def basename(path: RemoteOrLocalPath) -> str:
 
 
 def glob(
-    pattern: str, target_parallelism: int = 1, parallel_char_set: Optional[set[chr]] = None
+    pattern: str, target_parallelism: int = 1, parallel_char_set: Optional[set[str]] = None
 ) -> Iterator[str]:
     """
     Find files and directories matching a pattern. Supports * and **
@@ -171,7 +171,7 @@ def glob(
 
 
 def scanglob(
-    pattern: str, target_parallelism: int = 1, parallel_char_set: Optional[set[chr]] = None
+    pattern: str, target_parallelism: int = 1, parallel_char_set: Optional[set[str]] = None
 ) -> Iterator[DirEntry]:
     """
     Same as `glob`, but returns `DirEntry` objects instead of strings
@@ -191,7 +191,7 @@ def isdir(path: RemoteOrLocalPath) -> bool:
 def listdir(
     path: RemoteOrLocalPath,
     target_parallelism: int = 1,
-    parallel_char_set: Optional[set[chr]] = None,
+    parallel_char_set: Optional[set[str]] = None,
 ) -> Iterator[str]:
     """
     Returns an iterator of the contents of the directory at `path`
@@ -209,7 +209,7 @@ def listdir(
 def scandir(
     path: RemoteOrLocalPath,
     target_parallelism: int = 1,
-    parallel_char_set: Optional[set[chr]] = None,
+    parallel_char_set: Optional[set[str]] = None,
 ) -> Iterator[DirEntry]:
     """
     Same as `listdir`, but returns `DirEntry` objects instead of strings

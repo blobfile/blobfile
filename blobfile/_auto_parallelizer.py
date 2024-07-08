@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 import multiprocessing
 from threading import Event
-from typing import TypeVar
+from typing import TypeVar, Sequence
 
 
 @dataclass
@@ -47,24 +47,24 @@ class SplittableInput(abc.ABC):
     def is_splittable(self) -> bool:
         raise NotImplementedError()
 
-    def split(self) -> List["SplittableInput"]:
+    def split(self) -> Sequence["SplittableInput"]:
         raise NotImplementedError()
 
 
-SI = TypeVar("SI", bound="SplittableInput")
+SI = TypeVar("SI", bound=SplittableInput)
 
 
 @dataclass
 class _RunningTask:
     future: concurrent.futures.Future[Any]
-    input: SI
+    input: SplittableInput
     start_time: float
     cancel_event: Event
 
 
 def parallelize(
     func: Callable[[SI], Any],
-    root_input: SI,
+    root_input: SplittableInput,
     join: Callable[[List[Any]], Any],
     min_time_per_task_secs: float = 1,
     target_parallelism: int = 5,

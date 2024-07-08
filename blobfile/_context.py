@@ -25,7 +25,6 @@ from typing import (
     Any,
     BinaryIO,
     Callable,
-    Iterable,
     Iterator,
     List,
     Literal,
@@ -223,7 +222,7 @@ class Context:
         self,
         pattern: str,
         target_parallelism: int = 1,
-        parallel_char_set: Optional[set[chr]] = None,
+        parallel_char_set: Optional[set[str]] = None,
     ) -> Iterator[str]:
         if _is_local_path(pattern):
             # scanglob currently does an os.stat for each matched file
@@ -244,7 +243,7 @@ class Context:
         self,
         pattern: str,
         target_parallelism: int = 1,
-        parallel_char_set: Optional[set[chr]] = None,
+        parallel_char_set: Optional[set[str]] = None,
     ) -> Iterator[DirEntry]:
         if "?" in pattern or "[" in pattern or "]" in pattern:
             raise Error("Advanced glob queries are not supported")
@@ -327,7 +326,7 @@ class Context:
         self,
         path: RemoteOrLocalPath,
         target_parallelism: int = 1,
-        parallel_char_set: Optional[set[chr]] = None,
+        parallel_char_set: Optional[set[str]] = None,
     ) -> Iterator[str]:
         path = path_to_str(path)
         for entry in self.scandir(
@@ -339,7 +338,7 @@ class Context:
         self,
         path: RemoteOrLocalPath,
         target_parallelism: int = 1,
-        parallel_char_set: Optional[set[chr]] = None,
+        parallel_char_set: Optional[set[str]] = None,
     ) -> Iterator[DirEntry]:
         path = path_to_str(path)
         if (_is_gcp_path(path) or _is_azure_path(path)) and not path.endswith("/"):
@@ -1161,7 +1160,7 @@ def _compile_pattern(s: str, sep: str = "/"):
 
 
 def _glob_full(
-    conf: Config, pattern: str, target_parallelism: int, parallel_char_set: Optional[set[chr]]
+    conf: Config, pattern: str, target_parallelism: int, parallel_char_set: Optional[set[str]]
 ) -> Iterator[DirEntry]:
     prefix, _, _ = pattern.partition("*")
 
@@ -1191,21 +1190,17 @@ class _GlobEntry(NamedTuple):
     entry: DirEntry
 
 
-class _GlobTaskComplete(NamedTuple):
-    pass
-
-
 @dataclass
 class _ListTaskInput(parallelizer.SplittableInput):
     path: str
     is_exact: bool
     delimiter: Optional[str]
-    parallel_char_set: set[chr]
+    parallel_char_set: set[str]
 
     def is_splittable(self) -> bool:
         return not self.is_exact
 
-    def split(self) -> List[_ListTaskInput]:
+    def split(self) -> Sequence[_ListTaskInput]:
         assert not self.is_exact
         additional_paths = [self.path + c for c in self.parallel_char_set]
         # Need to ensure we cover the exact match of the path in addition to new entries
@@ -1237,7 +1232,7 @@ def _list_blobs_auto_parallel(
     conf: Config,
     path: RemoteOrLocalPath,
     target_parallelism: int,
-    parallel_char_set: Optional[set[chr]] = None,
+    parallel_char_set: Optional[set[str]] = None,
     delimiter: str | None = None,
 ) -> Iterator[DirEntry]:
     if parallel_char_set is None:
@@ -1261,7 +1256,7 @@ def _list_blobs_auto_parallel(
 
 
 def _process_glob_task(
-    conf: Config, root: str, t: _GlobTask, target_parallelism: int, parallel_char_set: set[chr]
+    conf: Config, root: str, t: _GlobTask, target_parallelism: int, parallel_char_set: Optional[set[str]]
 ) -> Iterator[Union[_GlobTask, _GlobEntry]]:
     cur = t.cur + t.rem[0]
     rem = t.rem[1:]
@@ -1390,15 +1385,6 @@ def _normalize_path(conf: Config, path: str) -> str:
     if _is_azure_path(path):
         return azure.combine_path(conf, *azure.split_path(path))
     return path
-
-
-def _list_blobs_in_dir(conf: Config, prefix: str, exclude_prefix: bool) -> Iterator[DirEntry]:
-    # the prefix check doesn't work without normalization
-    normalized_prefix = _normalize_path(conf, prefix)
-    for entry in _list_blobs(conf=conf, path=normalized_prefix, delimiter="/"):
-        if exclude_prefix and _get_slash_path(entry) == normalized_prefix:
-            continue
-        yield entry
 
 
 def _get_entry(conf: Config, path: str) -> Optional[DirEntry]:

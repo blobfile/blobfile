@@ -5,9 +5,10 @@ import binascii
 import collections
 import concurrent.futures
 import contextlib
+from dataclasses import dataclass
+import functools
 import hashlib
 import io
-import itertools
 import math
 import multiprocessing as mp
 import os
@@ -19,6 +20,7 @@ import time
 import urllib.parse
 from functools import partial
 from types import ModuleType
+import string
 from typing import (
     Any,
     BinaryIO,
@@ -57,10 +59,14 @@ from blobfile._common import (
     get_log_threshold_for_error,
     path_to_str,
 )
+from blobfile import _auto_parallelizer as parallelizer
 
 # https://cloud.google.com/storage/docs/naming
 # https://www.w3.org/TR/xml/#charsets
 INVALID_CHARS = set().union(range(0x0, 0x9)).union(range(0xB, 0xE)).union(range(0xE, 0x20))
+
+DEFAULT_PARALLEL_CHAR_SET = set(string.ascii_letters + string.digits + string.punctuation + " ")
+
 
 DEFAULT_AZURE_WRITE_CHUNK_SIZE = 8 * 2**20
 DEFAULT_GOOGLE_WRITE_CHUNK_SIZE = 8 * 2**20
@@ -73,6 +79,10 @@ DEFAULT_BUFFER_SIZE = 8 * 2**20
 
 def _execute_fn_and_ignore_result(fn: Callable[..., object], *args: Any):
     fn(*args)
+
+
+def _join_glob_results(results: List[List[DirEntry]]) -> List[DirEntry]:
+    return [entry for sublist in results for entry in sublist]
 
 
 class Context:
@@ -208,7 +218,12 @@ class Context:
         else:
             return os.path.basename(path)
 
-    def glob(self, pattern: str, parallel: bool = False) -> Iterator[str]:
+    def glob(
+        self,
+        pattern: str,
+        target_parallelism: int = 1,
+        parallel_char_set: Optional[set[str]] = None,
+    ) -> Iterator[str]:
         if _is_local_path(pattern):
             # scanglob currently does an os.stat for each matched file
             # until scanglob can be implemented directly on scandir
@@ -217,11 +232,18 @@ class Context:
                 raise Error("Advanced glob queries are not supported")
             yield from _local_glob(pattern)
         else:
-            for entry in self.scanglob(pattern=pattern, parallel=parallel):
+            for entry in self.scanglob(
+                pattern=pattern,
+                target_parallelism=target_parallelism,
+                parallel_char_set=parallel_char_set,
+            ):
                 yield entry.path
 
     def scanglob(
-        self, pattern: str, parallel: bool = False, shard_prefix_length: int = 0
+        self,
+        pattern: str,
+        target_parallelism: int = 1,
+        parallel_char_set: Optional[set[str]] = None,
     ) -> Iterator[DirEntry]:
         if "?" in pattern or "[" in pattern or "]" in pattern:
             raise Error("Advanced glob queries are not supported")
@@ -239,10 +261,16 @@ class Context:
                     name=self.basename(filepath),
                     is_dir=is_dir,
                     is_file=not is_dir,
-                    stat=None
-                    if is_dir
-                    else Stat(
-                        size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None, version=None
+                    stat=(
+                        None
+                        if is_dir
+                        else Stat(
+                            size=s.st_size,
+                            mtime=s.st_mtime,
+                            ctime=s.st_ctime,
+                            md5=None,
+                            version=None,
+                        )
                     ),
                 )
         elif _is_gcp_path(pattern) or _is_azure_path(pattern):
@@ -263,69 +291,23 @@ class Context:
                     raise Error("Wildcards cannot be used in account or container")
                 root = azure.combine_path(self._conf, account, container, "")
 
-            if shard_prefix_length == 0:
-                initial_tasks = [_GlobTask("", _split_path(blob_prefix))]
-            else:
-                assert (
-                    parallel
-                ), "You probably want to use parallel=True if you are setting shard_prefix_length > 0"
-                initial_tasks = []
-                valid_chars = [
-                    i for i in range(256) if i not in INVALID_CHARS.union([ord("/"), ord("*")])
-                ]
-                pattern_prefix, pattern_suffix = blob_prefix.split("*", maxsplit=1)
-                for repeat in range(1, shard_prefix_length + 1):
-                    for chars in itertools.product(valid_chars, repeat=repeat):
-                        prefix = ""
-                        for c in chars:
-                            prefix += chr(c)
-                        # we need to check for exact matches for shorter prefix lengths
-                        # if we only searched for prefixes of length `shard_prefix_length`
-                        # we would skip shorter names, for instance "a" would be skipped if we
-                        # we had `shard_prefix_length=2`
-                        # instead we check for an exact match for everything shorter than
-                        # our `shard_prefix_length`
-                        exact = repeat != shard_prefix_length
-                        if exact:
-                            pat = pattern_prefix + prefix
-                        else:
-                            pat = pattern_prefix + prefix + "*" + pattern_suffix
-                        initial_tasks.append(_GlobTask("", _split_path(pat)))
-
-            if parallel:
-                mp_ctx = mp.get_context(self._conf.multiprocessing_start_method)
-                tasks = mp_ctx.Queue()
-                for t in initial_tasks:
-                    tasks.put(t)
-                tasks_enqueued = len(initial_tasks)
-                results = mp_ctx.Queue()
-
-                tasks_done = 0
-                with mp_ctx.Pool(
-                    initializer=_glob_worker, initargs=(self._conf, root, tasks, results)
+            initial_tasks = [_GlobTask("", _split_path(blob_prefix))]
+            dq: collections.deque[_GlobTask] = collections.deque()
+            for t in initial_tasks:
+                dq.append(t)
+            while len(dq) > 0:
+                t = dq.popleft()
+                for r in _process_glob_task(
+                    conf=self._conf,
+                    root=root,
+                    t=t,
+                    target_parallelism=target_parallelism,
+                    parallel_char_set=parallel_char_set,
                 ):
-                    while tasks_done < tasks_enqueued:
-                        r = results.get()
-                        if isinstance(r, _GlobEntry):
-                            yield r.entry
-                        elif isinstance(r, _GlobTask):
-                            tasks.put(r)
-                            tasks_enqueued += 1
-                        elif isinstance(r, _GlobTaskComplete):
-                            tasks_done += 1
-                        else:
-                            raise Error("Invalid result")
-            else:
-                dq: collections.deque[_GlobTask] = collections.deque()
-                for t in initial_tasks:
-                    dq.append(t)
-                while len(dq) > 0:
-                    t = dq.popleft()
-                    for r in _process_glob_task(conf=self._conf, root=root, t=t):
-                        if isinstance(r, _GlobEntry):
-                            yield r.entry
-                        else:
-                            dq.append(r)
+                    if isinstance(r, _GlobEntry):
+                        yield r.entry
+                    else:
+                        dq.append(r)
         else:
             raise Error(f"Unrecognized path '{pattern}'")
 
@@ -340,12 +322,24 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
-    def listdir(self, path: RemoteOrLocalPath, shard_prefix_length: int = 0) -> Iterator[str]:
+    def listdir(
+        self,
+        path: RemoteOrLocalPath,
+        target_parallelism: int = 1,
+        parallel_char_set: Optional[set[str]] = None,
+    ) -> Iterator[str]:
         path = path_to_str(path)
-        for entry in self.scandir(path, shard_prefix_length=shard_prefix_length):
+        for entry in self.scandir(
+            path, target_parallelism=target_parallelism, parallel_char_set=parallel_char_set
+        ):
             yield entry.name
 
-    def scandir(self, path: RemoteOrLocalPath, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
+    def scandir(
+        self,
+        path: RemoteOrLocalPath,
+        target_parallelism: int = 1,
+        parallel_char_set: Optional[set[str]] = None,
+    ) -> Iterator[DirEntry]:
         path = path_to_str(path)
         if (_is_gcp_path(path) or _is_azure_path(path)) and not path.endswith("/"):
             path += "/"
@@ -379,40 +373,22 @@ class Context:
                         ),
                     )
         elif _is_gcp_path(path) or _is_azure_path(path):
-            if shard_prefix_length == 0:
-                yield from _list_blobs_in_dir(conf=self._conf, prefix=path, exclude_prefix=True)
+            normalized_prefix = _normalize_path(self._conf, path)
+            if target_parallelism == 1:
+                it = _list_blobs(conf=self._conf, path=normalized_prefix, delimiter="/")
             else:
-                mp_ctx = mp.get_context(self._conf.multiprocessing_start_method)
-                prefixes = mp_ctx.Queue()
-                items = mp_ctx.Queue()
-                tasks_enqueued = 0
+                it = _list_blobs_auto_parallel(
+                    conf=self._conf,
+                    path=path,
+                    target_parallelism=target_parallelism,
+                    parallel_char_set=parallel_char_set,
+                    delimiter="/",
+                )
 
-                valid_chars = [i for i in range(256) if i not in INVALID_CHARS and i != ord("/")]
-                for repeat in range(1, shard_prefix_length + 1):
-                    for chars in itertools.product(valid_chars, repeat=repeat):
-                        prefix = ""
-                        for c in chars:
-                            prefix += chr(c)
-                        # we need to check for exact matches for shorter prefix lengths
-                        # if we only searched for prefixes of length `shard_prefix_length`
-                        # we would skip shorter names, for instance "a" would be skipped if we
-                        # we had `shard_prefix_length=2`
-                        # instead we check for an exact match for everything shorter than
-                        # our `shard_prefix_length`
-                        exact = repeat != shard_prefix_length
-                        prefixes.put((path, prefix, exact))
-                        tasks_enqueued += 1
-
-                tasks_done = 0
-                with mp_ctx.Pool(
-                    initializer=_sharded_listdir_worker, initargs=(self._conf, prefixes, items)
-                ):
-                    while tasks_done < tasks_enqueued:
-                        entry = items.get()
-                        if entry is None:
-                            tasks_done += 1
-                            continue
-                        yield entry
+            for entry in it:
+                if _get_slash_path(entry) == normalized_prefix:
+                    continue
+                yield entry
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
@@ -1183,12 +1159,20 @@ def _compile_pattern(s: str, sep: str = "/"):
     return re.compile(regexp + f"{sep}?$")
 
 
-def _glob_full(conf: Config, pattern: str) -> Iterator[DirEntry]:
+def _glob_full(
+    conf: Config, pattern: str, target_parallelism: int, parallel_char_set: Optional[set[str]]
+) -> Iterator[DirEntry]:
     prefix, _, _ = pattern.partition("*")
 
     re_pattern = _compile_pattern(pattern)
 
-    for entry in _expand_implicit_dirs(root=prefix, it=_list_blobs(conf=conf, path=prefix)):
+    it = _list_blobs_auto_parallel(
+        conf,
+        path=prefix,
+        target_parallelism=target_parallelism,
+        parallel_char_set=parallel_char_set,
+    )
+    for entry in _expand_implicit_dirs(root=prefix, it=it):
         entry_slash_path = _get_slash_path(entry)
         if bool(re_pattern.match(entry_slash_path)):
             if entry_slash_path == prefix and entry.is_dir:
@@ -1206,23 +1190,99 @@ class _GlobEntry(NamedTuple):
     entry: DirEntry
 
 
-class _GlobTaskComplete(NamedTuple):
-    pass
+@dataclass
+class _ListTaskInput(parallelizer.SplittableInput):
+    path: str
+    is_exact: bool
+    delimiter: Optional[str]
+    parallel_char_set: set[str]
+
+    def is_splittable(self) -> bool:
+        return not self.is_exact
+
+    def split(self) -> Sequence[_ListTaskInput]:
+        assert not self.is_exact
+        additional_paths = [self.path + c for c in self.parallel_char_set]
+        # Need to ensure we cover the exact match of the path in addition to new entries
+        return [
+            _ListTaskInput(
+                self.path, is_exact=True, delimiter=None, parallel_char_set=self.parallel_char_set
+            )
+        ] + [
+            _ListTaskInput(
+                p,
+                delimiter=self.delimiter,
+                is_exact=False,
+                parallel_char_set=self.parallel_char_set,
+            )
+            for p in additional_paths
+        ]
+
+
+def _process_list_task(t: _ListTaskInput, conf: Config) -> Iterator[DirEntry]:
+    if t.is_exact:
+        e = _get_entry(conf, t.path)
+        if e is not None:
+            yield e
+    else:
+        yield from _list_blobs(conf=conf, path=t.path, delimiter=t.delimiter)
+
+
+def _list_blobs_auto_parallel(
+    conf: Config,
+    path: RemoteOrLocalPath,
+    target_parallelism: int,
+    parallel_char_set: Optional[set[str]] = None,
+    delimiter: str | None = None,
+) -> Iterator[DirEntry]:
+    if parallel_char_set is None:
+        parallel_char_set = DEFAULT_PARALLEL_CHAR_SET
+    root_path = path_to_str(path)
+    root_task = _ListTaskInput(
+        path=root_path,
+        delimiter=delimiter,
+        is_exact=False,
+        parallel_char_set=parallel_char_set - {delimiter},
+    )
+    if target_parallelism == 1:
+        return _process_list_task(root_task, conf)
+    return parallelizer.parallelize(
+        func=functools.partial(_process_list_task, conf=conf),
+        root_input=root_task,
+        join=_join_glob_results,
+        min_time_per_task_secs=1,
+        target_parallelism=target_parallelism,
+    )
 
 
 def _process_glob_task(
-    conf: Config, root: str, t: _GlobTask
+    conf: Config,
+    root: str,
+    t: _GlobTask,
+    target_parallelism: int,
+    parallel_char_set: Optional[set[str]],
 ) -> Iterator[Union[_GlobTask, _GlobEntry]]:
     cur = t.cur + t.rem[0]
     rem = t.rem[1:]
     if "**" in cur:
-        for entry in _glob_full(conf, root + cur + "".join(rem)):
+        for entry in _glob_full(
+            conf,
+            root + cur + "".join(rem),
+            target_parallelism=target_parallelism,
+            parallel_char_set=parallel_char_set,
+        ):
             yield _GlobEntry(entry)
     elif "*" in cur:
         re_pattern = _compile_pattern(root + cur)
         prefix, _, _ = cur.partition("*")
         path = root + prefix
-        for entry in _list_blobs(conf=conf, path=path, delimiter="/"):
+        for entry in _list_blobs_auto_parallel(
+            conf=conf,
+            path=path,
+            delimiter="/",
+            target_parallelism=target_parallelism,
+            parallel_char_set=parallel_char_set,
+        ):
             entry_slash_path = _get_slash_path(entry)
             # in the case of dirname/* we should not return the path dirname/
             if entry_slash_path == path and entry.is_dir:
@@ -1242,19 +1302,6 @@ def _process_glob_task(
                 yield _GlobEntry(entry)
         else:
             yield _GlobTask(cur, rem)
-
-
-def _glob_worker(
-    conf: Config,
-    root: str,
-    tasks: mp.Queue[_GlobTask],
-    results: mp.Queue[Union[_GlobEntry, _GlobTask, _GlobTaskComplete]],
-) -> None:
-    while True:
-        t = tasks.get()
-        for r in _process_glob_task(conf, root=root, t=t):
-            results.put(r)
-        results.put(_GlobTaskComplete())
 
 
 def _local_glob(pattern: str) -> Iterator[str]:
@@ -1344,15 +1391,6 @@ def _normalize_path(conf: Config, path: str) -> str:
     return path
 
 
-def _list_blobs_in_dir(conf: Config, prefix: str, exclude_prefix: bool) -> Iterator[DirEntry]:
-    # the prefix check doesn't work without normalization
-    normalized_prefix = _normalize_path(conf, prefix)
-    for entry in _list_blobs(conf=conf, path=normalized_prefix, delimiter="/"):
-        if exclude_prefix and _get_slash_path(entry) == normalized_prefix:
-            continue
-        yield entry
-
-
 def _get_entry(conf: Config, path: str) -> Optional[DirEntry]:
     ctx = Context(conf)
     if _is_gcp_path(path):
@@ -1377,23 +1415,6 @@ def _get_entry(conf: Config, path: str) -> Optional[DirEntry]:
         raise Error(f"Unrecognized path: '{path}'")
 
     return None
-
-
-def _sharded_listdir_worker(
-    conf: Config, prefixes: mp.Queue[Tuple[str, str, bool]], items: mp.Queue[Optional[DirEntry]]
-) -> None:
-    while True:
-        base, prefix, exact = prefixes.get(True)
-        if exact:
-            path = base + prefix
-            entry = _get_entry(conf, path)
-            if entry is not None:
-                items.put(entry)
-        else:
-            it = _list_blobs_in_dir(conf, base + prefix, exclude_prefix=False)
-            for entry in it:
-                items.put(entry)
-        items.put(None)  # indicate that we have finished this path
 
 
 def _join2(conf: Config, a: str, b: str) -> str:

@@ -5,3 +5,8 @@ build-backend = "setuptools.build_meta"
 [tool.black]
 line-length = 100
 skip-magic-trailing-comma = true
+
+[tool.pytest.ini_options]
+markers = [
+    "slow",
+]

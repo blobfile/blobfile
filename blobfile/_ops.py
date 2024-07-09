@@ -149,7 +149,9 @@ def basename(path: RemoteOrLocalPath) -> str:
     return default_context.basename(path=path)
 
 
-def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
+def glob(
+    pattern: str, target_parallelism: int = 1, parallel_char_set: Optional[set[str]] = None
+) -> Iterator[str]:
     """
     Find files and directories matching a pattern. Supports * and **
 
@@ -158,20 +160,24 @@ def glob(pattern: str, parallel: bool = False) -> Iterator[str]:
 
     Globs can have confusing performance, see https://cloud.google.com/storage/docs/gsutil/addlhelp/WildcardNames#efficiency-consideration:-using-wildcards-over-many-objects for more information.
 
-    You can set `parallel=True` to use multiple processes to perform the glob.  It's likely
-    that the results will no longer be in order.
+    Setting `target_parallelism` attempts to improve the speed of scanning a directory with a very large number of files.
+    It works by building out a tree of prefixes and then scanning each prefix in parallel.
+    Assumes that branches which have no files return quickly so the search can be narrowed down.
+    Be sure that `parallel_char_set` is set to the set of characters that could be in your paths, otherwise this may miss paths.
     """
-    return default_context.glob(pattern=pattern, parallel=parallel)
+    return default_context.glob(
+        pattern=pattern, target_parallelism=target_parallelism, parallel_char_set=parallel_char_set
+    )
 
 
 def scanglob(
-    pattern: str, parallel: bool = False, shard_prefix_length: int = 0
+    pattern: str, target_parallelism: int = 1, parallel_char_set: Optional[set[str]] = None
 ) -> Iterator[DirEntry]:
     """
     Same as `glob`, but returns `DirEntry` objects instead of strings
     """
     return default_context.scanglob(
-        pattern=pattern, parallel=parallel, shard_prefix_length=shard_prefix_length
+        pattern=pattern, target_parallelism=target_parallelism, parallel_char_set=parallel_char_set
     )
 
 
@@ -182,25 +188,41 @@ def isdir(path: RemoteOrLocalPath) -> bool:
     return default_context.isdir(path=path)
 
 
-def listdir(path: RemoteOrLocalPath, shard_prefix_length: int = 0) -> Iterator[str]:
+def listdir(
+    path: RemoteOrLocalPath,
+    target_parallelism: int = 1,
+    parallel_char_set: Optional[set[str]] = None,
+) -> Iterator[str]:
     """
     Returns an iterator of the contents of the directory at `path`
 
-    If your filenames are uniformly distributed (like hashes) then you can use `shard_prefix_length`
-    to query them more quickly.  `shard_prefix_length` will do multiple queries in parallel,
-    querying each possible prefix independently.
-
-    Using `shard_prefix_length` will only consider prefixes that are not unusual characters
-    (mostly these are ascii values < 0x20) some of these could technically show up in a path.
+    Setting `target_parallelism` attempts to improve the speed of scanning a directory with a very large number of files.
+    It works by building out a tree of prefixes and then scanning each prefix in parallel.
+    Assumes that branches which have no files return quickly so the search can be narrowed down.
+    Be sure that `parallel_char_set` is set to the set of characters that could be in your paths, otherwise this may miss paths.
     """
-    return default_context.listdir(path=path, shard_prefix_length=shard_prefix_length)
+    return default_context.listdir(
+        path=path, target_parallelism=target_parallelism, parallel_char_set=parallel_char_set
+    )
 
 
-def scandir(path: RemoteOrLocalPath, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
+def scandir(
+    path: RemoteOrLocalPath,
+    target_parallelism: int = 1,
+    parallel_char_set: Optional[set[str]] = None,
+) -> Iterator[DirEntry]:
     """
     Same as `listdir`, but returns `DirEntry` objects instead of strings
+
+    Setting `target_parallelism` attempts to improve the speed of scanning a directory with a very large number of files.
+    It works by building out a tree of prefixes and then scanning each prefix in parallel.
+    Assumes that branches which have no files return quickly so the search can be narrowed down.
+    Be sure that `parallel_char_set` is set to the set of characters that could be in your paths, otherwise this may miss paths.
+
     """
-    return default_context.scandir(path=path, shard_prefix_length=shard_prefix_length)
+    return default_context.scandir(
+        path=path, target_parallelism=target_parallelism, parallel_char_set=parallel_char_set
+    )
 
 
 def makedirs(path: RemoteOrLocalPath) -> None:

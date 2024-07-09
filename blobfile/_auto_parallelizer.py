@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import multiprocessing
 from threading import Event
 from typing import TypeVar, Sequence
+from collections import deque
 
 
 @dataclass
@@ -89,7 +90,8 @@ def parallelize(
     manager = multiprocessing.Manager()
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=target_parallelism) as executor:
-        tasks = [root_input]
+        tasks = deque()
+        tasks.append(root_input)
         running_tasks: list[_RunningTask] = []
         while len(tasks) > 0 or len(running_tasks) > 0:
             # Pull results from completed tasks
@@ -108,7 +110,7 @@ def parallelize(
             # If we're below desired parallelism, run a task or split a running task
             while len(running_tasks) < target_parallelism:
                 if len(tasks) > 0:
-                    task = tasks.pop()
+                    task = tasks.popleft()
                     cancel_event = manager.Event()
                     func_call = _CancellableFuncCall(func, cancel_event)
                     future = executor.submit(func_call, task)

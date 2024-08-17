@@ -36,9 +36,8 @@ from typing import (
     overload,
 )
 
-import urllib3
-
 import filelock
+import urllib3
 
 from blobfile import _azure as azure
 from blobfile import _common as common
@@ -50,10 +49,10 @@ from blobfile._common import (
     Config,
     DirEntry,
     Error,
+    RemoteOrLocalPath,
     Request,
     RestartableStreamingWriteFailure,
     Stat,
-    RemoteOrLocalPath,
     get_log_threshold_for_error,
     path_to_str,
 )
@@ -775,6 +774,16 @@ class Context:
         else:
             with self.BlobFile(path, "rb") as f:
                 return common.block_md5(f).hex()
+
+    def last_version_seen(self, file: TextIO | BinaryIO) -> Optional[str]:
+        actual = file
+        if isinstance(actual, io.TextIOWrapper):
+            actual = actual.buffer
+        if isinstance(actual, (io.BufferedReader, io.BufferedWriter)):
+            actual = actual.raw
+        if isinstance(actual, (azure.StreamingReadFile, azure.StreamingWriteFile)):
+            return actual._version  # type: ignore
+        return None
 
     @overload
     def BlobFile(

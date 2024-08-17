@@ -16,7 +16,7 @@ from typing import (
 
 import urllib3
 
-from blobfile._common import DirEntry, Stat, RemoteOrLocalPath
+from blobfile._common import DirEntry, RemoteOrLocalPath, Stat
 from blobfile._context import (
     DEFAULT_AZURE_WRITE_CHUNK_SIZE,
     DEFAULT_BUFFER_SIZE,
@@ -297,6 +297,13 @@ def md5(path: RemoteOrLocalPath) -> str:
     For local paths, this must always calculate the MD5.
     """
     return default_context.md5(path=path)
+
+
+def last_version_seen(file: TextIO | BinaryIO) -> Optional[str]:
+    """
+    Get the last seen version of a file opened with `BlobFile`
+    """
+    return default_context.last_version_seen(file=file)
 
 
 @overload

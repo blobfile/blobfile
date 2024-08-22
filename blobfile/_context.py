@@ -776,13 +776,14 @@ class Context:
                 return common.block_md5(f).hex()
 
     def last_version_seen(self, file: TextIO | BinaryIO) -> Optional[str]:
+        actual: object
         actual = file
         if isinstance(actual, io.TextIOWrapper):
             actual = actual.buffer
         if isinstance(actual, (io.BufferedReader, io.BufferedWriter)):
             actual = actual.raw
         if isinstance(actual, (azure.StreamingReadFile, azure.StreamingWriteFile)):
-            return actual._version  # type: ignore
+            return actual._version
         return None
 
     @overload

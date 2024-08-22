@@ -782,9 +782,9 @@ class Context:
             actual = actual.buffer
         if isinstance(actual, (io.BufferedReader, io.BufferedWriter)):
             actual = actual.raw
-        if isinstance(actual, (azure.StreamingReadFile, azure.StreamingWriteFile)):
-            return actual._version
-        return None
+        if not isinstance(actual, (azure.StreamingReadFile, azure.StreamingWriteFile)):
+            raise ValueError("File was not an Azure BlobFile opened in streaming mode")
+        return actual._version  # pyright: ignore[reportPrivateUsage]
 
     @overload
     def BlobFile(

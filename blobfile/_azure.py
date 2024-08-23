@@ -1227,6 +1227,8 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 md5_digest=self._md5.digest(),
                 version=self._version,
             )
+            # Update the version according to new etag. The file will be closed
+            # after this, but the version can still be retrieved.
             self._version = resp.headers.get("ETag") or self._version
 
 

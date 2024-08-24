@@ -856,7 +856,6 @@ class Context:
             assert mode in ("r", "rb"), "Can only specify file_size when reading"
 
         if version:
-            assert mode in ("w", "wb", "a", "ab"), "Can only specify version when writing"
             assert not _is_local_path(path), "Cannot specify version when writing to local file"
             # we check for gcp later to raise a NotImplementedError instead
 
@@ -895,7 +894,7 @@ class Context:
                 if mode in ("w", "wb"):
                     f = azure.StreamingWriteFile(self._conf, path, version)
                 elif mode in ("r", "rb"):
-                    f = azure.StreamingReadFile(self._conf, path, size=file_size)
+                    f = azure.StreamingReadFile(self._conf, path, size=file_size, version=version)
                     f = io.BufferedReader(f, buffer_size=buffer_size)
                 else:
                     raise Error(f"Unsupported mode: '{mode}'")

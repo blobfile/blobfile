@@ -1024,10 +1024,10 @@ def create_page_iterator(
 
 
 class StreamingReadFile(BaseStreamingReadFile):
-    def __init__(self, conf: Config, path: str, size: Optional[int]) -> None:
-        self._version: Optional[str] = None
+    def __init__(self, conf: Config, path: str, size: Optional[int], version: Optional[str]) -> None:
+        self._version: Optional[str] = version
         if size is None:
-            st = maybe_stat(conf, path)
+            st = maybe_stat(conf, path, version=version)
             if st is None:
                 raise FileNotFoundError(f"No such file or directory: '{path}'")
             size = st.size
@@ -1296,7 +1296,7 @@ def parallel_upload(
     return binascii.hexlify(md5_digest).decode("utf8") if return_md5 else None
 
 
-def maybe_stat(conf: Config, path: str) -> Optional[Stat]:
+def maybe_stat(conf: Config, path: str, *, version: Optional[str] = None) -> Optional[Stat]:
     account, container, blob = split_path(path)
     if blob == "":
         return None
@@ -1308,7 +1308,12 @@ def maybe_stat(conf: Config, path: str) -> Optional[Stat]:
     resp = execute_api_request(conf, req)
     if resp.status != 200:
         return None
-    return make_stat(resp.headers)
+    stat = make_stat(resp.headers)
+    if version is not None and stat.version != version:
+        raise VersionMismatch.create_from_request_response(
+            message="etag mismatch", request=req, response=resp
+        )
+    return stat
 
 
 def remove(conf: Config, path: str) -> bool:

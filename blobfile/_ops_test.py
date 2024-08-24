@@ -1467,6 +1467,11 @@ def test_azure_etags_last_version(ctx):
         version1 = bf.last_version_seen(f)
         version2 = bf.last_version_seen(f2)
         assert version1 != version2
+
+        with pytest.raises(bf.VersionMismatch):
+            with bf.BlobFile(path, "rb", streaming=True, version=version1) as f:
+                assert f.read() == data1
+
         with bf.BlobFile(path, "rb", streaming=True) as f:
             assert f.read() == data2
         read_version = bf.last_version_seen(f)

@@ -1435,6 +1435,46 @@ def test_azure_etags(ctx):
         bf.remove(path)
 
 
+@pytest.mark.parametrize("ctx", [_get_temp_as_path])
+def test_azure_etags_last_version(ctx):
+    part1 = b"hello"
+    part2 = b" world"
+
+    with ctx() as path:
+        with bf.BlobFile(path, "wb", streaming=True) as f:
+            f.write(part1)
+            partial_written_version = bf.last_version_seen(f)
+            f.write(part2)
+        written_version = bf.last_version_seen(f)
+        assert partial_written_version != written_version
+        with bf.BlobFile(path, "rb", streaming=True) as f:
+            assert f.read(len(part1)) == part1
+            partial_read_version = bf.last_version_seen(f)
+            assert f.read() == part2
+        read_version = bf.last_version_seen(f)
+        assert partial_read_version == read_version
+        assert written_version == read_version
+
+        bf.remove(path)
+
+        data1 = b"hi there"
+        data2 = b"overwrite"
+
+        with bf.BlobFile(path, "wb", streaming=True) as f:
+            f.write(data1)
+        with bf.BlobFile(path, "wb", streaming=True) as f2:
+            f2.write(data2)
+        version1 = bf.last_version_seen(f)
+        version2 = bf.last_version_seen(f2)
+        assert version1 != version2
+        with bf.BlobFile(path, "rb", streaming=True) as f:
+            assert f.read() == data2
+        read_version = bf.last_version_seen(f)
+        assert read_version == version2
+
+        bf.remove(path)
+
+
 def test_azure_timestamp_parsing():
     timestamp = "Sun, 27 Sep 2009 18:41:57 GMT"
 

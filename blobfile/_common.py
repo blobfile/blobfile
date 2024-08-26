@@ -569,7 +569,7 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
                         message += ": credentials were found but do not grant access to this resource, please make sure the account you are using (either via 'gcloud auth application-default login' or the 'GOOGLE_APPLICATION_CREDENTIALS' environment variable) has access"
                 elif resp.status == 412 and resp.headers["x-ms-error-code"] == "ConditionNotMet":
                     error_class = VersionMismatch
-                    message="etag mismatch"
+                    message = "etag mismatch"
                 err = error_class.create_from_request_response(
                     message=message, request=req, response=resp
                 )

@@ -1441,15 +1441,21 @@ def test_azure_etags_last_version(ctx):
     part2 = b" world"
 
     with ctx() as path:
+        try:
+            bf.remove(path)
+        except FileNotFoundError:
+            pass
+
         with bf.BlobFile(path, "wb", streaming=True) as f:
             f.write(part1)
-            partial_written_version = bf.last_version_seen(f)
+            # This is None if the file did not previously exist.
+            assert bf.last_version_seen(f) is None
             f.write(part2)
         written_version = bf.last_version_seen(f)
-        assert partial_written_version != written_version
         with bf.BlobFile(path, "rb", streaming=True) as f:
             assert f.read(len(part1)) == part1
             partial_read_version = bf.last_version_seen(f)
+            assert partial_read_version is not None
             assert f.read() == part2
         read_version = bf.last_version_seen(f)
         assert partial_read_version == read_version
@@ -1476,6 +1482,17 @@ def test_azure_etags_last_version(ctx):
             assert f.read() == data2
         read_version = bf.last_version_seen(f)
         assert read_version == version2
+
+        bf.remove(path)
+
+        with bf.BlobFile(path, "wb", streaming=True) as f:
+            f.write(b"abcdefgh" * 1024)
+        with bf.BlobFile(path, "rb", streaming=True, buffer_size=16) as f:
+            assert f.read(16) == b"abcdefgh" * 2
+            with bf.BlobFile(path, "wb", streaming=True) as g:
+                g.write(b"ijklmnop" * 1024)
+            with pytest.raises(bf.VersionMismatch):
+                f.read(16)
 
         bf.remove(path)
 

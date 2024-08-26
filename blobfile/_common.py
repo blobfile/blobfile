@@ -559,6 +559,7 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
                 return resp
             else:
                 message = f"unexpected status {resp.status}"
+                error_class = RequestFailure
                 if url.startswith(GCP_BASE_URL):
                     if resp.status in (429, 503):
                         message += ": if you are writing a blob this error may be due to multiple concurrent writers - make sure you are not writing to the same blob from multiple processes simultaneously"
@@ -566,7 +567,10 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
                         message += ": no valid credentials were found, please login with 'gcloud auth application-default login' or else set the 'GOOGLE_APPLICATION_CREDENTIALS' environment variable to the path of a JSON format service account key"
                     elif resp.status == 403:
                         message += ": credentials were found but do not grant access to this resource, please make sure the account you are using (either via 'gcloud auth application-default login' or the 'GOOGLE_APPLICATION_CREDENTIALS' environment variable) has access"
-                err = RequestFailure.create_from_request_response(
+                elif resp.status == 412 and resp.headers["x-ms-error-code"] == "ConditionNotMet":
+                    error_class = VersionMismatch
+                    message="etag mismatch"
+                err = error_class.create_from_request_response(
                     message=message, request=req, response=resp
                 )
                 if resp.status not in req.retry_codes:

@@ -1435,6 +1435,68 @@ def test_azure_etags(ctx):
         bf.remove(path)
 
 
+@pytest.mark.parametrize("ctx", [_get_temp_as_path])
+def test_azure_etags_last_version(ctx):
+    part1 = b"hello"
+    part2 = b" world"
+
+    with ctx() as path:
+        try:
+            bf.remove(path)
+        except FileNotFoundError:
+            pass
+
+        with bf.BlobFile(path, "wb", streaming=True) as f:
+            f.write(part1)
+            # This is None if the file did not previously exist.
+            assert bf.last_version_seen(f) is None
+            f.write(part2)
+        written_version = bf.last_version_seen(f)
+        with bf.BlobFile(path, "rb", streaming=True) as f:
+            assert f.read(len(part1)) == part1
+            partial_read_version = bf.last_version_seen(f)
+            assert partial_read_version is not None
+            assert f.read() == part2
+        read_version = bf.last_version_seen(f)
+        assert partial_read_version == read_version
+        assert written_version == read_version
+
+        bf.remove(path)
+
+        data1 = b"hi there"
+        data2 = b"overwrite"
+
+        with bf.BlobFile(path, "wb", streaming=True) as f:
+            f.write(data1)
+        with bf.BlobFile(path, "wb", streaming=True) as f2:
+            f2.write(data2)
+        version1 = bf.last_version_seen(f)
+        version2 = bf.last_version_seen(f2)
+        assert version1 != version2
+
+        with pytest.raises(bf.VersionMismatch):
+            with bf.BlobFile(path, "rb", streaming=True, version=version1) as f:
+                assert f.read() == data1
+
+        with bf.BlobFile(path, "rb", streaming=True) as f:
+            assert f.read() == data2
+        read_version = bf.last_version_seen(f)
+        assert read_version == version2
+
+        bf.remove(path)
+
+        with bf.BlobFile(path, "wb", streaming=True) as f:
+            f.write(b"abcdefgh" * 1024)
+        with bf.BlobFile(path, "rb", streaming=True, buffer_size=16) as f:
+            assert f.read(16) == b"abcdefgh" * 2
+            with bf.BlobFile(path, "wb", streaming=True) as g:
+                g.write(b"ijklmnop" * 1024)
+            with pytest.raises(bf.VersionMismatch):
+                f.read(16)
+
+        bf.remove(path)
+
+
 def test_azure_timestamp_parsing():
     timestamp = "Sun, 27 Sep 2009 18:41:57 GMT"
 

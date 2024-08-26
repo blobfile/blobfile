@@ -36,9 +36,8 @@ from typing import (
     overload,
 )
 
-import urllib3
-
 import filelock
+import urllib3
 
 from blobfile import _azure as azure
 from blobfile import _common as common
@@ -50,10 +49,10 @@ from blobfile._common import (
     Config,
     DirEntry,
     Error,
+    RemoteOrLocalPath,
     Request,
     RestartableStreamingWriteFailure,
     Stat,
-    RemoteOrLocalPath,
     get_log_threshold_for_error,
     path_to_str,
 )
@@ -776,6 +775,17 @@ class Context:
             with self.BlobFile(path, "rb") as f:
                 return common.block_md5(f).hex()
 
+    def last_version_seen(self, file: TextIO | BinaryIO) -> Optional[str]:
+        actual: object
+        actual = file
+        if isinstance(actual, io.TextIOWrapper):
+            actual = actual.buffer
+        if isinstance(actual, (io.BufferedReader, io.BufferedWriter)):
+            actual = actual.raw
+        if not isinstance(actual, (azure.StreamingReadFile, azure.StreamingWriteFile)):
+            raise ValueError("File was not an Azure BlobFile opened in streaming mode")
+        return actual._version  # pyright: ignore[reportPrivateUsage]
+
     @overload
     def BlobFile(
         self,
@@ -846,7 +856,6 @@ class Context:
             assert mode in ("r", "rb"), "Can only specify file_size when reading"
 
         if version:
-            assert mode in ("w", "wb", "a", "ab"), "Can only specify version when writing"
             assert not _is_local_path(path), "Cannot specify version when writing to local file"
             # we check for gcp later to raise a NotImplementedError instead
 
@@ -885,7 +894,7 @@ class Context:
                 if mode in ("w", "wb"):
                     f = azure.StreamingWriteFile(self._conf, path, version)
                 elif mode in ("r", "rb"):
-                    f = azure.StreamingReadFile(self._conf, path, size=file_size)
+                    f = azure.StreamingReadFile(self._conf, path, size=file_size, version=version)
                     f = io.BufferedReader(f, buffer_size=buffer_size)
                 else:
                     raise Error(f"Unsupported mode: '{mode}'")

@@ -786,6 +786,22 @@ class Context:
             raise ValueError("File was not an Azure BlobFile opened in streaming mode")
         return actual._version  # pyright: ignore[reportPrivateUsage]
 
+    def read_text(self, path: RemoteOrLocalPath) -> str:
+        with self.BlobFile(path, "r") as f:
+            return f.read()
+
+    def read_bytes(self, path: RemoteOrLocalPath) -> bytes:
+        with self.BlobFile(path, "rb") as f:
+            return f.read()
+
+    def write_text(self, path: RemoteOrLocalPath, text: str) -> None:
+        with self.BlobFile(path, "w") as f:
+            f.write(text)
+
+    def write_bytes(self, path: RemoteOrLocalPath, data: bytes) -> None:
+        with self.BlobFile(path, "wb") as f:
+            f.write(data)
+
     @overload
     def BlobFile(
         self,

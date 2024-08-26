@@ -306,6 +306,34 @@ def last_version_seen(file: TextIO | BinaryIO) -> Optional[str]:
     return default_context.last_version_seen(file=file)
 
 
+def read_text(path: RemoteOrLocalPath) -> str:
+    """
+    Read the contents of a file as text
+    """
+    return default_context.read_text(path=path)
+
+
+def read_bytes(path: RemoteOrLocalPath) -> bytes:
+    """
+    Read the contents of a file as bytes
+    """
+    return default_context.read_bytes(path=path)
+
+
+def write_text(path: RemoteOrLocalPath, text: str) -> None:
+    """
+    Write text to a file
+    """
+    return default_context.write_text(path=path, text=text)
+
+
+def write_bytes(path: RemoteOrLocalPath, data: bytes) -> None:
+    """
+    Write bytes to a file
+    """
+    return default_context.write_bytes(path=path, data=data)
+
+
 @overload
 def BlobFile(
     path: RemoteOrLocalPath,

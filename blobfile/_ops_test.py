@@ -20,6 +20,7 @@ import platform
 import pickle
 import zipfile
 import re
+import unittest.mock
 
 import pytest
 import numpy as np
@@ -1510,6 +1511,29 @@ def test_azure_etags_last_version(ctx):
                 f.read(16)
 
         bf.remove(path)
+
+
+@pytest.mark.parametrize("ctx", [_get_temp_as_path])
+def test_azure_buffer_error_finally(ctx):
+    # Avoid BufferError: Existing exports of data: object cannot be re-sized
+    # See https://github.com/blobfile/blobfile/pull/230
+    @contextlib.contextmanager
+    def trailer_file(fn: str):
+        bfc = bf.create_context(azure_write_chunk_size=1024)
+        with bfc.BlobFile(fn, "wb", streaming=True) as f:
+            try:
+                yield f
+            finally:
+                f.write(b"asdf" * 1024)
+
+    with ctx() as path:
+        with trailer_file(path) as f:
+            with unittest.mock.patch("blobfile._azure.execute_api_request") as mock:
+                mock.side_effect = RuntimeError("asdf")
+                f.write(b"asdf")
+                with pytest.raises(RuntimeError):
+                    f.write(b"asdf" * 1024 * 2)
+                assert mock.call_count == 1
 
 
 def test_azure_timestamp_parsing():

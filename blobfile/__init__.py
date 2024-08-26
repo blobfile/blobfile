@@ -26,6 +26,10 @@ from blobfile._ops import (
     configure as configure,
     BlobFile as BlobFile,
     last_version_seen as last_version_seen,
+    read_bytes as read_bytes,
+    read_text as read_text,
+    write_bytes as write_bytes,
+    write_text as write_text,
 )
 from blobfile._context import Context as Context, create_context as create_context
 from blobfile._common import (

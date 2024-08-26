@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.0.0
+
+* Add convenience `read_text` / `read_bytes` / `write_text` / `write_bytes` functions
+* Track versions in Azure streaming files, expose `last_version_seen`
+    * Note that blobfile will now raise a `VersionMismatch` error if a file is modified between
+      issuing read API calls to Azure blob storage
+* Improve exception handling to avoid issue where Python keeps alive multiple references to same
+  buffer, resulting in BufferError
+* Fix glob for Azure blobs with unicode characters (turns out Azure has a weird definition of
+  alphabetical)
+* Make DNS logic more robust
+* Loosen bounds on dependencies
+* Remove use of deprecated `utcnow`
+
 ## 2.1.1
 
 * Restore support for Python 3.8

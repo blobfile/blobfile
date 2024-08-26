@@ -907,7 +907,7 @@ def _finalize_blob(
     block_ids: List[str],
     md5_digest: Optional[bytes],
     version: Optional[str],
-) -> None:
+) -> "urllib3.BaseHTTPResponse":
     body = {"BlockList": {"Latest": block_ids}}
     headers = {}
     if md5_digest is not None:
@@ -954,6 +954,7 @@ def _finalize_blob(
             raise VersionMismatch.create_from_request_response(
                 message="etag mismatch", request=req, response=resp
             )
+    return resp
 
 
 def isdir(conf: Config, path: str) -> bool:
@@ -1024,27 +1025,33 @@ def create_page_iterator(
 
 class StreamingReadFile(BaseStreamingReadFile):
     def __init__(self, conf: Config, path: str, size: Optional[int]) -> None:
+        self._version: Optional[str] = None
         if size is None:
             st = maybe_stat(conf, path)
             if st is None:
                 raise FileNotFoundError(f"No such file or directory: '{path}'")
             size = st.size
+            self._version = st.version
         super().__init__(conf=conf, path=path, size=size)
 
     def _request_chunk(
         self, streaming: bool, start: int, end: Optional[int] = None
     ) -> "urllib3.BaseHTTPResponse":
         account, container, blob = split_path(self._path)
+        headers = {"Range": common.calc_range(start=start, end=end)}
+        if self._version is not None:
+            headers["If-Match"] = self._version
         req = Request(
             url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
             method="GET",
-            headers={"Range": common.calc_range(start=start, end=end)},
+            headers=headers,
             success_codes=(206, 416),
             # if we are streaming the data, make
             # sure we don't preload it
             preload_content=not streaming,
         )
         resp = execute_api_request(self._conf, req)
+        self._version = self._version or resp.headers.get("ETag")
         return resp
 
 
@@ -1129,7 +1136,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
 
         self._upload_id = rng.randint(0, 2**47 - 1)
         self._block_index = 0
-        self._version = version  # for azure, this is an etag
+        self._version: Optional[str] = version  # for azure, this is an etag
         # check to see if there is an existing blob at this location with the wrong type
         req = Request(
             url=self._url,
@@ -1212,7 +1219,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
             block_ids = [
                 _block_index_to_block_id(i, self._upload_id) for i in range(self._block_index)
             ]
-            _finalize_blob(
+            resp = _finalize_blob(
                 conf=self._conf,
                 path=self._path,
                 url=self._url,
@@ -1220,6 +1227,9 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 md5_digest=self._md5.digest(),
                 version=self._version,
             )
+            # Update the version according to new etag. The file will be closed
+            # after this, but the version can still be retrieved.
+            self._version = resp.headers.get("ETag") or self._version
 
 
 def _upload_chunk(conf: Config, path: str, start: int, size: int, url: str, block_id: str) -> None:

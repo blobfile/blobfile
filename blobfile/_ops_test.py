@@ -81,7 +81,10 @@ def _get_temp_local_path():
 
 @contextlib.contextmanager
 def _get_temp_gcs_path():
-    from tensorflow.io import gfile
+    try:
+        from tensorflow.io import gfile
+    except ImportError:
+        pytest.skip("tensorflow not installed")
 
     path = f"gs://{GCS_TEST_BUCKET}/" + "".join(
         random.choice(string.ascii_lowercase) for i in range(16)
@@ -107,6 +110,8 @@ def _get_temp_as_path(account=AS_TEST_ACCOUNT, container=AS_TEST_CONTAINER):
         container,
         "--pattern",
         f"{random_id}/*",
+        "--auth-mode",
+        "login",
     ]
     sp.run(cmd, check=True, shell=platform.system() == "Windows", timeout=30)
 
@@ -133,6 +138,8 @@ def _write_contents(path, contents):
                 blob,
                 "--file",
                 filepath,
+                "--auth-mode",
+                "login",
             ]
             sp.run(
                 cmd,
@@ -143,7 +150,10 @@ def _write_contents(path, contents):
                 timeout=30,
             )
     else:
-        from tensorflow.io import gfile
+        try:
+            from tensorflow.io import gfile
+        except ImportError:
+            pytest.skip("tensorflow not installed")
 
         with gfile.GFile(path, "wb") as f:
             f.write(contents)
@@ -168,6 +178,8 @@ def _read_contents(path):
                 blob,
                 "--file",
                 filepath,
+                "--auth-mode",
+                "login",
             ]
             sp.run(
                 cmd,
@@ -1287,8 +1299,11 @@ def test_more_read_write(binary, streaming, ctx):
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 def test_video(streaming, ctx):
-    import av
-    import imageio
+    try:
+        import av
+        import imageio
+    except ImportError:
+        pytest.skip("av and imageio are required for this test")
 
     rng = np.random.RandomState(0)
     shape = (256, 64, 64, 3)

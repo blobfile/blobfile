@@ -1,7 +1,7 @@
 import os
-from setuptools import setup, find_packages
 from typing import Any, Dict
 
+from setuptools import find_packages, setup
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 

@@ -1,7 +1,7 @@
-import contextlib
-import time
 import argparse
+import contextlib
 import multiprocessing as mp
+import time
 
 import blobfile as bf
 

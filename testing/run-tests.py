@@ -1,6 +1,6 @@
+import os
 import subprocess as sp
 import sys
-import os
 
 # use to get new refresh token from within docker container
 # sp.run(["az", "login"], check=True)

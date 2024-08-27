@@ -26,6 +26,7 @@ from typing import (
 
 import filelock
 import urllib3
+
 from blobfile import _xml as xml
 
 CHUNK_SIZE = 8 * 2**20

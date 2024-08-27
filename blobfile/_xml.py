@@ -2,9 +2,9 @@
 Slightly faster replacement for xmltodict
 """
 
-from typing import Optional, Any, Set, Union, Dict
-from lxml import etree
+from typing import Any, Dict, Optional, Set, Union
 
+from lxml import etree
 
 Element = etree._Element  # type: ignore
 

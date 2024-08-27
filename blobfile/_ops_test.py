@@ -5,28 +5,30 @@ import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-import random
-import string
-import tempfile
-import os
 import contextlib
-import json
-import urllib.request
 import hashlib
-import time
-import subprocess as sp
+import json
 import multiprocessing as mp
-import platform
+import os
 import pickle
-import zipfile
+import platform
+import random
 import re
+import string
+import subprocess as sp
+import tempfile
+import time
 import unittest.mock
+import urllib.request
+import zipfile
 
-import pytest
 import numpy as np
+import pytest
 
 import blobfile as bf
-from blobfile import _ops as ops, _azure as azure, _common as common
+from blobfile import _azure as azure
+from blobfile import _common as common
+from blobfile import _ops as ops
 
 GCS_TEST_BUCKET = os.getenv("GCS_TEST_BUCKET", "csh-test-3")
 AS_TEST_ACCOUNT = os.getenv("AS_TEST_ACCOUNT", "cshteststorage2")

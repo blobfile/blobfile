@@ -1,11 +1,5 @@
-# https://github.com/tensorflow/tensorflow/issues/27023
-import datetime
-import warnings
-
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-warnings.filterwarnings("ignore", category=FutureWarning)
-
 import contextlib
+import datetime
 import hashlib
 import json
 import multiprocessing as mp
@@ -20,6 +14,7 @@ import tempfile
 import time
 import unittest.mock
 import urllib.request
+import warnings
 import zipfile
 
 import numpy as np

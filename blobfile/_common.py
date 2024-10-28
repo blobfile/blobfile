@@ -599,10 +599,7 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
                 # an invalid hostname from a network error
                 url = urllib.parse.urlparse(req.url)
                 assert url.hostname is not None
-                if (
-                    url.hostname.endswith(".blob.core.windows.net")
-                    and _check_hostname(url.hostname) == HOSTNAME_DOES_NOT_EXIST
-                ):
+                if _check_hostname(url.hostname) == HOSTNAME_DOES_NOT_EXIST:
                     # in order to handle the azure failures in some sort-of-reasonable way
                     # create a fake response that has a special status code we can
                     # handle just like a 404

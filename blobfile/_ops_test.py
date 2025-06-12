@@ -1670,3 +1670,21 @@ def test_read_with_size(ctx):
         with bf.BlobFile(path, "rb", file_size=1) as r:
             assert r.read() == contents[:1]
             assert r.tell() == 1
+
+
+def test_use_blind_writes_skips_uncommited_blocks_check():
+    ctx = bf.create_context(use_blind_writes=True)
+    path = f"https://{AS_TEST_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}/file"
+    with unittest.mock.patch("blobfile._azure.execute_api_request") as mock_exec:
+        azure.StreamingWriteFile(ctx._conf, path, None)
+        for call in mock_exec.call_args_list:
+            assert call.args[1].method in ("PUT", "POST")
+
+
+def test_use_blind_writes_skips_can_access_container():
+    ctx = bf.create_context(use_blind_writes=True)
+    with unittest.mock.patch("blobfile._azure.common.execute_request") as mock_exec:
+        assert azure._can_access_container(
+            ctx._conf, "acc", "container", (azure.ANONYMOUS, ""), []
+        )
+        mock_exec.assert_not_called()

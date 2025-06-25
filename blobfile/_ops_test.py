@@ -1684,7 +1684,5 @@ def test_use_blind_writes_skips_uncommited_blocks_check():
 def test_use_blind_writes_skips_can_access_container():
     ctx = bf.create_context(use_blind_writes=True)
     with unittest.mock.patch("blobfile._azure.common.execute_request") as mock_exec:
-        assert azure._can_access_container(
-            ctx._conf, "acc", "container", (azure.ANONYMOUS, ""), []
-        )
+        assert azure._can_access_container(ctx._conf, "acc", "container", (azure.ANONYMOUS, ""), [])
         mock_exec.assert_not_called()

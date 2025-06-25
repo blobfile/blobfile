@@ -494,6 +494,9 @@ def _can_access_container(
     auth: Tuple[str, str],
     out_failures: List[RequestFailure],
 ) -> bool:
+    # Skip this check and hope the credentials work if we're blind writing.
+    if conf.use_blind_writes:
+        return True
     # https://myaccount.blob.core.windows.net/mycontainer?restype=container&comp=list
     success_codes = [200, 403, 404, INVALID_HOSTNAME_STATUS]
     if auth[0] == ANONYMOUS:
@@ -1062,6 +1065,15 @@ class StreamingWriteFile(BaseStreamingWriteFile):
         self._path = path
         account, container, blob = split_path(path)
         self._url = build_url(account, "/{container}/{blob}", container=container, blob=blob)
+        self._upload_id = rng.randint(0, 2**47 - 1)
+        self._block_index = 0
+        self._version: Optional[str] = version  # for azure, this is an etag
+        self._md5 = hashlib.md5()
+        super().__init__(conf=conf, chunk_size=conf.azure_write_chunk_size)
+        if not conf.use_blind_writes:
+            self._prepare_write()
+
+    def _prepare_write(self) -> None:
         # block blobs let you upload up to 100,000 "uncommitted" blocks with user-chosen block ids
         # using the "Put Block" call
         # you may then call "Put Block List" with up to 50,000 block ids of the blocks you
@@ -1135,18 +1147,13 @@ class StreamingWriteFile(BaseStreamingWriteFile):
         #   then we could upload to a temp path, then copy to the final path (assuming copy is atomic)
         #   without automatic expiry, we'd leak temp files
         # we can use the lease system, but then we have to deal with leases
-
-        self._upload_id = rng.randint(0, 2**47 - 1)
-        self._block_index = 0
-        self._version: Optional[str] = version  # for azure, this is an etag
-        # check to see if there is an existing blob at this location with the wrong type
         req = Request(
             url=self._url,
             method="HEAD",
             headers={"If-Match": self._version} if self._version else {},
             success_codes=(200, 400, 404, 412, INVALID_HOSTNAME_STATUS),
         )
-        resp = execute_api_request(conf, req)
+        resp = execute_api_request(self._conf, req)
         if resp.status == 200:
             if resp.headers["x-ms-blob-type"] == "BlockBlob":
                 # because we delete all the uncommitted blocks, any concurrent writers will fail
@@ -1154,18 +1161,20 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 # deleting all uncommitted blocks
                 # this means that the last writer to start is likely to win, the others should fail
                 # with ConcurrentWriteFailure
-                resp = _clear_uncommitted_blocks(conf, self._url, resp.headers)
+                resp = _clear_uncommitted_blocks(self._conf, self._url, resp.headers)
                 if resp:
                     self._version = resp.headers["ETag"]  # update the version according to new etag
             else:
                 # if the existing blob type is not compatible with the block blob we are about to write
                 # we have to delete the file before writing our block blob or else we will get a 409
                 # error when putting the first block
-                remove(conf, path)
+                remove(self._conf, self._path)
         elif resp.status in (400, INVALID_HOSTNAME_STATUS) or (
             resp.status == 404 and resp.headers["x-ms-error-code"] == "ContainerNotFound"
         ):
-            raise FileNotFoundError(f"No such file or container/account does not exist: '{path}'")
+            raise FileNotFoundError(
+                f"No such file or container/account does not exist: '{self._path}'"
+            )
         elif resp.status == 412:
             if resp.headers["x-ms-error-code"] != "ConditionNotMet":
                 raise RequestFailure.create_from_request_response(
@@ -1175,8 +1184,6 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 raise VersionMismatch.create_from_request_response(
                     message="etag mismatch", request=req, response=resp
                 )
-        self._md5 = hashlib.md5()
-        super().__init__(conf=conf, chunk_size=conf.azure_write_chunk_size)
 
     def _upload_chunk(self, chunk: memoryview, finalize: bool) -> None:
         start = 0

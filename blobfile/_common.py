@@ -326,6 +326,7 @@ class Config:
         use_azure_storage_account_key_fallback: bool,
         get_http_pool: Optional[Callable[[], urllib3.PoolManager]],
         use_streaming_read: bool,
+        use_blind_writes: bool,
         default_buffer_size: int,
         get_deadline: Optional[Callable[[], Optional[float]]],
         save_access_token_to_disk: bool,
@@ -344,6 +345,7 @@ class Config:
         self.output_az_paths = output_az_paths
         self.use_azure_storage_account_key_fallback = use_azure_storage_account_key_fallback
         self.use_streaming_read = use_streaming_read
+        self.use_blind_writes = use_blind_writes
         self.default_buffer_size = default_buffer_size
         self.get_deadline = get_deadline
         self.save_access_token_to_disk = save_access_token_to_disk

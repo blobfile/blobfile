@@ -323,6 +323,8 @@ def test_join():
         ),
         ("gs://test/a/b", "c:d", "gs://test/a/b/c:d"),
         ("gs://test/a/b", "c:d;", "gs://test/a/b/c:d;"),
+        ("az://a", "c", "https://a.blob.core.windows.net/c/"),
+        ("az://a", "c/b", "https://a.blob.core.windows.net/c/b"),
     ]
     for input_a, input_b, desired_output in testcases:
         actual_output = b.join(input_a, input_b)

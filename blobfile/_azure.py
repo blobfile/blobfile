@@ -1577,15 +1577,36 @@ def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> Optional[
     return
 
 
-def join_paths(conf: Config, a: str, b: str) -> str:
-    if not a.endswith("/"):
-        a += "/"
+def join_paths(conf: Config, url: str, relpath: str) -> str:
+    parsed_url = urllib.parse.urlparse(url)
+    if parsed_url.scheme == "https":
+        account, host = parsed_url.netloc.split(".", maxsplit=1)
+        if host != "blob.core.windows.net":
+            raise Error(f"Invalid URL '{url}'; unexpected host '{host}'")
+    elif parsed_url.scheme == "az":
+        account = parsed_url.netloc
+    else:
+        raise Error(f"Invalid URL '{url}'; expected 'https' or 'az' scheme")
 
-    account, container, obj = split_path(a)
-    obj = path_join(obj, b)
-    if obj.startswith("/"):
-        obj = obj[1:]
-    return combine_path(conf, account, container, obj)
+    if not account:
+        raise Error(f"Invalid URL '{url}'; expected account name")
+
+    # split the unparsed URL
+    parts = url.split("/", maxsplit=4)
+    container = parts[3] if len(parts) >= 4 else ""
+    blob = parts[4] if len(parts) >= 5 else ""
+
+    if not container:
+        if blob:
+            raise Error(f"Invalid URL '{url}'; expected container name")
+        container, _, relpath = relpath.partition("/")
+
+    if not blob.endswith("/"):
+        blob += "/"
+    blob = path_join(blob, relpath)
+    if blob.startswith("/"):
+        blob = blob[1:]
+    return combine_path(conf, account, container, blob)
 
 
 def _put_block_from_url(

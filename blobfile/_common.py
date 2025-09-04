@@ -410,7 +410,7 @@ def _check_hostname(hostname: str) -> int:
         try:
             socket.getaddrinfo(hostname, None, family=socket.AF_INET)
         except socket.gaierror as e:
-            if e.errno != socket.EAI_NONAME:
+            if e.errno != socket.EAI_NONAME and e.errno != socket.EAI_NODATA:
                 # we got some sort of other socket error, so it's unclear if the host exists or not
                 return HOSTNAME_STATUS_UNKNOWN
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.1.0
+
+* Improve `bf.join`
+* Add option to support blind writes
+* Treat `EAI_NODATA` similarly to `EAI_NONAME` in DNS retry logic
+
 ## 3.0.0
 
 * Add convenience `read_text` / `read_bytes` / `write_text` / `write_bytes` functions

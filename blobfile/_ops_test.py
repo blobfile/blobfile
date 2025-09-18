@@ -362,20 +362,46 @@ def test_azure_public_get_url():
 
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
 @pytest.mark.parametrize("streaming", [True, False])
-def test_read_write(ctx, streaming):
-    contents = b"meow!\npurr\n"
+@pytest.mark.parametrize("eagerly_get_size", [True, False])
+@pytest.mark.parametrize("size", [0, 64, 1024, 1025])
+def test_read_write(ctx, streaming, eagerly_get_size, size):
+    contents = os.urandom(size)
+    with unittest.mock.patch("blobfile._common.CHUNK_SIZE", 1024):
+        bf_context = bf.create_context(eagerly_get_size=eagerly_get_size)
+        with ctx() as path:
+            path = bf_context.join(path, "a folder", "a.file")
+            bf_context.makedirs(bf_context.dirname(path))
+            with bf_context.BlobFile(path, "wb", streaming=streaming) as w:
+                w.write(contents)
+                assert w.tell() == len(contents)
+            with bf_context.BlobFile(path, "rb", streaming=streaming) as r:
+                assert r.read() == contents
+                assert r.tell() == len(contents)
+            with bf_context.BlobFile(path, "rb", streaming=streaming) as r:
+                lines = list(r)
+                assert b"".join(lines) == contents
+            with bf_context.BlobFile(path, "rb", streaming=streaming, file_size=size) as r:
+                assert r.read() == contents
+                assert r.tell() == len(contents)
+
+
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("streaming", [True, False])
+@pytest.mark.parametrize("eagerly_get_size", [True, False])
+def test_not_found(ctx, streaming, eagerly_get_size):
+    bf_context = bf.create_context(eagerly_get_size=eagerly_get_size)
     with ctx() as path:
-        path = bf.join(path, "a folder", "a.file")
-        bf.makedirs(bf.dirname(path))
-        with bf.BlobFile(path, "wb", streaming=streaming) as w:
-            w.write(contents)
-            assert w.tell() == len(contents)
-        with bf.BlobFile(path, "rb", streaming=streaming) as r:
-            assert r.read() == contents
-            assert r.tell() == len(contents)
-        with bf.BlobFile(path, "rb", streaming=streaming) as r:
-            lines = list(r)
-            assert b"".join(lines) == contents
+        with pytest.raises(FileNotFoundError):
+            with bf_context.BlobFile(path, "rb", streaming=streaming) as r:
+                r.read()
+
+    if "blob.core.windows.net" in path and not eagerly_get_size and streaming:
+        # In this one case, we're not making any calls while opening the blob
+        # file, so we expect no errors until we start reading.
+        _ = bf_context.BlobFile(path, "rb", streaming=streaming)
+    else:
+        with pytest.raises(FileNotFoundError):
+            _ = bf_context.BlobFile(path, "rb", streaming=streaming)
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])

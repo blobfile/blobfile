@@ -366,10 +366,15 @@ def test_azure_public_get_url():
 @pytest.mark.parametrize("size", [0, 64, 1024, 1025])
 def test_read_write(ctx, streaming, eagerly_get_size, size):
     contents = os.urandom(size)
-    with unittest.mock.patch("blobfile._common.CHUNK_SIZE", 1024):
-        bf_context = bf.create_context(eagerly_get_size=eagerly_get_size)
+    with (
+        unittest.mock.patch("blobfile._common.CHUNK_SIZE", 1024),
+        unittest.mock.patch("blobfile._context.CHUNK_SIZE", 1024),
+    ):
+        bf_context = bf.create_context(eagerly_get_size=eagerly_get_size, default_buffer_size=1024)
         with ctx() as path:
-            path = bf_context.join(path, "a folder", "a.file")
+            path = bf_context.join(
+                path, "a folder", f"a.file-{size}-{eagerly_get_size}-{streaming}"
+            )
             bf_context.makedirs(bf_context.dirname(path))
             with bf_context.BlobFile(path, "wb", streaming=streaming) as w:
                 w.write(contents)

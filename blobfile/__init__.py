@@ -9,6 +9,7 @@ from blobfile._common import RequestFailure as RequestFailure
 from blobfile._common import RestartableStreamingWriteFailure as RestartableStreamingWriteFailure
 from blobfile._common import Stat as Stat
 from blobfile._common import VersionMismatch as VersionMismatch
+from blobfile._common import __version__ as __version__
 from blobfile._context import Context as Context
 from blobfile._context import create_context as create_context
 from blobfile._ops import BlobFile as BlobFile
@@ -37,10 +38,6 @@ from blobfile._ops import stat as stat
 from blobfile._ops import walk as walk
 from blobfile._ops import write_bytes as write_bytes
 from blobfile._ops import write_text as write_text
-
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(_SCRIPT_DIR, "VERSION")) as _version_file:
-    __version__ = _version_file.read().strip()
 
 __all__ = [
     "copy",
@@ -75,4 +72,5 @@ __all__ = [
     "Context",
     "create_context",
     "VersionMismatch",
+    "__version__",
 ]

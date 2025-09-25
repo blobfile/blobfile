@@ -11,6 +11,7 @@ import itertools
 import math
 import multiprocessing as mp
 import os
+import platform
 import re
 import shutil
 import stat as stat_module
@@ -39,6 +40,7 @@ from typing import (
 import filelock
 import urllib3
 
+from blobfile import __version__ as __version__
 from blobfile import _azure as azure
 from blobfile import _common as common
 from blobfile import _gcp as gcp
@@ -69,6 +71,9 @@ DEFAULT_CONNECT_TIMEOUT = 10
 DEFAULT_READ_TIMEOUT = 30
 DEFAULT_BUFFER_SIZE = 8 * 2**20
 DEFAULT_USE_BLIND_WRITES = os.getenv("BLOBFILE_USE_BLIND_WRITES", "0") == "1"
+DEFAULT_USER_AGENT = (
+    f"blobfile/{__version__} (Python/{platform.python_version()} urllib3/{urllib3.__version__})"
+)
 
 
 def _execute_fn_and_ignore_result(fn: Callable[..., object], *args: Any):
@@ -1487,6 +1492,7 @@ def create_context(
     output_az_paths: bool = True,
     use_azure_storage_account_key_fallback: bool = False,
     get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
+    user_agent: Optional[str] = DEFAULT_USER_AGENT,
     use_streaming_read: bool = False,
     use_blind_writes: bool = DEFAULT_USE_BLIND_WRITES,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
@@ -1511,6 +1517,7 @@ def create_context(
         output_az_paths=output_az_paths,
         use_azure_storage_account_key_fallback=use_azure_storage_account_key_fallback,
         get_http_pool=get_http_pool,
+        user_agent=user_agent,
         use_streaming_read=use_streaming_read,
         default_buffer_size=default_buffer_size,
         use_blind_writes=use_blind_writes,

@@ -51,6 +51,9 @@ GCP_BASE_URL = "https://storage.googleapis.com"
 
 DEFAULT_RETRY_CODES = (408, 429, 500, 502, 503, 504)
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(_SCRIPT_DIR, "VERSION")) as _version_file:
+    __version__ = _version_file.read().strip()
 
 # https://github.com/christopher-hesse/blobfile/issues/153
 # https://github.com/christopher-hesse/blobfile/issues/156
@@ -325,6 +328,7 @@ class Config:
         output_az_paths: bool,
         use_azure_storage_account_key_fallback: bool,
         get_http_pool: Optional[Callable[[], urllib3.PoolManager]],
+        user_agent: Optional[str],
         use_streaming_read: bool,
         use_blind_writes: bool,
         default_buffer_size: int,
@@ -344,6 +348,7 @@ class Config:
         self.read_timeout = read_timeout
         self.output_az_paths = output_az_paths
         self.use_azure_storage_account_key_fallback = use_azure_storage_account_key_fallback
+        self.user_agent = user_agent
         self.use_streaming_read = use_streaming_read
         self.use_blind_writes = use_blind_writes
         self.default_buffer_size = default_buffer_size
@@ -516,10 +521,17 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
 
         err = None
         try:
+            headers = dict(req.headers) if req.headers is not None else {}
+            if (
+                not any(key.lower() == "user-agent" for key in headers)
+                and conf.user_agent is not None
+            ):
+                headers["User-Agent"] = conf.user_agent
+
             resp = conf.get_http_pool().request(
                 method=req.method,
                 url=url,
-                headers=req.headers,
+                headers=headers,
                 # WindowedFile isn't actually an IO[Any] or Iterable[bytes]
                 body=body,  # type: ignore
                 timeout=urllib3.Timeout(

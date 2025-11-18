@@ -33,6 +33,7 @@ CHUNK_SIZE = 8 * 2**20
 
 DEFAULT_CONNECTION_POOL_MAX_SIZE = 32
 DEFAULT_MAX_CONNECTION_POOL_COUNT = 10
+DEFAULT_ALLOW_REDIRECTS = os.getenv("BLOBFILE_ALLOW_REDIRECTS", "0") == "1"
 
 PARALLEL_COPY_MINIMUM_PART_SIZE = 32 * 2**20
 
@@ -526,8 +527,10 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
                     connect=conf.connect_timeout, read=conf.read_timeout, total=total_timeout
                 ),
                 preload_content=preload_content,
-                retries=False,
-                redirect=False,
+                # By default we manually retry only on specific status codes but unfortunately
+                # urllib3 counts redirects as retries
+                retries=DEFAULT_ALLOW_REDIRECTS,
+                redirect=DEFAULT_ALLOW_REDIRECTS,
             )
             if deadline is not None:
                 if resp.headers.get("Transfer-Encoding") == "chunked":

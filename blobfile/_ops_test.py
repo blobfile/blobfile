@@ -1,6 +1,7 @@
 import contextlib
 import datetime
 import hashlib
+import io
 import json
 import multiprocessing as mp
 import os
@@ -19,10 +20,12 @@ import zipfile
 
 import numpy as np
 import pytest
+import urllib3
 
 import blobfile as bf
 from blobfile import _azure as azure
 from blobfile import _common as common
+from blobfile import _context as context
 from blobfile import _ops as ops
 
 GCS_TEST_BUCKET = os.getenv("GCS_TEST_BUCKET", "csh-test-3")
@@ -1659,6 +1662,73 @@ def test_pickle_config():
     c.get_http_pool()
     c2 = pickle.loads(pickle.dumps(c))
     c2.get_http_pool()
+
+
+class _DummyPool:
+    def __init__(self):
+        self.headers = None
+
+    def request(self, *args, **kwargs):
+        self.headers = kwargs.get("headers")
+        return urllib3.response.HTTPResponse(status=200, body=io.BytesIO(b""), headers={})
+
+
+def test_default_user_agent_header():
+    pool = _DummyPool()
+    ctx = bf.create_context(get_http_pool=lambda: pool)
+
+    def build_req():
+        return common.Request(method="GET", url="https://example.com")
+
+    common.execute_request(ctx._conf, build_req)
+    assert pool.headers is not None
+    assert pool.headers["User-Agent"] == context.DEFAULT_USER_AGENT
+
+
+def test_configured_user_agent_overrides_default():
+    pool = _DummyPool()
+    custom_agent = "custom-agent/1.0"
+    ctx = bf.create_context(get_http_pool=lambda: pool, user_agent=custom_agent)
+
+    def build_req():
+        return common.Request(method="GET", url="https://example.com")
+
+    common.execute_request(ctx._conf, build_req)
+    assert pool.headers is not None
+    assert pool.headers["User-Agent"] == custom_agent
+
+    ctx = bf.create_context(get_http_pool=lambda: pool)
+    common.execute_request(ctx._conf, build_req)
+    assert pool.headers is not None
+    assert pool.headers["User-Agent"] == context.DEFAULT_USER_AGENT
+
+
+def test_configured_user_agent_none():
+    pool = _DummyPool()
+    ctx = bf.create_context(get_http_pool=lambda: pool, user_agent=None)
+
+    def build_req():
+        return common.Request(method="GET", url="https://example.com")
+
+    common.execute_request(ctx._conf, build_req)
+    assert pool.headers is not None
+    # It's probably set in urllib3, but we don't set it explicitly in the request.
+    assert "User-Agent" not in pool.headers
+
+
+def test_request_user_agent_preserved():
+    pool = _DummyPool()
+    ctx = bf.create_context(get_http_pool=lambda: pool)
+    request_agent = "request-agent/1.0"
+
+    def build_req():
+        return common.Request(
+            method="GET", url="https://example.com", headers={"User-Agent": request_agent}
+        )
+
+    common.execute_request(ctx._conf, build_req)
+    assert pool.headers is not None
+    assert pool.headers["User-Agent"] == request_agent
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])

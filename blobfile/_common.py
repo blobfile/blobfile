@@ -26,6 +26,7 @@ from typing import (
 
 import filelock
 import urllib3
+from urllib3.util.retry import Retry
 
 from blobfile import _xml as xml
 
@@ -33,6 +34,7 @@ CHUNK_SIZE = 8 * 2**20
 
 DEFAULT_CONNECTION_POOL_MAX_SIZE = 32
 DEFAULT_MAX_CONNECTION_POOL_COUNT = 10
+DEFAULT_REDIRECT_RETRY_COUNT = int(os.getenv("BLOBFILE_REDIRECT_RETRY_COUNT", "0"))
 
 PARALLEL_COPY_MINIMUM_PART_SIZE = 32 * 2**20
 
@@ -526,8 +528,12 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
                     connect=conf.connect_timeout, read=conf.read_timeout, total=total_timeout
                 ),
                 preload_content=preload_content,
-                retries=False,
-                redirect=False,
+                retries=Retry(
+                    total=0, connect=0, read=0, status=0,
+                    redirect=DEFAULT_REDIRECT_RETRY_COUNT,
+                    raise_on_status=False, raise_on_redirect=False, backoff_factor=0.0,
+                ),
+                redirect=DEFAULT_REDIRECT_RETRY_COUNT > 0,
             )
             if deadline is not None:
                 if resp.headers.get("Transfer-Encoding") == "chunked":

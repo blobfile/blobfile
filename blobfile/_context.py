@@ -18,7 +18,7 @@ import tempfile
 import time
 import urllib.parse
 from functools import partial
-from types import ModuleType
+from types import ModuleType, TracebackType
 from typing import (
     Any,
     BinaryIO,
@@ -28,6 +28,7 @@ from typing import (
     Literal,
     NamedTuple,
     Optional,
+    Type,
     Sequence,
     TextIO,
     Tuple,
@@ -239,10 +240,16 @@ class Context:
                     name=self.basename(filepath),
                     is_dir=is_dir,
                     is_file=not is_dir,
-                    stat=None
-                    if is_dir
-                    else Stat(
-                        size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None, version=None
+                    stat=(
+                        None
+                        if is_dir
+                        else Stat(
+                            size=s.st_size,
+                            mtime=s.st_mtime,
+                            ctime=s.st_ctime,
+                            md5=None,
+                            version=None,
+                        )
                     ),
                 )
         elif _is_gcp_path(pattern) or _is_azure_path(pattern):
@@ -779,10 +786,20 @@ class Context:
     def last_version_seen(self, file: TextIO | BinaryIO) -> Optional[str]:
         actual: object
         actual = file
-        if isinstance(actual, io.TextIOWrapper):
-            actual = actual.buffer
-        if isinstance(actual, (io.BufferedReader, io.BufferedWriter)):
-            actual = actual.raw
+        seen = set()
+        while True:
+            if isinstance(actual, io.TextIOWrapper):
+                actual = actual.buffer
+                continue
+            if isinstance(actual, (io.BufferedReader, io.BufferedWriter)):
+                actual = actual.raw
+                continue
+            inner = getattr(actual, "_file", None)
+            if inner is not None and inner is not actual and id(inner) not in seen:
+                seen.add(id(actual))
+                actual = inner
+                continue
+            break
         if not isinstance(actual, (azure.StreamingReadFile, azure.StreamingWriteFile)):
             raise ValueError("File was not an Azure BlobFile opened in streaming mode")
         return actual._version  # pyright: ignore[reportPrivateUsage]
@@ -813,8 +830,8 @@ class Context:
         cache_dir: Optional[str] = ...,
         file_size: Optional[int] = None,
         version: Optional[str] = None,
-    ) -> BinaryIO:
-        ...
+        abort_on_exception: bool = False,
+    ) -> BinaryIO: ...
 
     @overload
     def BlobFile(
@@ -826,8 +843,8 @@ class Context:
         cache_dir: Optional[str] = ...,
         file_size: Optional[int] = None,
         version: Optional[str] = None,
-    ) -> TextIO:
-        ...
+        abort_on_exception: bool = False,
+    ) -> TextIO: ...
 
     def BlobFile(
         self,
@@ -838,6 +855,7 @@ class Context:
         cache_dir: Optional[str] = None,
         file_size: Optional[int] = None,
         version: Optional[str] = None,
+        abort_on_exception: bool = False,
     ):
         """
         Open a local or remote file for reading or writing
@@ -858,6 +876,7 @@ class Context:
             cache_dir: a directory in which to cache files for reading, only valid if `streaming=False` and `mode` is in `"r", "rb"`.   You are reponsible for cleaning up the cache directory.
             file_size: size of the file being opened, can be specified directly to avoid checking the file size when opening the file.  While this will avoid a network request, it also means that you may get an error when first reading a file that does not exist rather than when opening it.  Only valid for modes "r" and "rb".  This valid will be ignored for local files.
             version: a version number of the file being opened, used to prevent overwriting a file that has changed since it was opened.  Only valid for modes "w", "wb", "a", "ab"
+            abort_on_exception: if `True`, and an exception escapes from the context manager body, any partial writes will be discarded.
 
         Returns:
             A file-like object
@@ -876,6 +895,18 @@ class Context:
             assert not _is_local_path(path), "Cannot specify version when writing to local file"
             # we check for gcp later to raise a NotImplementedError instead
 
+        writing_mode = any(m in mode for m in ("w", "a"))
+        need_abort_wrapper = abort_on_exception and writing_mode
+
+        if abort_on_exception and _is_file_uri(path):
+            raise Error("abort_on_exception is not supported for file:// paths")
+
+        if abort_on_exception and not writing_mode:
+            raise Error("abort_on_exception is only supported for write or append modes")
+
+        if abort_on_exception and "a" in mode and not streaming and _is_local_path(path):
+            raise Error("abort_on_exception is not supported for local append mode")
+
         if _is_local_path(path) and "w" in mode:
             # local filesystems require that intermediate directories exist, but this is not required by the
             # remote filesystems
@@ -885,6 +916,9 @@ class Context:
 
         if buffer_size is None:
             buffer_size = self._conf.default_buffer_size
+
+        result_file: Union[BinaryIO, TextIO]
+        abort_fn: Optional[Callable[[], None]] = None
 
         if streaming:
             if mode not in ("w", "wb", "r", "rb"):
@@ -918,11 +952,22 @@ class Context:
             else:
                 raise Error(f"Unrecognized path: '{path}'")
 
-            # this should be a protocol so we don't have to cast
-            # but the standard library does not seem to have a file-like protocol
+            binary_abort_fn: Optional[Callable[[], None]] = None
+            if need_abort_wrapper and mode in ("w", "wb"):
+                if _is_local_path(path):
+                    binary_abort_fn = _make_local_streaming_abort_fn(
+                        cast(io.BufferedWriter, f), path
+                    )
+                else:
+                    abort_method = getattr(f, "abort", None)
+                    if abort_method is None:
+                        raise Error("abort_on_exception is not supported for this streaming file")
+                    binary_abort_fn = cast(Callable[[], None], abort_method)
+
             binary_f = cast(BinaryIO, f)
             if "b" in mode:
-                return binary_f
+                result_file = binary_f
+                abort_fn = binary_abort_fn
             else:
                 text_f = io.TextIOWrapper(binary_f, encoding="utf8")
                 # TextIOWrapper bypasses buffering on purpose: https://bugs.python.org/issue13393
@@ -936,7 +981,12 @@ class Context:
                 # The workaround appears to be to set the _CHUNK_SIZE property or monkey patch binary_f.read1 to call binary_f.read
                 if hasattr(text_f, "_CHUNK_SIZE"):
                     setattr(text_f, "_CHUNK_SIZE", buffer_size)
-                return cast(TextIO, text_f)
+                result_file = cast(TextIO, text_f)
+                abort_fn = (
+                    _make_text_abort_fn(binary_abort_fn, text_f)
+                    if binary_abort_fn is not None
+                    else None
+                )
         else:
             remote_path = None
             tmp_dir = None
@@ -1047,14 +1097,33 @@ class Context:
             )
             if "r" in mode:
                 f = io.BufferedReader(f, buffer_size=buffer_size)
+                binary_f = cast(BinaryIO, f)
+                if "b" in mode:
+                    result_file = binary_f
+                else:
+                    text_f = io.TextIOWrapper(binary_f, encoding="utf8")
+                    result_file = cast(TextIO, text_f)
             else:
-                f = io.BufferedWriter(f, buffer_size=buffer_size)
-            binary_f = cast(BinaryIO, f)
-            if "b" in mode:
-                return binary_f
-            else:
-                text_f = io.TextIOWrapper(binary_f, encoding="utf8")
-                return cast(TextIO, text_f)
+                writer = io.BufferedWriter(f, buffer_size=buffer_size)
+                binary_f = cast(BinaryIO, writer)
+                binary_abort_fn = (
+                    _make_buffered_writer_abort_fn(writer)
+                    if need_abort_wrapper and mode in ("w", "wb", "a", "ab")
+                    else None
+                )
+                if "b" in mode:
+                    result_file = binary_f
+                    abort_fn = binary_abort_fn
+                else:
+                    text_f = io.TextIOWrapper(binary_f, encoding="utf8")
+                    result_file = cast(TextIO, text_f)
+                    abort_fn = (
+                        _make_text_abort_fn(binary_abort_fn, text_f)
+                        if binary_abort_fn is not None
+                        else None
+                    )
+
+        return _maybe_wrap_abortable_file(result_file, need_abort_wrapper, abort_fn)
 
 
 def default_log_fn(msg: str) -> None:
@@ -1071,6 +1140,10 @@ def _is_azure_path(path: str) -> bool:
     return (
         url.scheme == "https" and url.netloc.endswith(".blob.core.windows.net")
     ) or url.scheme == "az"
+
+
+def _is_file_uri(path: str) -> bool:
+    return urllib.parse.urlparse(path).scheme == "file"
 
 
 def _get_module(path: str) -> Optional[ModuleType]:
@@ -1451,6 +1524,12 @@ class _ProxyFile(io.FileIO):
         self._remote_path = remote_path
         self._closed = False
         self._version = version
+        self._aborted = False
+
+    def abort(self) -> None:
+        if self._closed:
+            return
+        self._aborted = True
 
     def close(self) -> None:
         if not hasattr(self, "_closed") or self._closed:
@@ -1458,7 +1537,11 @@ class _ProxyFile(io.FileIO):
 
         super().close()
         try:
-            if self._remote_path is not None and self._mode in ("w", "wb", "a", "ab"):
+            if (
+                not self._aborted
+                and self._remote_path is not None
+                and self._mode in ("w", "wb", "a", "ab")
+            ):
                 self._ctx.copy(
                     self._local_path, self._remote_path, overwrite=True, dst_version=self._version
                 )
@@ -1467,7 +1550,130 @@ class _ProxyFile(io.FileIO):
             if self._tmp_dir is not None:
                 os.remove(self._local_path)
                 os.rmdir(self._tmp_dir)
+            elif self._aborted and self._remote_path is None and self._mode in ("w", "wb"):
+                # aborting a local write removes the partially written file
+                try:
+                    os.remove(self._local_path)
+                except FileNotFoundError:
+                    pass
         self._closed = True
+
+
+class _AbortOnExceptionFile:
+    def __init__(
+        self,
+        file_obj: Union[BinaryIO, TextIO],
+        close_fn: Callable[[], None],
+        abort_fn: Callable[[], None],
+    ) -> None:
+        self._file = file_obj
+        self._close_fn = close_fn
+        self._abort_fn = abort_fn
+        self._state: Literal["open", "closed", "aborted"] = "open"
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._file, name)
+
+    def __iter__(self):
+        return iter(self._file)
+
+    def __next__(self):
+        return next(self._file)
+
+    def __enter__(self) -> Union[BinaryIO, TextIO]:
+        if hasattr(self._file, "__enter__"):
+            return self._file.__enter__()
+        return self._file
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> Literal[False]:
+        if exc_type is None:
+            self.close()
+        else:
+            self.abort()
+        return False
+
+    def close(self) -> None:
+        if self._state != "open":
+            return
+        self._state = "closed"
+        self._close_fn()
+
+    def abort(self) -> None:
+        if self._state != "open":
+            return
+        self._state = "aborted"
+        try:
+            self._abort_fn()
+        except Exception:
+            pass
+
+    @property
+    def closed(self) -> bool:
+        return getattr(self._file, "closed", True)
+
+
+io.IOBase.register(_AbortOnExceptionFile)
+
+
+def _safe_close_for_abort(file_obj: Union[BinaryIO, TextIO]) -> None:
+    try:
+        file_obj.close()
+    except Exception:
+        pass
+
+
+def _make_text_abort_fn(
+    binary_abort_fn: Optional[Callable[[], None]], text_obj: TextIO
+) -> Optional[Callable[[], None]]:
+    if binary_abort_fn is None:
+        return None
+
+    def _abort() -> None:
+        binary_abort_fn()
+        _safe_close_for_abort(text_obj)
+
+    return _abort
+
+
+def _make_local_streaming_abort_fn(writer: io.BufferedWriter, path: str) -> Callable[[], None]:
+    def _abort() -> None:
+        _safe_close_for_abort(writer)
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+    return _abort
+
+
+def _make_buffered_writer_abort_fn(writer: io.BufferedWriter) -> Callable[[], None]:
+    raw = getattr(writer, "raw", None)
+    abort_method = getattr(raw, "abort", None)
+    if abort_method is None:
+        raise Error("abort_on_exception is not supported for this file type")
+
+    def _abort() -> None:
+        abort_method()
+        _safe_close_for_abort(writer)
+
+    return _abort
+
+
+def _maybe_wrap_abortable_file(
+    file_obj: Union[BinaryIO, TextIO], needs_wrapper: bool, abort_fn: Optional[Callable[[], None]]
+) -> Union[BinaryIO, TextIO]:
+    if not needs_wrapper:
+        return file_obj
+    if abort_fn is None:
+        raise Error("abort_on_exception is not supported for this configuration")
+    close_fn = file_obj.close
+    wrapped = cast(Union[BinaryIO, TextIO], _AbortOnExceptionFile(file_obj, close_fn, abort_fn))
+    return wrapped
 
 
 def create_context(

@@ -737,6 +737,7 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         self._buf = bytearray()
         self._chunk_size = chunk_size
         self._conf = conf
+        self._aborted = False
 
     def _upload_chunk(self, chunk: memoryview, finalize: bool) -> None:
         raise NotImplementedError
@@ -756,8 +757,19 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
             del chunk, buf  # pyright: ignore[reportPossiblyUnboundVariable]
         return size
 
+    def abort(self) -> None:
+        if self.closed:
+            return
+        self._aborted = True
+        self.close()
+
     def close(self) -> None:
         if self.closed:
+            return
+
+        if self._aborted:
+            self._buf = bytearray()
+            super().close()
             return
 
         # we will have a partial remaining buffer at this point, upload it
@@ -1042,8 +1054,7 @@ def get_log_threshold_for_error(conf: Config, err: str) -> int:
 class BlobPathLike(Protocol):
     """Similar to the __fspath__ protocol, but for remote blob paths."""
 
-    def __blobpath__(self) -> str:
-        ...
+    def __blobpath__(self) -> str: ...
 
 
 RemoteOrLocalPath = Union[str, BlobPathLike, "os.PathLike[str]"]

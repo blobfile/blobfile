@@ -1144,7 +1144,7 @@ def test_cache_dir(ctx):
 def test_change_file_size(ctx, use_random):
     chunk_size = 8 * 2**20
     long_contents = b"\x00" * chunk_size * 3
-    short_contents = b"\xFF" * chunk_size * 2
+    short_contents = b"\xff" * chunk_size * 2
     if use_random:
         long_contents = os.urandom(len(long_contents))
         short_contents = os.urandom(len(short_contents))
@@ -1185,7 +1185,7 @@ def test_change_file_size(ctx, use_random):
 def test_overwrite_while_reading(ctx):
     chunk_size = 8 * 2**20
     contents = b"\x00" * chunk_size * 2
-    alternative_contents = b"\xFF" * chunk_size * 4
+    alternative_contents = b"\xff" * chunk_size * 4
     with ctx() as path:
         with bf.BlobFile(path, "wb") as f:
             f.write(contents)
@@ -1513,6 +1513,23 @@ def test_azure_etags_last_version(ctx):
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_as_path])
+def test_azure_last_version_abort_wrapper(ctx):
+    with ctx() as path:
+        f = bf.BlobFile(path, "wb", streaming=True, abort_on_exception=True)
+        f.write(b"hello abort wrapper")
+        f.close()
+        version = bf.last_version_seen(f)
+        assert version == bf.stat(path).version
+
+        text_path = path + ".text"
+        f2 = bf.BlobFile(text_path, "w", streaming=True, abort_on_exception=True)
+        f2.write("hello abort wrapper text")
+        f2.close()
+        version2 = bf.last_version_seen(f2)
+        assert version2 == bf.stat(text_path).version
+
+
+@pytest.mark.parametrize("ctx", [_get_temp_as_path])
 def test_azure_buffer_error_finally(ctx):
     # Avoid BufferError: Existing exports of data: object cannot be re-sized
     # See https://github.com/blobfile/blobfile/pull/230
@@ -1672,6 +1689,63 @@ def test_read_with_size(ctx):
         with bf.BlobFile(path, "rb", file_size=1) as r:
             assert r.read() == contents[:1]
             assert r.tell() == 1
+
+
+def test_streaming_write_abort_on_exception_azure():
+    with _get_temp_as_path() as path:
+        with pytest.raises(RuntimeError):
+            with bf.BlobFile(path, "wb", streaming=True, abort_on_exception=True) as f:
+                f.write(b"hello")
+                raise RuntimeError("boom")
+        assert not bf.exists(path)
+
+
+def test_buffered_write_abort_on_exception_azure():
+    with _get_temp_as_path() as path:
+        with pytest.raises(RuntimeError):
+            with bf.BlobFile(path, "wb", streaming=False, abort_on_exception=True) as f:
+                f.write(b"hello")
+                raise RuntimeError("boom")
+        assert not bf.exists(path)
+
+
+def test_text_streaming_abort_on_exception_azure():
+    with _get_temp_as_path() as path:
+        with pytest.raises(RuntimeError):
+            with bf.BlobFile(path, "w", streaming=True, abort_on_exception=True) as f:
+                f.write("hello")
+                raise RuntimeError("boom")
+        assert not bf.exists(path)
+
+
+def test_local_write_abort_on_exception():
+    with _get_temp_local_path() as path:
+        with pytest.raises(RuntimeError):
+            with bf.BlobFile(path, "wb", abort_on_exception=True) as f:
+                f.write(b"hello")
+                raise RuntimeError("boom")
+        assert not os.path.exists(path)
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+def test_abort_on_exception_azure(streaming):
+    with _get_temp_as_path() as path:
+        with pytest.raises(RuntimeError):
+            with bf.BlobFile(path, "wb", streaming=streaming, abort_on_exception=True) as f:
+                f.write(b"hello")
+                raise RuntimeError("boom")
+        assert not bf.exists(path)
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+def test_abort_on_exception_file_uri(streaming):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_path = os.path.join(tmpdir, "file.name")
+        file_uri = f"file://{local_path}"
+        with pytest.raises(bf.Error):
+            with bf.BlobFile(file_uri, "wb", streaming=streaming, abort_on_exception=True) as f:
+                f.write(b"hello")
+        assert not os.path.exists(local_path)
 
 
 def test_use_blind_writes_skips_uncommited_blocks_check():

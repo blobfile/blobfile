@@ -1083,7 +1083,16 @@ def _get_module(path: str) -> Optional[ModuleType]:
 
 
 def _is_local_path(path: str) -> bool:
-    return _get_module(path) is None
+    if _get_module(path) is not None:
+        return False
+
+    url = urllib.parse.urlparse(path)
+    if url.scheme != "" and url.netloc != "":
+        raise Error(
+            f"Path looks like an unsupported remote path: '{path}'"
+        )
+
+    return True
 
 
 def _download_chunk(

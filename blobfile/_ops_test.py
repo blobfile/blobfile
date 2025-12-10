@@ -219,6 +219,14 @@ def test_basename():
         assert desired_output == actual_output
 
 
+def test_rejects_provider_like_local_paths():
+    with pytest.raises(bf.Error, match="unsupported remote path"):
+        bf.exists("s3://bucket")
+
+    with pytest.raises(bf.Error, match="unsupported remote path"):
+        bf.BlobFile("s3://bucket/obj", "rb")
+
+
 def test_dirname():
     b = bf.create_context(output_az_paths=False)
     testcases = [

@@ -1073,26 +1073,9 @@ def _is_azure_path(path: str) -> bool:
     ) or url.scheme == "az"
 
 
-def _get_module(path: str) -> Optional[ModuleType]:
-    if _is_gcp_path(path):
-        return gcp
-    elif _is_azure_path(path):
-        return azure
-    else:
-        return None
-
-
 def _is_local_path(path: str) -> bool:
-    if _get_module(path) is not None:
-        return False
-
     url = urllib.parse.urlparse(path)
-    if url.scheme != "" and url.netloc != "":
-        raise Error(
-            f"Path looks like an unsupported remote path: '{path}'"
-        )
-
-    return True
+    return not url.scheme and not url.netloc
 
 
 def _download_chunk(

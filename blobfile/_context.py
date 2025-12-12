@@ -18,7 +18,6 @@ import tempfile
 import time
 import urllib.parse
 from functools import partial
-from types import ModuleType
 from typing import (
     Any,
     BinaryIO,
@@ -1073,17 +1072,9 @@ def _is_azure_path(path: str) -> bool:
     ) or url.scheme == "az"
 
 
-def _get_module(path: str) -> Optional[ModuleType]:
-    if _is_gcp_path(path):
-        return gcp
-    elif _is_azure_path(path):
-        return azure
-    else:
-        return None
-
-
 def _is_local_path(path: str) -> bool:
-    return _get_module(path) is None
+    url = urllib.parse.urlparse(path)
+    return not url.scheme and not url.netloc
 
 
 def _download_chunk(

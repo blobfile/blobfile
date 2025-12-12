@@ -18,7 +18,6 @@ import tempfile
 import time
 import urllib.parse
 from functools import partial
-from types import ModuleType
 from typing import (
     Any,
     BinaryIO,

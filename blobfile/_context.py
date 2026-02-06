@@ -152,11 +152,7 @@ class Context:
         for attempt, backoff in enumerate(common.exponential_sleep_generator()):
             try:
                 with self.BlobFile(src, "rb", streaming=True) as src_f, self.BlobFile(
-                    dst,
-                    "wb",
-                    streaming=True,
-                    version=dst_version,
-                    partial_writes_on_exc=False,
+                    dst, "wb", streaming=True, version=dst_version, partial_writes_on_exc=False
                 ) as dst_f:
                     m = hashlib.md5()
                     while True:
@@ -1518,11 +1514,7 @@ class _ProxyFile(io.FileIO):
 
             if self._remote_path is not None and mode_should_write and should_do_write:
                 self._ctx.copy(
-                    self._local_path,
-                    self._remote_path,
-                    overwrite=True,
-                    dst_version=self._version,
-                    partial_writes_on_exc=self._partial_writes_on_exc,
+                    self._local_path, self._remote_path, overwrite=True, dst_version=self._version
                 )
         finally:
             # if the copy fails, still cleanup our local temp file so it is not leaked

@@ -134,7 +134,6 @@ def copy(
         parallel_executor=parallel_executor,
         return_md5=return_md5,
         dst_version=dst_version,
-        partial_writes_on_exc=partial_writes_on_exc,
     )
 
 

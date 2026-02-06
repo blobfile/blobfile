@@ -31,6 +31,7 @@ from blobfile._common import (
     path_join,
     strip_slashes,
 )
+
 MAX_EXPIRATION = 7 * 24 * 60 * 60
 OAUTH_TOKEN = "oauth_token"
 ANONYMOUS = "anonymous"

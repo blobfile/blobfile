@@ -328,18 +328,18 @@ def read_bytes(path: RemoteOrLocalPath) -> bytes:
     return default_context.read_bytes(path=path)
 
 
-def write_text(path: RemoteOrLocalPath, text: str, partial_writes_on_exc: bool = True) -> None:
+def write_text(path: RemoteOrLocalPath, text: str) -> None:
     """
     Write text to a file
     """
-    return default_context.write_text(path=path, text=text, partial_writes_on_exc=partial_writes_on_exc)
+    return default_context.write_text(path=path, text=text)
 
 
-def write_bytes(path: RemoteOrLocalPath, data: bytes, partial_writes_on_exc: bool = True) -> None:
+def write_bytes(path: RemoteOrLocalPath, data: bytes) -> None:
     """
     Write bytes to a file
     """
-    return default_context.write_bytes(path=path, data=data, partial_writes_on_exc=partial_writes_on_exc)
+    return default_context.write_bytes(path=path, data=data)
 
 
 @overload

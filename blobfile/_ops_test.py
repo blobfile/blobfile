@@ -1241,6 +1241,8 @@ def test_partial_writes_on_exc(partial_writes_on_exc, streaming, ctx):
             assert bf.read_bytes(path) == b"meow"
         else:
             assert not bf.exists(path)
+
+
 @pytest.mark.parametrize("binary", [True, False])
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])

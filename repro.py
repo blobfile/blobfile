@@ -22,7 +22,6 @@ def do_write(path: str, streaming: bool, partial_writes_on_exc: bool) -> None:
         print("child: wrote data, sleeping")
         time.sleep(10)
         print("child: done sleeping")
-    bf.write_bytes
 
 
 def run_case(path: str, streaming: bool, partial_writes_on_exc: bool) -> bool:

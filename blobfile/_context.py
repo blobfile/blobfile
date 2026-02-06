@@ -796,12 +796,12 @@ class Context:
         with self.BlobFile(path, "rb") as f:
             return f.read()
 
-    def write_text(self, path: RemoteOrLocalPath, text: str, partial_writes_on_exc: bool = True) -> None:
-        with self.BlobFile(path, "w", partial_writes_on_exc=partial_writes_on_exc) as f:
+    def write_text(self, path: RemoteOrLocalPath, text: str) -> None:
+        with self.BlobFile(path, "w", partial_writes_on_exc=False) as f:
             f.write(text)
 
-    def write_bytes(self, path: RemoteOrLocalPath, data: bytes, partial_writes_on_exc: bool = True) -> None:
-        with self.BlobFile(path, "wb", partial_writes_on_exc=partial_writes_on_exc) as f:
+    def write_bytes(self, path: RemoteOrLocalPath, data: bytes) -> None:
+        with self.BlobFile(path, "wb", partial_writes_on_exc=False) as f:
             f.write(data)
 
     @overload

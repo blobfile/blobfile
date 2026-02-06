@@ -89,7 +89,6 @@ class Context:
         parallel_executor: Optional[concurrent.futures.Executor] = None,
         return_md5: bool = False,
         dst_version: Optional[str] = None,
-        partial_writes_on_exc: bool = True,
     ) -> Optional[str]:
         src = path_to_str(src)
         dst = path_to_str(dst)
@@ -157,7 +156,7 @@ class Context:
                     "wb",
                     streaming=True,
                     version=dst_version,
-                    partial_writes_on_exc=partial_writes_on_exc,
+                    partial_writes_on_exc=False,
                 ) as dst_f:
                     m = hashlib.md5()
                     while True:

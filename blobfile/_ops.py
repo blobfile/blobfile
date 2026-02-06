@@ -107,7 +107,6 @@ def copy(
     parallel_executor: Optional[concurrent.futures.Executor] = None,
     return_md5: bool = False,
     dst_version: Optional[str] = None,
-    partial_writes_on_exc: bool = True,
 ) -> Optional[str]:
     """
     Copy a file from one path to another
@@ -126,8 +125,6 @@ def copy(
     or else None will be returned.
 
     If `dst_version` is set to a version string, the copy will fail if the destination path does not have this version (versions can be retrieved with `stat()`)
-
-    If `partial_writes_on_exc` is set to `False` and an exception occurs before the copy finishes, partially written file will NOT be written to the destination file.
     """
     return default_context.copy(
         src=src,

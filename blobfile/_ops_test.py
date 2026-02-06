@@ -1225,6 +1225,28 @@ def test_create_local_intermediate_dirs():
                     f.write(contents)
 
 
+@pytest.mark.parametrize("partial_writes_on_exc", [True, False])
+@pytest.mark.parametrize("streaming", [True, False])
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+def test_partial_writes_on_exc(partial_writes_on_exc, streaming, ctx):
+    with ctx() as path:
+        try:
+            with bf.BlobFile(path, "wb", streaming=streaming, partial_writes_on_exc=partial_writes_on_exc) as w:
+                w.write(b"meow")
+                raise InterruptedError("interrupted while writing")
+        except InterruptedError:
+            pass
+        
+        if partial_writes_on_exc:
+            assert bf.exists(path)
+            assert bf.read_bytes(path) == b"meow"
+        else:
+            assert not bf.exists(path)
+        
+        bf.write_bytes
+
+
+
 @pytest.mark.parametrize("binary", [True, False])
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
@@ -1686,7 +1708,7 @@ def test_use_blind_writes_skips_uncommited_blocks_check():
     ctx = bf.create_context(use_blind_writes=True)
     path = f"https://{AS_TEST_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}/file"
     with unittest.mock.patch("blobfile._azure.execute_api_request") as mock_exec:
-        azure.StreamingWriteFile(ctx._conf, path, None)
+        azure.StreamingWriteFile(ctx._conf, path, None, partial_writes_on_exc=True)
         for call in mock_exec.call_args_list:
             assert call.args[1].method in ("PUT", "POST")
 

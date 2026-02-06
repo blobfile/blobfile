@@ -107,6 +107,7 @@ def copy(
     parallel_executor: Optional[concurrent.futures.Executor] = None,
     return_md5: bool = False,
     dst_version: Optional[str] = None,
+    partial_writes_on_exc: bool = True,
 ) -> Optional[str]:
     """
     Copy a file from one path to another
@@ -125,6 +126,8 @@ def copy(
     or else None will be returned.
 
     If `dst_version` is set to a version string, the copy will fail if the destination path does not have this version (versions can be retrieved with `stat()`)
+
+    If `partial_writes_on_exc` is set to `False` and an exception occurs before the copy finishes, partially written file will NOT be written to the destination file.
     """
     return default_context.copy(
         src=src,
@@ -134,6 +137,7 @@ def copy(
         parallel_executor=parallel_executor,
         return_md5=return_md5,
         dst_version=dst_version,
+        partial_writes_on_exc=partial_writes_on_exc,
     )
 
 
@@ -324,18 +328,18 @@ def read_bytes(path: RemoteOrLocalPath) -> bytes:
     return default_context.read_bytes(path=path)
 
 
-def write_text(path: RemoteOrLocalPath, text: str) -> None:
+def write_text(path: RemoteOrLocalPath, text: str, partial_writes_on_exc: bool = True) -> None:
     """
     Write text to a file
     """
-    return default_context.write_text(path=path, text=text)
+    return default_context.write_text(path=path, text=text, partial_writes_on_exc=partial_writes_on_exc)
 
 
-def write_bytes(path: RemoteOrLocalPath, data: bytes) -> None:
+def write_bytes(path: RemoteOrLocalPath, data: bytes, partial_writes_on_exc: bool = True) -> None:
     """
     Write bytes to a file
     """
-    return default_context.write_bytes(path=path, data=data)
+    return default_context.write_bytes(path=path, data=data, partial_writes_on_exc=partial_writes_on_exc)
 
 
 @overload
@@ -347,6 +351,7 @@ def BlobFile(
     cache_dir: Optional[str] = ...,
     file_size: Optional[int] = None,
     version: Optional[str] = None,
+    partial_writes_on_exc: bool = True,
 ) -> BinaryIO:
     ...
 
@@ -360,6 +365,7 @@ def BlobFile(
     cache_dir: Optional[str] = ...,
     file_size: Optional[int] = None,
     version: Optional[str] = None,
+    partial_writes_on_exc: bool = True,
 ) -> TextIO:
     ...
 
@@ -372,6 +378,7 @@ def BlobFile(
     cache_dir: Optional[str] = None,
     file_size: Optional[int] = None,
     version: Optional[str] = None,
+    partial_writes_on_exc: bool = True,
 ):
     """
     Open a local or remote file for reading or writing
@@ -402,4 +409,5 @@ def BlobFile(
         cache_dir=cache_dir,
         file_size=file_size,
         version=version,
+        partial_writes_on_exc=partial_writes_on_exc,
     )

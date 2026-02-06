@@ -1060,7 +1060,8 @@ def get_log_threshold_for_error(conf: Config, err: str) -> int:
 class BlobPathLike(Protocol):
     """Similar to the __fspath__ protocol, but for remote blob paths."""
 
-    def __blobpath__(self) -> str: ...
+    def __blobpath__(self) -> str:
+        ...
 
 
 RemoteOrLocalPath = Union[str, BlobPathLike, "os.PathLike[str]"]

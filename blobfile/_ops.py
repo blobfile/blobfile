@@ -352,7 +352,8 @@ def BlobFile(
     file_size: Optional[int] = None,
     version: Optional[str] = None,
     partial_writes_on_exc: bool = True,
-) -> BinaryIO: ...
+) -> BinaryIO:
+    ...
 
 
 @overload
@@ -365,7 +366,8 @@ def BlobFile(
     file_size: Optional[int] = None,
     version: Optional[str] = None,
     partial_writes_on_exc: bool = True,
-) -> TextIO: ...
+) -> TextIO:
+    ...
 
 
 def BlobFile(

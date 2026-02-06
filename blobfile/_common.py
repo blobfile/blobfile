@@ -761,9 +761,11 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         return size
 
     def __exit__(
-        self, exc_type: Optional[type[BaseException]], exc_val: Optional[BaseException], exc_tb: Optional[TracebackType] 
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
     ) -> None:
-        print(f"calling __exit__, exc_value: {type(exc_val)}, partial_writes_on_exc: {self.partial_writes_on_exc}")
         # Store the exception so that in close we can decide whether or not to write the file.
         self.exc_val = exc_val
         super().__exit__(exc_type, exc_val, exc_tb)
@@ -772,9 +774,7 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         if self.closed:
             return
 
-        print(f"calling close from {self.__class__.__name__}, exc_value: {type(self.exc_val)}, partial_writes_on_exc: {self.partial_writes_on_exc}")
-        if not self.exc_val or self.partial_writes_on_exc:
-            print("uploading the buffer and calling finalize")
+        if self.exc_val is None or self.partial_writes_on_exc:
             # we will have a partial remaining buffer at this point, upload it
             size = self._upload_buf(memoryview(self._buf), finalize=True)
             assert size == len(self._buf)

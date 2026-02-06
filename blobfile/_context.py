@@ -90,7 +90,6 @@ class Context:
         dst_version: Optional[str] = None,
         partial_writes_on_exc: bool = True,
     ) -> Optional[str]:
-        print(f"calling copy, partial_writes_on_exc: {partial_writes_on_exc}")
         src = path_to_str(src)
         dst = path_to_str(dst)
         # it would be best to check isdir() for remote paths, but that would
@@ -868,7 +867,6 @@ class Context:
         Returns:
             A file-like object
         """
-        print(f"calling BlobFile {mode}, partial_writes_on_exc: {partial_writes_on_exc}")
         path = path_to_str(path)
         if _guess_isdir(path):
             raise IsADirectoryError(f"Is a directory: '{path}'")
@@ -1493,12 +1491,10 @@ class _ProxyFile(io.FileIO):
         if not hasattr(self, "_closed") or self._closed:
             return
         
-        print(f"proxy file calling close, exc_val: {type(self.exc_val)}, partial_writes_on_exc: {self._partial_writes_on_exc}")
-
         super().close()
         try:
             mode_should_write = self._mode in ("w", "wb", "a", "ab")
-            should_do_write = not self.exc_val or self._partial_writes_on_exc
+            should_do_write = self.exc_val is None or self._partial_writes_on_exc
 
             if self._remote_path is not None and mode_should_write and should_do_write:
                 self._ctx.copy(

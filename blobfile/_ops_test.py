@@ -1623,6 +1623,7 @@ def test_scandir_error():
         if error is not None:
             ctx = pytest.raises(error)
         with ctx:
+            print(path)
             list(bf.scandir(path))
 
 

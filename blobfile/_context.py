@@ -1483,14 +1483,14 @@ class _ProxyFile(io.FileIO):
         self._remote_path = remote_path
         self._closed = False
         self._version = version
-        self._partial_writes_on_exc = partial_writes_on_exc
 
+        self._partial_writes_on_exc = partial_writes_on_exc
         self.exc_val: Optional[BaseException] = None
     
     def close(self) -> None:
         if not hasattr(self, "_closed") or self._closed:
             return
-        
+
         super().close()
         try:
             mode_should_write = self._mode in ("w", "wb", "a", "ab")

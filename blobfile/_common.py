@@ -740,7 +740,7 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         self._conf = conf
 
         self.partial_writes_on_exc = partial_writes_on_exc
-        self.exc_val: Optional[BaseException] = None
+        self._had_exception = False
     
     def _upload_chunk(self, chunk: memoryview, finalize: bool) -> None:
         raise NotImplementedError
@@ -766,15 +766,15 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         exc_val: Optional[BaseException],
         exc_tb: Optional[TracebackType],
     ) -> None:
-        # Store the exception so that in close we can decide whether or not to write the file.
-        self.exc_val = exc_val
+        # Track whether an exception occurred so close() can decide whether to write the file.
+        self._had_exception = exc_val is not None
         super().__exit__(exc_type, exc_val, exc_tb)
 
     def close(self) -> None:
         if self.closed:
             return
 
-        if self.exc_val is None or self.partial_writes_on_exc:
+        if not self._had_exception or self.partial_writes_on_exc:
             # we will have a partial remaining buffer at this point, upload it
             size = self._upload_buf(memoryview(self._buf), finalize=True)
             assert size == len(self._buf)

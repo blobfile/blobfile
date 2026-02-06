@@ -1453,14 +1453,14 @@ class _BufferedWriterForProxyFile(io.BufferedWriter):
     close method would have no idea that it's being invoked from exceptional context, and will copy
     the file.
 
-    To fix this, we wrap the io.BufferedWriter with this class, which forwards the exception to the
-    underlying raw object, i.e. the _ProxyFile. This class is designed to solve *only* this problem,
-    and should never be used for any other purpose.
+    To fix this, we wrap the io.BufferedWriter with this class, which forwards whether an exception
+    occurred to the underlying raw object, i.e. the _ProxyFile. This class is designed to solve
+    *only* this problem, and should never be used for any other purpose.
     """
 
     def __exit__(self, exc_type: Optional[type[BaseException]], exc_val: Optional[BaseException], exc_tb: Optional[TracebackType]) -> None:
         assert isinstance(self.raw, _ProxyFile)
-        self.raw.exc_val = exc_val
+        self.raw.had_exception = exc_val is not None
 
         return super().__exit__(exc_type, exc_val, exc_tb)
 
@@ -1485,7 +1485,7 @@ class _ProxyFile(io.FileIO):
         self._version = version
 
         self._partial_writes_on_exc = partial_writes_on_exc
-        self.exc_val: Optional[BaseException] = None
+        self.had_exception = False
     
     def close(self) -> None:
         if not hasattr(self, "_closed") or self._closed:
@@ -1494,7 +1494,7 @@ class _ProxyFile(io.FileIO):
         super().close()
         try:
             mode_should_write = self._mode in ("w", "wb", "a", "ab")
-            should_do_write = self.exc_val is None or self._partial_writes_on_exc
+            should_do_write = not self.had_exception or self._partial_writes_on_exc
 
             if self._remote_path is not None and mode_should_write and should_do_write:
                 self._ctx.copy(

@@ -16,7 +16,7 @@ def do_write(path: str, streaming: bool, partial_writes_on_exc: bool) -> None:
         f"child: starting write (streaming={streaming}, partial={partial_writes_on_exc})"
     )
     with bf.BlobFile(
-        path, "wb", streaming=streaming
+        path, "wb", streaming=streaming, partial_writes_on_exc=partial_writes_on_exc
     ) as f:
         f.write(b"".join(data))
         print("child: wrote data, sleeping")

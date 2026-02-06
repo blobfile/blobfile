@@ -31,6 +31,7 @@ from typing import (
     Sequence,
     TextIO,
     Tuple,
+    Type,
     Union,
     cast,
     overload,
@@ -1474,7 +1475,7 @@ class _BufferedWriterForProxyFile(io.BufferedWriter):
 
     def __exit__(
         self,
-        exc_type: Optional[type[BaseException]],
+        exc_type: Optional[Type[BaseException]],
         exc_val: Optional[BaseException],
         exc_tb: Optional[TracebackType],
     ) -> None:
@@ -1505,7 +1506,7 @@ class _ProxyFile(io.FileIO):
         self._version = version
 
         self._partial_writes_on_exc = partial_writes_on_exc
-        self.had_exception = False
+        self.had_exception: bool = False
 
     def close(self) -> None:
         if not hasattr(self, "_closed") or self._closed:

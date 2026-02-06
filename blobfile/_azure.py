@@ -1061,7 +1061,9 @@ class StreamingReadFile(BaseStreamingReadFile):
 
 
 class StreamingWriteFile(BaseStreamingWriteFile):
-    def __init__(self, conf: Config, path: str, version: Optional[str], partial_writes_on_exc: bool) -> None:
+    def __init__(
+        self, conf: Config, path: str, version: Optional[str], partial_writes_on_exc: bool
+    ) -> None:
         self._path = path
         account, container, blob = split_path(path)
         self._url = build_url(account, "/{container}/{blob}", container=container, blob=blob)
@@ -1069,7 +1071,11 @@ class StreamingWriteFile(BaseStreamingWriteFile):
         self._block_index = 0
         self._version: Optional[str] = version  # for azure, this is an etag
         self._md5 = hashlib.md5()
-        super().__init__(conf=conf, chunk_size=conf.azure_write_chunk_size, partial_writes_on_exc=partial_writes_on_exc)
+        super().__init__(
+            conf=conf,
+            chunk_size=conf.azure_write_chunk_size,
+            partial_writes_on_exc=partial_writes_on_exc,
+        )
         if not conf.use_blind_writes:
             self._prepare_write()
 

@@ -152,7 +152,11 @@ class Context:
         for attempt, backoff in enumerate(common.exponential_sleep_generator()):
             try:
                 with self.BlobFile(src, "rb", streaming=True) as src_f, self.BlobFile(
-                    dst, "wb", streaming=True, version=dst_version, partial_writes_on_exc=partial_writes_on_exc
+                    dst,
+                    "wb",
+                    streaming=True,
+                    version=dst_version,
+                    partial_writes_on_exc=partial_writes_on_exc,
                 ) as dst_f:
                     m = hashlib.md5()
                     while True:
@@ -240,10 +244,16 @@ class Context:
                     name=self.basename(filepath),
                     is_dir=is_dir,
                     is_file=not is_dir,
-                    stat=None
-                    if is_dir
-                    else Stat(
-                        size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None, version=None
+                    stat=(
+                        None
+                        if is_dir
+                        else Stat(
+                            size=s.st_size,
+                            mtime=s.st_mtime,
+                            ctime=s.st_ctime,
+                            md5=None,
+                            version=None,
+                        )
                     ),
                 )
         elif _is_gcp_path(pattern) or _is_azure_path(pattern):
@@ -815,8 +825,7 @@ class Context:
         file_size: Optional[int] = None,
         version: Optional[str] = None,
         partial_writes_on_exc: bool = True,
-    ) -> BinaryIO:
-        ...
+    ) -> BinaryIO: ...
 
     @overload
     def BlobFile(
@@ -829,8 +838,7 @@ class Context:
         file_size: Optional[int] = None,
         version: Optional[str] = None,
         partial_writes_on_exc: bool = True,
-    ) -> TextIO:
-        ...
+    ) -> TextIO: ...
 
     def BlobFile(
         self,
@@ -911,7 +919,9 @@ class Context:
                 if version:
                     raise NotImplementedError("Cannot specify version for GCP files")
                 if mode in ("w", "wb"):
-                    f = gcp.StreamingWriteFile(self._conf, path, partial_writes_on_exc=partial_writes_on_exc)
+                    f = gcp.StreamingWriteFile(
+                        self._conf, path, partial_writes_on_exc=partial_writes_on_exc
+                    )
                 elif mode in ("r", "rb"):
                     f = gcp.StreamingReadFile(self._conf, path, size=file_size)
                     f = io.BufferedReader(f, buffer_size=buffer_size)
@@ -919,7 +929,9 @@ class Context:
                     raise Error(f"Unsupported mode: '{mode}'")
             elif _is_azure_path(path):
                 if mode in ("w", "wb"):
-                    f = azure.StreamingWriteFile(self._conf, path, version, partial_writes_on_exc=partial_writes_on_exc)
+                    f = azure.StreamingWriteFile(
+                        self._conf, path, version, partial_writes_on_exc=partial_writes_on_exc
+                    )
                 elif mode in ("r", "rb"):
                     f = azure.StreamingReadFile(self._conf, path, size=file_size, version=version)
                     f = io.BufferedReader(f, buffer_size=buffer_size)
@@ -1444,7 +1456,7 @@ class _BufferedWriterForProxyFile(io.BufferedWriter):
     with bf.BlobFile("path", "wb", streaming=False, partial_writes_on_exc=False) as f:
         f.write(b"meow")
         f.write(b"woof")
-    
+
     and an exception occurs after the first write. Since partial_writes_on_exc is False, we do not
     want either of the writes to occur. The object returned by bf.BlobFile used to be an
     io.BufferedWriter wrapping a _ProxyFile. When an exception occurred, the __exit__ method of the
@@ -1458,11 +1470,17 @@ class _BufferedWriterForProxyFile(io.BufferedWriter):
     *only* this problem, and should never be used for any other purpose.
     """
 
-    def __exit__(self, exc_type: Optional[type[BaseException]], exc_val: Optional[BaseException], exc_tb: Optional[TracebackType]) -> None:
+    def __exit__(
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
         assert isinstance(self.raw, _ProxyFile)
         self.raw.had_exception = exc_val is not None
 
         return super().__exit__(exc_type, exc_val, exc_tb)
+
 
 class _ProxyFile(io.FileIO):
     def __init__(
@@ -1486,7 +1504,7 @@ class _ProxyFile(io.FileIO):
 
         self._partial_writes_on_exc = partial_writes_on_exc
         self.had_exception = False
-    
+
     def close(self) -> None:
         if not hasattr(self, "_closed") or self._closed:
             return
@@ -1498,7 +1516,11 @@ class _ProxyFile(io.FileIO):
 
             if self._remote_path is not None and mode_should_write and should_do_write:
                 self._ctx.copy(
-                    self._local_path, self._remote_path, overwrite=True, dst_version=self._version, partial_writes_on_exc=self._partial_writes_on_exc
+                    self._local_path,
+                    self._remote_path,
+                    overwrite=True,
+                    dst_version=self._version,
+                    partial_writes_on_exc=self._partial_writes_on_exc,
                 )
         finally:
             # if the copy fails, still cleanup our local temp file so it is not leaked

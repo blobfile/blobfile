@@ -10,11 +10,10 @@ GREEN = "\033[32m"
 RED = "\033[31m"
 RESET = "\033[0m"
 
+
 def do_write(path: str, streaming: bool, partial_writes_on_exc: bool) -> None:
     data = [b"ab" * 64 * 1024, b"cd" * 64 * 1024, b"ef" * 64 * 1024, b"gh" * 64 * 1024]
-    print(
-        f"child: starting write (streaming={streaming}, partial={partial_writes_on_exc})"
-    )
+    print(f"child: starting write (streaming={streaming}, partial={partial_writes_on_exc})")
     with bf.BlobFile(
         path, "wb", streaming=streaming, partial_writes_on_exc=partial_writes_on_exc
     ) as f:
@@ -54,12 +53,7 @@ if __name__ == "__main__":
     base_path = os.environ.get("BLOBFILE_TEST_BASE_PATH")
     if not base_path:
         raise SystemExit("Set BLOBFILE_TEST_BASE_PATH to your test blob prefix")
-    cases = [
-        (True, True),
-        (True, False),
-        (False, True),
-        (False, False),
-    ]
+    cases = [(True, True), (True, False), (False, True), (False, False)]
     all_ok = True
     for streaming, partial in cases:
         path = f"{base_path}/b_stream_{int(streaming)}_partial_{int(partial)}.txt"

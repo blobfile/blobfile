@@ -1151,7 +1151,7 @@ def test_cache_dir(ctx):
 def test_change_file_size(ctx, use_random):
     chunk_size = 8 * 2**20
     long_contents = b"\x00" * chunk_size * 3
-    short_contents = b"\xFF" * chunk_size * 2
+    short_contents = b"\xff" * chunk_size * 2
     if use_random:
         long_contents = os.urandom(len(long_contents))
         short_contents = os.urandom(len(short_contents))
@@ -1192,7 +1192,7 @@ def test_change_file_size(ctx, use_random):
 def test_overwrite_while_reading(ctx):
     chunk_size = 8 * 2**20
     contents = b"\x00" * chunk_size * 2
-    alternative_contents = b"\xFF" * chunk_size * 4
+    alternative_contents = b"\xff" * chunk_size * 4
     with ctx() as path:
         with bf.BlobFile(path, "wb") as f:
             f.write(contents)
@@ -1230,12 +1230,14 @@ def test_create_local_intermediate_dirs():
 def test_partial_writes_on_exc(partial_writes_on_exc, streaming, ctx):
     with ctx() as path:
         try:
-            with bf.BlobFile(path, "wb", streaming=streaming, partial_writes_on_exc=partial_writes_on_exc) as w:
+            with bf.BlobFile(
+                path, "wb", streaming=streaming, partial_writes_on_exc=partial_writes_on_exc
+            ) as w:
                 w.write(b"meow")
                 raise InterruptedError("interrupted while writing")
         except InterruptedError:
             pass
-        
+
         if partial_writes_on_exc:
             assert bf.exists(path)
             assert bf.read_bytes(path) == b"meow"

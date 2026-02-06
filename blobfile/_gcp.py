@@ -31,6 +31,7 @@ from blobfile._common import (
     path_join,
     strip_slashes,
 )
+from repro import partial
 
 MAX_EXPIRATION = 7 * 24 * 60 * 60
 OAUTH_TOKEN = "oauth_token"
@@ -456,7 +457,11 @@ class StreamingWriteFile(BaseStreamingWriteFile):
         self._upload_url = resp.headers["Location"]
         # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
         assert conf.google_write_chunk_size % (256 * 1024) == 0
-        super().__init__(conf=conf, chunk_size=conf.google_write_chunk_size, partial_writes_on_exc=partial_writes_on_exc)
+        super().__init__(
+            conf=conf,
+            chunk_size=conf.google_write_chunk_size,
+            partial_writes_on_exc=partial_writes_on_exc,
+        )
 
     def _upload_chunk(self, chunk: memoryview, finalize: bool) -> None:
         offset = self._offset
@@ -592,7 +597,7 @@ def parallel_upload(
     s = os.stat(src)
     if s.st_size == 0:
         # write an empty file, the normal upload requires at least one part
-        with StreamingWriteFile(conf, dst) as f:
+        with StreamingWriteFile(conf, dst, partial_writes_on_exc=True) as f:
             pass
         return hexdigest if return_md5 else None
 

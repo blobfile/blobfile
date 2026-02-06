@@ -21,6 +21,7 @@ from typing import (
     Protocol,
     Sequence,
     Tuple,
+    Type,
     Union,
     runtime_checkable,
 )
@@ -740,8 +741,8 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         self._conf = conf
 
         self.partial_writes_on_exc = partial_writes_on_exc
-        self._had_exception = False
-    
+        self.exc_val: Optional[BaseException] = None
+
     def _upload_chunk(self, chunk: memoryview, finalize: bool) -> None:
         raise NotImplementedError
 
@@ -762,23 +763,23 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
 
     def __exit__(
         self,
-        exc_type: Optional[type[BaseException]],
+        exc_type: Optional[Type[BaseException]],
         exc_val: Optional[BaseException],
         exc_tb: Optional[TracebackType],
     ) -> None:
-        # Track whether an exception occurred so close() can decide whether to write the file.
-        self._had_exception = exc_val is not None
+        # Store the exception so that in close we can decide whether or not to write the file.
+        self.exc_val = exc_val
         super().__exit__(exc_type, exc_val, exc_tb)
 
     def close(self) -> None:
         if self.closed:
             return
 
-        if not self._had_exception or self.partial_writes_on_exc:
+        if self.exc_val is None or self.partial_writes_on_exc:
             # we will have a partial remaining buffer at this point, upload it
             size = self._upload_buf(memoryview(self._buf), finalize=True)
             assert size == len(self._buf)
-        
+
         # Always clear the buffer whether or not we uploaded the file
         self._buf = bytearray()
         super().close()
@@ -1059,8 +1060,7 @@ def get_log_threshold_for_error(conf: Config, err: str) -> int:
 class BlobPathLike(Protocol):
     """Similar to the __fspath__ protocol, but for remote blob paths."""
 
-    def __blobpath__(self) -> str:
-        ...
+    def __blobpath__(self) -> str: ...
 
 
 RemoteOrLocalPath = Union[str, BlobPathLike, "os.PathLike[str]"]

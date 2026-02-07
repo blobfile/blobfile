@@ -949,7 +949,7 @@ class Context:
                 #
                 # The workaround appears to be to set the _CHUNK_SIZE property or monkey patch binary_f.read1 to call binary_f.read
                 if hasattr(text_f, "_CHUNK_SIZE"):
-                    setattr(text_f, "_CHUNK_SIZE", buffer_size)
+                    text_f._CHUNK_SIZE = buffer_size
                 return cast(TextIO, text_f)
         else:
             remote_path = None
@@ -1290,7 +1290,7 @@ def _glob_worker(
 
 def _local_glob(pattern: str) -> Iterator[str]:
     normalized_pattern = os.path.normpath(pattern)
-    if pattern.endswith("/") or pattern.endswith("\\"):
+    if pattern.endswith(("/", "\\")):
         # normpath will remove a trailing separator
         # but these affect the output of the glob
         normalized_pattern += os.sep

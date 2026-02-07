@@ -7,8 +7,8 @@ import socket
 import ssl
 import threading
 import time
-from types import TracebackType
 import urllib.parse
+from types import TracebackType
 from typing import (
     Any,
     Callable,

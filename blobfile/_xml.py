@@ -2,7 +2,7 @@
 Slightly faster replacement for xmltodict
 """
 
-from typing import Any, Union
+from typing import Any
 
 from lxml import etree
 

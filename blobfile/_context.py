@@ -28,7 +28,6 @@ from typing import (
     NamedTuple,
     Sequence,
     TextIO,
-    Union,
     cast,
     overload,
 )

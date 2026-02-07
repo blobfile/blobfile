@@ -28,6 +28,7 @@ from blobfile._context import (
     DEFAULT_RETRY_COMMON_LOG_THRESHOLD,
     DEFAULT_RETRY_LOG_THRESHOLD,
     DEFAULT_USE_BLIND_WRITES,
+    DEFAULT_USER_AGENT,
     create_context,
     default_log_fn,
 )
@@ -52,6 +53,7 @@ def configure(
     output_az_paths: bool = True,
     use_azure_storage_account_key_fallback: bool = False,
     get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
+    user_agent: Optional[str] = DEFAULT_USER_AGENT,
     use_streaming_read: bool = False,
     use_blind_writes: bool = DEFAULT_USE_BLIND_WRITES,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
@@ -70,6 +72,7 @@ def configure(
     output_az_paths: output `az://` paths instead of using the `https://` for azure
     use_azure_storage_account_key_fallback: fallback to storage account keys for azure containers, having this enabled requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
     get_http_pool: a function that returns a `urllib3.PoolManager` to be used for requests
+    user_agent: the value to use for the HTTP `User-Agent` header, defaults to `"blobfile/<version> (Python/<version> urllib3/<version>)"`
     use_streaming_read: if set to `True`, use a single read per file instead of reading a chunk at a time (not recommended for azure)
     use_blind_writes: if set to `True`, skip certain read checks during Azure writes
     default_buffer_size: the default buffer size to use for reading files (and writing local files)
@@ -91,6 +94,7 @@ def configure(
         output_az_paths=output_az_paths,
         use_azure_storage_account_key_fallback=use_azure_storage_account_key_fallback,
         get_http_pool=get_http_pool,
+        user_agent=user_agent,
         use_streaming_read=use_streaming_read,
         use_blind_writes=use_blind_writes,
         default_buffer_size=default_buffer_size,

@@ -83,6 +83,7 @@ There are a few bonus functions:
     * `output_az_paths=True`: output `az://` paths instead of using the `https://` for azure
     * `use_azure_storage_account_key_fallback=False`: fallback to storage account keys for azure containers, having this enabled requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
     * `get_http_pool=None`: a function that returns a `urllib3.PoolManager` to be used for requests
+    * `user_agent=None`: the value to use for the HTTP `User-Agent` header, defaults to `"blobfile/<version> (Python/<version> urllib3/<version>)"`
     * `use_streaming_read=False`: if set to `True`, use a single read per file instead of reading a chunk at a time (not recommended for azure)
     * `use_blind_writes=False`: if set to `True`, skip certain read checks during Azure writes. Defaults to checking if `BLOBFILE_USE_BLIND_WRITES` is set to `1`.
     * `default_buffer_size=io.DEFAULT_BUFFER_SIZE`: the default buffer size to use for reading files (and writing local files)

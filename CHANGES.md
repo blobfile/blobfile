@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.2.0
+
+* `BlobFile` now takes a `partial_writes_on_exc` argument, allowing you to ignore partial writes to remote files when exceptions are thrown
+* Relatedly, `write_text`, `write_bytes` and `copy` will now avoid partial writes to remote files if interrupted
+* Add `BLOBFILE_ALLOW_REDIRECTS` environment variable to allow redirects
+* Raise an error if a local path looks like a URL
+* Require `urllib3>=2`
+* Drop support for Python 3.9 and Python 3.10, and modernise packaging
+
 ## 3.1.0
 
 * Improve `bf.join`

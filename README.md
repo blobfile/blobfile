@@ -46,7 +46,7 @@ Here are the functions in `blobfile`:
     * `buffer_size`: number of bytes to buffer, this can potentially make reading more efficient.
     * `cache_dir`: a directory in which to cache files for reading, only valid if `streaming=False` and `mode` is in `"r", "rb"`.   You are responsible for cleaning up the cache directory.
     * `file_size`: size of the file being opened, can be specified directly to avoid checking the file size when opening the file.  While this will avoid a network request, it also means that you may get an error when first reading a file that does not exist rather than when opening it.  Only valid for modes "r" and "rb".  This valid will be ignored for local files.
-    * `partial_writes_on_exc`: whether to write partially-written data to the file if an exception occurs. Only valid for writing modes, and otherwise ignored. To avoid a behavior change from previous versions, the default is True.
+    * `partial_writes_on_exc`: whether to write partially-written data to the file if an exception is thrown from within the `BlobFile` context. Only valid for writing modes. Currently only affects remote files. The default is True, matching Python's behaviour for local files.
 
 Some are inspired by existing `os.path` and `shutil` functions:
 

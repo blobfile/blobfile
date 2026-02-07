@@ -1,5 +1,3 @@
-import os
-
 from blobfile._common import ConcurrentWriteFailure as ConcurrentWriteFailure
 from blobfile._common import DeadlineExceeded as DeadlineExceeded
 from blobfile._common import DirEntry as DirEntry
@@ -38,9 +36,7 @@ from blobfile._ops import walk as walk
 from blobfile._ops import write_bytes as write_bytes
 from blobfile._ops import write_text as write_text
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(_SCRIPT_DIR, "VERSION")) as _version_file:
-    __version__ = _version_file.read().strip()
+__version__ = "3.1.0"
 
 __all__ = [
     "copy",

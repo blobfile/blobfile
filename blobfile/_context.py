@@ -18,20 +18,16 @@ import tempfile
 import time
 import urllib.parse
 from functools import partial
-from types import ModuleType
+from types import TracebackType
 from typing import (
     Any,
     BinaryIO,
     Callable,
     Iterator,
-    List,
     Literal,
     NamedTuple,
-    Optional,
     Sequence,
     TextIO,
-    Tuple,
-    Union,
     cast,
     overload,
 )
@@ -85,10 +81,10 @@ class Context:
         dst: RemoteOrLocalPath,
         overwrite: bool = False,
         parallel: bool = False,
-        parallel_executor: Optional[concurrent.futures.Executor] = None,
+        parallel_executor: concurrent.futures.Executor | None = None,
         return_md5: bool = False,
-        dst_version: Optional[str] = None,
-    ) -> Optional[str]:
+        dst_version: str | None = None,
+    ) -> str | None:
         src = path_to_str(src)
         dst = path_to_str(dst)
         # it would be best to check isdir() for remote paths, but that would
@@ -150,9 +146,12 @@ class Context:
 
         for attempt, backoff in enumerate(common.exponential_sleep_generator()):
             try:
-                with self.BlobFile(src, "rb", streaming=True) as src_f, self.BlobFile(
-                    dst, "wb", streaming=True, version=dst_version
-                ) as dst_f:
+                with (
+                    self.BlobFile(src, "rb", streaming=True) as src_f,
+                    self.BlobFile(
+                        dst, "wb", streaming=True, version=dst_version, partial_writes_on_exc=False
+                    ) as dst_f,
+                ):
                     m = hashlib.md5()
                     while True:
                         block = src_f.read(CHUNK_SIZE)
@@ -164,7 +163,7 @@ class Context:
                     if return_md5:
                         return m.hexdigest()
                     else:
-                        return
+                        return None
             except RestartableStreamingWriteFailure as err:
                 # currently this is the only type of failure we retry, since we can re-read the source
                 # stream from the beginning
@@ -239,10 +238,16 @@ class Context:
                     name=self.basename(filepath),
                     is_dir=is_dir,
                     is_file=not is_dir,
-                    stat=None
-                    if is_dir
-                    else Stat(
-                        size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None, version=None
+                    stat=(
+                        None
+                        if is_dir
+                        else Stat(
+                            size=s.st_size,
+                            mtime=s.st_mtime,
+                            ctime=s.st_ctime,
+                            md5=None,
+                            version=None,
+                        )
                     ),
                 )
         elif _is_gcp_path(pattern) or _is_azure_path(pattern):
@@ -522,9 +527,7 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
-    def set_mtime(
-        self, path: RemoteOrLocalPath, mtime: float, version: Optional[str] = None
-    ) -> bool:
+    def set_mtime(self, path: RemoteOrLocalPath, mtime: float, version: str | None = None) -> bool:
         path = path_to_str(path)
         if _is_local_path(path):
             assert version is None
@@ -541,7 +544,7 @@ class Context:
         self,
         path: RemoteOrLocalPath,
         parallel: bool = False,
-        parallel_executor: Optional[concurrent.futures.Executor] = None,
+        parallel_executor: concurrent.futures.Executor | None = None,
     ) -> None:
         path = path_to_str(path)
         if not self.isdir(path):
@@ -632,8 +635,8 @@ class Context:
         self,
         top: RemoteOrLocalPath,
         topdown: bool = True,
-        onerror: Optional[Callable[[OSError], None]] = None,
-    ) -> Iterator[Tuple[str, Sequence[str], Sequence[str]]]:
+        onerror: Callable[[OSError], None] | None = None,
+    ) -> Iterator[tuple[str, Sequence[str], Sequence[str]]]:
         top = path_to_str(top)
         if not self.isdir(top):
             return
@@ -730,7 +733,7 @@ class Context:
             out = _join2(self._conf, out, b)
         return out
 
-    def get_url(self, path: RemoteOrLocalPath) -> Tuple[str, Optional[float]]:
+    def get_url(self, path: RemoteOrLocalPath) -> tuple[str, float | None]:
         path = path_to_str(path)
         if _is_gcp_path(path):
             return gcp.get_url(self._conf, path)
@@ -776,7 +779,7 @@ class Context:
             with self.BlobFile(path, "rb") as f:
                 return common.block_md5(f).hex()
 
-    def last_version_seen(self, file: TextIO | BinaryIO) -> Optional[str]:
+    def last_version_seen(self, file: TextIO | BinaryIO) -> str | None:
         actual: object
         actual = file
         if isinstance(actual, io.TextIOWrapper):
@@ -796,11 +799,11 @@ class Context:
             return f.read()
 
     def write_text(self, path: RemoteOrLocalPath, text: str) -> None:
-        with self.BlobFile(path, "w") as f:
+        with self.BlobFile(path, "w", partial_writes_on_exc=False) as f:
             f.write(text)
 
     def write_bytes(self, path: RemoteOrLocalPath, data: bytes) -> None:
-        with self.BlobFile(path, "wb") as f:
+        with self.BlobFile(path, "wb", partial_writes_on_exc=False) as f:
             f.write(data)
 
     @overload
@@ -808,36 +811,37 @@ class Context:
         self,
         path: RemoteOrLocalPath,
         mode: Literal["rb", "wb", "ab"],
-        streaming: Optional[bool] = ...,
-        buffer_size: Optional[int] = ...,
-        cache_dir: Optional[str] = ...,
-        file_size: Optional[int] = None,
-        version: Optional[str] = None,
-    ) -> BinaryIO:
-        ...
+        streaming: bool | None = ...,
+        buffer_size: int | None = ...,
+        cache_dir: str | None = ...,
+        file_size: int | None = None,
+        version: str | None = None,
+        partial_writes_on_exc: bool = True,
+    ) -> BinaryIO: ...
 
     @overload
     def BlobFile(
         self,
         path: RemoteOrLocalPath,
         mode: Literal["r", "w", "a"] = ...,
-        streaming: Optional[bool] = ...,
-        buffer_size: Optional[int] = ...,
-        cache_dir: Optional[str] = ...,
-        file_size: Optional[int] = None,
-        version: Optional[str] = None,
-    ) -> TextIO:
-        ...
+        streaming: bool | None = ...,
+        buffer_size: int | None = ...,
+        cache_dir: str | None = ...,
+        file_size: int | None = None,
+        version: str | None = None,
+        partial_writes_on_exc: bool = True,
+    ) -> TextIO: ...
 
     def BlobFile(
         self,
         path: RemoteOrLocalPath,
         mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r",
-        streaming: Optional[bool] = None,
-        buffer_size: Optional[int] = None,
-        cache_dir: Optional[str] = None,
-        file_size: Optional[int] = None,
-        version: Optional[str] = None,
+        streaming: bool | None = None,
+        buffer_size: int | None = None,
+        cache_dir: str | None = None,
+        file_size: int | None = None,
+        version: str | None = None,
+        partial_writes_on_exc: bool = True,
     ):
         """
         Open a local or remote file for reading or writing
@@ -858,6 +862,7 @@ class Context:
             cache_dir: a directory in which to cache files for reading, only valid if `streaming=False` and `mode` is in `"r", "rb"`.   You are reponsible for cleaning up the cache directory.
             file_size: size of the file being opened, can be specified directly to avoid checking the file size when opening the file.  While this will avoid a network request, it also means that you may get an error when first reading a file that does not exist rather than when opening it.  Only valid for modes "r" and "rb".  This valid will be ignored for local files.
             version: a version number of the file being opened, used to prevent overwriting a file that has changed since it was opened.  Only valid for modes "w", "wb", "a", "ab"
+            partial_writes_on_exc: whether to write partially-written data to the file if an exception occurs. Only valid for writing modes, and otherwise ignored. For backwards compatibility, the default is True.
 
         Returns:
             A file-like object
@@ -892,16 +897,23 @@ class Context:
             if cache_dir is not None:
                 raise Error("Cannot specify cache_dir for streaming files")
             if _is_local_path(path):
+                # Note: io.FileIO eagerly creates the file if it doesn't exist. This behavior is different from the
+                # cloud file implementations below, where the file is only created once the chunks are finalized and
+                # committed.
                 f = io.FileIO(path, mode=mode)
                 if "r" in mode:
                     f = io.BufferedReader(f, buffer_size=buffer_size)
                 else:
+                    # We do not need to use _BufferedWriterForProxyFile, which is only needed for the case that the
+                    # underlying file is remote.
                     f = io.BufferedWriter(f, buffer_size=buffer_size)
             elif _is_gcp_path(path):
                 if version:
                     raise NotImplementedError("Cannot specify version for GCP files")
                 if mode in ("w", "wb"):
-                    f = gcp.StreamingWriteFile(self._conf, path)
+                    f = gcp.StreamingWriteFile(
+                        self._conf, path, partial_writes_on_exc=partial_writes_on_exc
+                    )
                 elif mode in ("r", "rb"):
                     f = gcp.StreamingReadFile(self._conf, path, size=file_size)
                     f = io.BufferedReader(f, buffer_size=buffer_size)
@@ -909,7 +921,9 @@ class Context:
                     raise Error(f"Unsupported mode: '{mode}'")
             elif _is_azure_path(path):
                 if mode in ("w", "wb"):
-                    f = azure.StreamingWriteFile(self._conf, path, version)
+                    f = azure.StreamingWriteFile(
+                        self._conf, path, version, partial_writes_on_exc=partial_writes_on_exc
+                    )
                 elif mode in ("r", "rb"):
                     f = azure.StreamingReadFile(self._conf, path, size=file_size, version=version)
                     f = io.BufferedReader(f, buffer_size=buffer_size)
@@ -1044,11 +1058,12 @@ class Context:
                 tmp_dir=tmp_dir,
                 remote_path=remote_path,
                 version=version,
+                partial_writes_on_exc=partial_writes_on_exc,
             )
             if "r" in mode:
                 f = io.BufferedReader(f, buffer_size=buffer_size)
             else:
-                f = io.BufferedWriter(f, buffer_size=buffer_size)
+                f = _BufferedWriterForProxyFile(f, buffer_size=buffer_size)
             binary_f = cast(BinaryIO, f)
             if "b" in mode:
                 return binary_f
@@ -1073,17 +1088,9 @@ def _is_azure_path(path: str) -> bool:
     ) or url.scheme == "az"
 
 
-def _get_module(path: str) -> Optional[ModuleType]:
-    if _is_gcp_path(path):
-        return gcp
-    elif _is_azure_path(path):
-        return azure
-    else:
-        return None
-
-
 def _is_local_path(path: str) -> bool:
-    return _get_module(path) is None
+    url = urllib.parse.urlparse(path)
+    return not url.scheme and not url.netloc
 
 
 def _download_chunk(
@@ -1112,7 +1119,7 @@ def _download_chunk(
 
 def _parallel_download(
     conf: Config, executor: concurrent.futures.Executor, src: str, dst: str, return_md5: bool
-) -> Optional[str]:
+) -> str | None:
     ctx = Context(conf=conf)
 
     s = ctx.stat(src)
@@ -1151,7 +1158,7 @@ def _string_overlap(s1: str, s2: str) -> int:
     return length
 
 
-def _split_path(path: str) -> List[str]:
+def _split_path(path: str) -> list[str]:
     # a/b/c => a/, b/, c
     # a/b/ => a/, b/
     # /a/b/c => /, a/, b/, c
@@ -1236,9 +1243,7 @@ class _GlobTaskComplete(NamedTuple):
     pass
 
 
-def _process_glob_task(
-    conf: Config, root: str, t: _GlobTask
-) -> Iterator[Union[_GlobTask, _GlobEntry]]:
+def _process_glob_task(conf: Config, root: str, t: _GlobTask) -> Iterator[_GlobTask | _GlobEntry]:
     cur = t.cur + t.rem[0]
     rem = t.rem[1:]
     if "**" in cur:
@@ -1274,7 +1279,7 @@ def _glob_worker(
     conf: Config,
     root: str,
     tasks: mp.Queue[_GlobTask],
-    results: mp.Queue[Union[_GlobEntry, _GlobTask, _GlobTaskComplete]],
+    results: mp.Queue[_GlobEntry | _GlobTask | _GlobTaskComplete],
 ) -> None:
     while True:
         t = tasks.get()
@@ -1285,7 +1290,7 @@ def _glob_worker(
 
 def _local_glob(pattern: str) -> Iterator[str]:
     normalized_pattern = os.path.normpath(pattern)
-    if pattern.endswith("/") or pattern.endswith("\\"):
+    if pattern.endswith(("/", "\\")):
         # normpath will remove a trailing separator
         # but these affect the output of the glob
         normalized_pattern += os.sep
@@ -1346,7 +1351,7 @@ def _guess_isdir(path: str) -> bool:
     return False
 
 
-def _list_blobs(conf: Config, path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
+def _list_blobs(conf: Config, path: str, delimiter: str | None = None) -> Iterator[DirEntry]:
     params = {}
     if delimiter is not None:
         params["delimiter"] = delimiter
@@ -1379,7 +1384,7 @@ def _list_blobs_in_dir(conf: Config, prefix: str, exclude_prefix: bool) -> Itera
         yield entry
 
 
-def _get_entry(conf: Config, path: str) -> Optional[DirEntry]:
+def _get_entry(conf: Config, path: str) -> DirEntry | None:
     ctx = Context(conf)
     if _is_gcp_path(path):
         st = gcp.maybe_stat(conf, path)
@@ -1406,7 +1411,7 @@ def _get_entry(conf: Config, path: str) -> Optional[DirEntry]:
 
 
 def _sharded_listdir_worker(
-    conf: Config, prefixes: mp.Queue[Tuple[str, str, bool]], items: mp.Queue[Optional[DirEntry]]
+    conf: Config, prefixes: mp.Queue[tuple[str, str, bool]], items: mp.Queue[DirEntry | None]
 ) -> None:
     while True:
         base, prefix, exact = prefixes.get(True)
@@ -1433,15 +1438,50 @@ def _join2(conf: Config, a: str, b: str) -> str:
         raise Error(f"Unrecognized path: '{a}'")
 
 
+class _BufferedWriterForProxyFile(io.BufferedWriter):
+    """
+    This class is needed preventing partial writes from being written in the non-streaming case.
+    Suppose a user does the following:
+
+    with bf.BlobFile("path", "wb", streaming=False, partial_writes_on_exc=False) as f:
+        f.write(b"meow")
+        f.write(b"woof")
+
+    and an exception occurs after the first write. Since partial_writes_on_exc is False, we do not
+    want either of the writes to occur. The object returned by bf.BlobFile used to be an
+    io.BufferedWriter wrapping a _ProxyFile. When an exception occurred, the __exit__ method of the
+    io.BufferedWriter would be invoked, that would call the close() method of the _ProxyFile, and
+    then the _ProxyFile would copy the local (proxy) file to the remote file. But at that point, the
+    close method would have no idea that it's being invoked from exceptional context, and will copy
+    the file.
+
+    To fix this, we wrap the io.BufferedWriter with this class, which forwards whether an exception
+    occurred to the underlying raw object, i.e. the _ProxyFile. This class is designed to solve
+    *only* this problem, and should never be used for any other purpose.
+    """
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        assert isinstance(self.raw, _ProxyFile)
+        self.raw.had_exception = exc_val is not None
+
+        return super().__exit__(exc_type, exc_val, exc_tb)
+
+
 class _ProxyFile(io.FileIO):
     def __init__(
         self,
         ctx: Context,
         local_path: str,
         mode: Literal["r", "rb", "w", "wb", "a", "ab"],
-        tmp_dir: Optional[str],
-        remote_path: Optional[str],
-        version: Optional[str],
+        tmp_dir: str | None,
+        remote_path: str | None,
+        version: str | None,
+        partial_writes_on_exc: bool = True,
     ) -> None:
         super().__init__(local_path, mode=mode)
         self._ctx = ctx
@@ -1452,13 +1492,19 @@ class _ProxyFile(io.FileIO):
         self._closed = False
         self._version = version
 
+        self._partial_writes_on_exc = partial_writes_on_exc
+        self.had_exception: bool = False
+
     def close(self) -> None:
         if not hasattr(self, "_closed") or self._closed:
             return
 
         super().close()
         try:
-            if self._remote_path is not None and self._mode in ("w", "wb", "a", "ab"):
+            mode_should_write = self._mode in ("w", "wb", "a", "ab")
+            should_do_write = not self.had_exception or self._partial_writes_on_exc
+
+            if self._remote_path is not None and mode_should_write and should_do_write:
                 self._ctx.copy(
                     self._local_path, self._remote_path, overwrite=True, dst_version=self._version
                 )
@@ -1481,16 +1527,16 @@ def create_context(
     google_write_chunk_size: int = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
     retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
     retry_common_log_threshold: int = DEFAULT_RETRY_COMMON_LOG_THRESHOLD,
-    retry_limit: Optional[int] = None,
-    connect_timeout: Optional[int] = DEFAULT_CONNECT_TIMEOUT,
-    read_timeout: Optional[int] = DEFAULT_READ_TIMEOUT,
+    retry_limit: int | None = None,
+    connect_timeout: int | None = DEFAULT_CONNECT_TIMEOUT,
+    read_timeout: int | None = DEFAULT_READ_TIMEOUT,
     output_az_paths: bool = True,
     use_azure_storage_account_key_fallback: bool = False,
-    get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
+    get_http_pool: Callable[[], urllib3.PoolManager] | None = None,
     use_streaming_read: bool = False,
     use_blind_writes: bool = DEFAULT_USE_BLIND_WRITES,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
-    get_deadline: Optional[Callable[[], float]] = None,
+    get_deadline: Callable[[], float] | None = None,
     save_access_token_to_disk: bool = True,
     multiprocessing_start_method: str = "spawn",
 ):

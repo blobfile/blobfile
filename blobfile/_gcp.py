@@ -10,7 +10,7 @@ import platform
 import socket
 import time
 import urllib.parse
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
+from typing import Any, Iterator, Mapping
 
 import urllib3
 
@@ -67,7 +67,7 @@ def _create_jwt(private_key: str, data: Mapping[str, Any]) -> bytes:
     return header_b64 + b"." + body_b64 + b"." + signature_b64
 
 
-def _create_token_request(client_email: str, private_key: str, scopes: List[str]) -> Request:
+def _create_token_request(client_email: str, private_key: str, scopes: list[str]) -> Request:
     # https://developers.google.com/identity/protocols/OAuth2ServiceAccount
     now = time.time()
     claim_set = {
@@ -107,7 +107,7 @@ def _refresh_access_token_request(
     )
 
 
-def _load_credentials() -> Dict[str, Any]:
+def _load_credentials() -> dict[str, Any]:
     if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
         creds_path = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
         if not os.path.exists(creds_path):
@@ -132,7 +132,7 @@ def _load_credentials() -> Dict[str, Any]:
     return {}
 
 
-def _create_access_token_request(creds: Dict[str, Any], scopes: List[str]) -> Request:
+def _create_access_token_request(creds: dict[str, Any], scopes: list[str]) -> Request:
     if "private_key" in creds:
         # looks like GCS does not support the no-oauth flow https://developers.google.com/identity/protocols/OAuth2ServiceAccount#jwt-auth
         return _create_token_request(creds["client_email"], creds["private_key"], scopes)
@@ -150,7 +150,7 @@ def build_url(template: str, **data: str) -> str:
     return common.build_url(GCP_BASE_URL, template, **data)
 
 
-def create_api_request(req: Request, auth: Tuple[str, str]) -> Request:
+def create_api_request(req: Request, auth: tuple[str, str]) -> Request:
     if req.headers is None:
         headers = {}
     else:
@@ -191,9 +191,9 @@ def generate_signed_url(
     name: str,
     expiration: float,
     method: str = "GET",
-    params: Optional[Mapping[str, str]] = None,
-    headers: Optional[Mapping[str, str]] = None,
-) -> Tuple[str, Optional[float]]:
+    params: Mapping[str, str] | None = None,
+    headers: Mapping[str, str] | None = None,
+) -> tuple[str, float | None]:
     if params is None:
         p = {}
     else:
@@ -318,7 +318,7 @@ def mkdirfile(conf: Config, path: str) -> None:
         raise Error(f"Unable to create directory, bucket does not exist: '{path}'")
 
 
-def split_path(path: str) -> Tuple[str, str]:
+def split_path(path: str) -> tuple[str, str]:
     if not path.startswith("gs://"):
         raise Error(f"Invalid path: '{path}'")
     path = path[len("gs://") :]
@@ -332,7 +332,7 @@ def combine_path(bucket: str, obj: str) -> str:
     return f"gs://{bucket}/{obj}"
 
 
-def get_md5(metadata: Mapping[str, Any]) -> Optional[str]:
+def get_md5(metadata: Mapping[str, Any]) -> str | None:
     if "md5Hash" in metadata:
         return base64.b64decode(metadata["md5Hash"]).hex()
 
@@ -361,7 +361,7 @@ def make_stat(item: Mapping[str, Any]) -> Stat:
     )
 
 
-def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
+def _get_access_token(conf: Config, key: Any) -> tuple[Any, float]:
     if os.environ.get("BLOBFILE_FORCE_GOOGLE_ANONYMOUS_AUTH", "0") == "1":
         return (ANONYMOUS, ""), float("inf")
 
@@ -416,7 +416,7 @@ def execute_api_request(conf: Config, req: Request) -> "urllib3.BaseHTTPResponse
 
 
 class StreamingReadFile(BaseStreamingReadFile):
-    def __init__(self, conf: Config, path: str, size: Optional[int]) -> None:
+    def __init__(self, conf: Config, path: str, size: int | None) -> None:
         if size is None:
             st = maybe_stat(conf, path)
             if st is None:
@@ -425,7 +425,7 @@ class StreamingReadFile(BaseStreamingReadFile):
         super().__init__(conf=conf, path=path, size=size)
 
     def _request_chunk(
-        self, streaming: bool, start: int, end: Optional[int] = None
+        self, streaming: bool, start: int, end: int | None = None
     ) -> "urllib3.BaseHTTPResponse":
         bucket, name = split_path(self._path)
         req = Request(
@@ -442,7 +442,7 @@ class StreamingReadFile(BaseStreamingReadFile):
 
 
 class StreamingWriteFile(BaseStreamingWriteFile):
-    def __init__(self, conf: Config, path: str) -> None:
+    def __init__(self, conf: Config, path: str, partial_writes_on_exc: bool) -> None:
         bucket, name = split_path(path)
         req = Request(
             url=build_url("/upload/storage/v1/b/{bucket}/o?uploadType=resumable", bucket=bucket),
@@ -456,7 +456,11 @@ class StreamingWriteFile(BaseStreamingWriteFile):
         self._upload_url = resp.headers["Location"]
         # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
         assert conf.google_write_chunk_size % (256 * 1024) == 0
-        super().__init__(conf=conf, chunk_size=conf.google_write_chunk_size)
+        super().__init__(
+            conf=conf,
+            chunk_size=conf.google_write_chunk_size,
+            partial_writes_on_exc=partial_writes_on_exc,
+        )
 
     def _upload_chunk(self, chunk: memoryview, finalize: bool) -> None:
         offset = self._offset
@@ -515,7 +519,7 @@ class StreamingWriteFile(BaseStreamingWriteFile):
                 raise
 
 
-def maybe_stat(conf: Config, path: str) -> Optional[Stat]:
+def maybe_stat(conf: Config, path: str) -> Stat | None:
     bucket, blob = split_path(path)
     if blob == "":
         return None
@@ -583,7 +587,7 @@ def _delete_part(conf: Config, bucket: str, name: str) -> None:
 
 def parallel_upload(
     conf: Config, executor: concurrent.futures.Executor, src: str, dst: str, return_md5: bool
-) -> Optional[str]:
+) -> str | None:
     with open(src, "rb") as f:
         md5_digest = common.block_md5(f)
 
@@ -592,7 +596,7 @@ def parallel_upload(
     s = os.stat(src)
     if s.st_size == 0:
         # write an empty file, the normal upload requires at least one part
-        with StreamingWriteFile(conf, dst) as f:
+        with StreamingWriteFile(conf, dst, partial_writes_on_exc=True) as f:
             pass
         return hexdigest if return_md5 else None
 
@@ -650,7 +654,7 @@ def parallel_upload(
 
 def _create_page_iterator(
     conf: Config, url: str, method: str, params: Mapping[str, str]
-) -> Iterator[Dict[str, Any]]:
+) -> Iterator[dict[str, Any]]:
     p = dict(params).copy()
 
     while True:
@@ -665,7 +669,7 @@ def _create_page_iterator(
         p["pageToken"] = result["nextPageToken"]
 
 
-def list_blobs(conf: Config, path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
+def list_blobs(conf: Config, path: str, delimiter: str | None = None) -> Iterator[DirEntry]:
     params = {}
     if delimiter is not None:
         params["delimiter"] = delimiter
@@ -710,12 +714,12 @@ def entry_from_path_stat(path: str, stat: Stat) -> DirEntry:
     return DirEntry(name=name, path=path, is_dir=False, is_file=True, stat=stat)
 
 
-def get_url(conf: Config, path: str) -> Tuple[str, Optional[float]]:
+def get_url(conf: Config, path: str) -> tuple[str, float | None]:
     bucket, blob = split_path(path)
     return generate_signed_url(bucket, blob, expiration=MAX_EXPIRATION)
 
 
-def set_mtime(conf: Config, path: str, mtime: float, version: Optional[str] = None) -> bool:
+def set_mtime(conf: Config, path: str, mtime: float, version: str | None = None) -> bool:
     bucket, blob = split_path(path)
     params = None
     if version is not None:
@@ -743,7 +747,7 @@ def dirname(conf: Config, path: str) -> str:
         return combine_path(bucket, "")[:-1]
 
 
-def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> Optional[str]:
+def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> str | None:
     srcbucket, srcname = split_path(src)
     dstbucket, dstname = split_path(dst)
     params = {}
@@ -768,7 +772,7 @@ def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> Optional[
             if return_md5:
                 return get_md5(result["resource"])
             else:
-                return
+                return None
         params["rewriteToken"] = result["rewriteToken"]
 
 

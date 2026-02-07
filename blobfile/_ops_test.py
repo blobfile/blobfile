@@ -14,7 +14,6 @@ import tempfile
 import time
 import unittest.mock
 import urllib.request
-import warnings
 import zipfile
 
 import numpy as np
@@ -217,6 +216,14 @@ def test_basename():
     for input_, desired_output in testcases:
         actual_output = bf.basename(input_)
         assert desired_output == actual_output
+
+
+def test_rejects_provider_like_local_paths():
+    with pytest.raises(bf.Error, match="unsupported remote path"):
+        bf.exists("s3://bucket")
+
+    with pytest.raises(bf.Error, match="unsupported remote path"):
+        bf.BlobFile("s3://bucket/obj", "rb")
 
 
 def test_dirname():
@@ -548,9 +555,9 @@ def test_listdir(ctx):
             w.write(contents)
         bf.makedirs(bf.join(dirpath, "c"))
         expected = ["a", "b", "c"]
-        assert sorted(list(bf.listdir(dirpath))) == expected
+        assert sorted(bf.listdir(dirpath)) == expected
         dirpath = _convert_https_to_az(dirpath)
-        assert sorted(list(bf.listdir(dirpath))) == expected
+        assert sorted(bf.listdir(dirpath)) == expected
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
@@ -565,7 +572,7 @@ def test_scandir(ctx):
         with bf.BlobFile(b_path, "wb") as w:
             w.write(contents)
         bf.makedirs(bf.join(dirpath, "c"))
-        entries = sorted(list(bf.scandir(dirpath)))
+        entries = sorted(bf.scandir(dirpath))
         assert [e.name for e in entries] == ["a", "b", "c"]
         assert [e.path for e in entries] == [bf.join(dirpath, name) for name in ["a", "b", "c"]]
         assert [e.is_dir for e in entries] == [False, False, True]
@@ -592,13 +599,7 @@ def test_listdir_sharded(ctx):
         with bf.BlobFile(bf.join(dirpath, "c/a"), "wb") as w:
             w.write(contents)
         # this should also test shard_prefix_length=2 but that takes too long
-        assert sorted(list(bf.listdir(dirpath, shard_prefix_length=1))) == [
-            "a",
-            "aa",
-            "b",
-            "c",
-            "ca",
-        ]
+        assert sorted(bf.listdir(dirpath, shard_prefix_length=1)) == ["a", "aa", "b", "c", "ca"]
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
@@ -640,7 +641,7 @@ def test_local_glob(ctx):
 
         def assert_listing_equal(path, desired):
             desired = sorted([bf.join(dirpath, p) for p in desired])
-            actual = sorted(list(bf.glob(path)))
+            actual = sorted(bf.glob(path))
             assert actual == desired, f"{actual} != {desired}"
 
         # example patterns (didn't add tests for all these)
@@ -684,7 +685,7 @@ def test_glob(ctx, parallel):
 
         def assert_listing_equal(path, desired):
             desired = sorted([bf.join(dirpath, p) for p in desired])
-            actual = sorted(list(bf.glob(path, parallel=parallel)))
+            actual = sorted(bf.glob(path, parallel=parallel))
             assert actual == desired, f"{actual} != {desired}"
 
         assert_listing_equal(bf.join(dirpath, "*b"), ["ab", "bb"])
@@ -755,28 +756,26 @@ def test_scanglob(ctx):
         with bf.BlobFile(path, "wb") as f:
             f.write(contents)
 
-        entries = sorted(list(bf.scanglob(bf.join(dirpath, "*b*"))))
+        entries = sorted(bf.scanglob(bf.join(dirpath, "*b*")))
         assert entries[0].name == "ab" and entries[0].is_file
         assert entries[1].name == "bb" and entries[1].is_file
         assert entries[2].name == "subdir" and entries[2].is_dir
 
         for shard_prefix_length in [0, 1]:
             for pattern in ["*b", "b*", "**", "b**", "**t", "*b*"]:
-                normal_entries = sorted(list(bf.scanglob(bf.join(dirpath, pattern))))
+                normal_entries = sorted(bf.scanglob(bf.join(dirpath, pattern)))
                 parallel_entries = sorted(
-                    list(
-                        bf.scanglob(
-                            bf.join(dirpath, pattern),
-                            parallel=True,
-                            shard_prefix_length=shard_prefix_length,
-                        )
+                    bf.scanglob(
+                        bf.join(dirpath, pattern),
+                        parallel=True,
+                        shard_prefix_length=shard_prefix_length,
                     )
                 )
                 assert parallel_entries == normal_entries
 
         if "://" in path:
             # ** behaves a bit differently on local paths, so don't check those
-            entries = sorted(list(bf.scanglob(bf.join(dirpath, "**"))))
+            entries = sorted(bf.scanglob(bf.join(dirpath, "**")))
             assert entries[0].name == "ab" and entries[0].is_file
             assert entries[1].name == "bb" and entries[1].is_file
             assert entries[2].name == "subdir" and entries[2].is_dir
@@ -840,9 +839,17 @@ def test_rmtree(ctx, parallel):
 @pytest.mark.parametrize("parallel", [False, True])
 def test_copy(parallel):
     for contents in [b"", b"meow!", b"meow!" * (2 * 2**20)]:
-        with _get_temp_local_path() as local_path1, _get_temp_local_path() as local_path2, _get_temp_local_path() as local_path3, _get_temp_gcs_path() as gcs_path1, _get_temp_gcs_path() as gcs_path2, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2, _get_temp_as_path(
-            account=AS_TEST_ACCOUNT2, container=AS_TEST_CONTAINER2
-        ) as as_path3, _get_temp_as_path() as as_path4:
+        with (
+            _get_temp_local_path() as local_path1,
+            _get_temp_local_path() as local_path2,
+            _get_temp_local_path() as local_path3,
+            _get_temp_gcs_path() as gcs_path1,
+            _get_temp_gcs_path() as gcs_path2,
+            _get_temp_as_path() as as_path1,
+            _get_temp_as_path() as as_path2,
+            _get_temp_as_path(account=AS_TEST_ACCOUNT2, container=AS_TEST_CONTAINER2) as as_path3,
+            _get_temp_as_path() as as_path4,
+        ):
             with pytest.raises(FileNotFoundError):
                 bf.copy(gcs_path1, gcs_path2, parallel=parallel)
             with pytest.raises(FileNotFoundError):
@@ -874,7 +881,11 @@ def test_copy(parallel):
 @pytest.mark.parametrize("parallel", [False, True])
 def test_copy_invalid(parallel):
     for contents in [b"", b"meow!", b"meow!" * (2 * 2**20)]:
-        with _get_temp_local_path() as local_path, _get_temp_as_path() as as_path1, _get_temp_as_path() as as_path2:
+        with (
+            _get_temp_local_path() as local_path,
+            _get_temp_as_path() as as_path1,
+            _get_temp_as_path() as as_path2,
+        ):
             invalid_container_as_path = _convert_az_to_https(
                 bf.join(AZURE_INVALID_CONTAINER, "file.bin")
             )
@@ -1018,7 +1029,6 @@ def test_more_exists():
 def test_invalid_paths(base_path):
     for suffix in ["", "/", "//", "/invalid.file", "/invalid/dir/"]:
         path = base_path + suffix
-        print(path)
         if path.endswith("/"):
             expected_error = IsADirectoryError
         else:
@@ -1144,7 +1154,7 @@ def test_cache_dir(ctx):
 def test_change_file_size(ctx, use_random):
     chunk_size = 8 * 2**20
     long_contents = b"\x00" * chunk_size * 3
-    short_contents = b"\xFF" * chunk_size * 2
+    short_contents = b"\xff" * chunk_size * 2
     if use_random:
         long_contents = os.urandom(len(long_contents))
         short_contents = os.urandom(len(short_contents))
@@ -1185,7 +1195,7 @@ def test_change_file_size(ctx, use_random):
 def test_overwrite_while_reading(ctx):
     chunk_size = 8 * 2**20
     contents = b"\x00" * chunk_size * 2
-    alternative_contents = b"\xFF" * chunk_size * 4
+    alternative_contents = b"\xff" * chunk_size * 4
     with ctx() as path:
         with bf.BlobFile(path, "wb") as f:
             f.write(contents)
@@ -1215,6 +1225,29 @@ def test_create_local_intermediate_dirs():
             ]:
                 with bf.BlobFile(filepath, "wb") as f:
                     f.write(contents)
+
+
+@pytest.mark.parametrize("partial_writes_on_exc", [True, False])
+@pytest.mark.parametrize("streaming", [True, False])
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+def test_partial_writes_on_exc(partial_writes_on_exc, streaming, ctx):
+    with ctx() as path:
+        try:
+            with bf.BlobFile(
+                path, "wb", streaming=streaming, partial_writes_on_exc=partial_writes_on_exc
+            ) as w:
+                w.write(b"meow")
+                raise InterruptedError("interrupted while writing")
+        except InterruptedError:
+            pass
+
+        # Local paths are special in that they are created even if the write is exceptional.
+        is_local_path = ctx == _get_temp_local_path
+        if partial_writes_on_exc or is_local_path:
+            assert bf.exists(path)
+            assert bf.read_bytes(path) == b"meow"
+        else:
+            assert not bf.exists(path)
 
 
 @pytest.mark.parametrize("binary", [True, False])
@@ -1268,7 +1301,7 @@ def test_more_read_write(binary, streaming, ctx):
             assert r.readlines() == lines
 
         with bf.BlobFile(path, read_mode, streaming=streaming) as r:
-            assert [line for line in r] == lines
+            assert list(r) == lines
 
         if binary:
             for size in [2 * 2**20, 12_345_678]:
@@ -1678,7 +1711,7 @@ def test_use_blind_writes_skips_uncommited_blocks_check():
     ctx = bf.create_context(use_blind_writes=True)
     path = f"https://{AS_TEST_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}/file"
     with unittest.mock.patch("blobfile._azure.execute_api_request") as mock_exec:
-        azure.StreamingWriteFile(ctx._conf, path, None)
+        azure.StreamingWriteFile(ctx._conf, path, None, partial_writes_on_exc=True)
         for call in mock_exec.call_args_list:
             assert call.args[1].method in ("PUT", "POST")
 

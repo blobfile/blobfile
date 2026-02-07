@@ -46,6 +46,7 @@ Here are the functions in `blobfile`:
     * `buffer_size`: number of bytes to buffer, this can potentially make reading more efficient.
     * `cache_dir`: a directory in which to cache files for reading, only valid if `streaming=False` and `mode` is in `"r", "rb"`.   You are responsible for cleaning up the cache directory.
     * `file_size`: size of the file being opened, can be specified directly to avoid checking the file size when opening the file.  While this will avoid a network request, it also means that you may get an error when first reading a file that does not exist rather than when opening it.  Only valid for modes "r" and "rb".  This valid will be ignored for local files.
+    * `partial_writes_on_exc`: whether to write partially-written data to the file if an exception occurs. Only valid for writing modes, and otherwise ignored. To avoid a behavior change from previous versions, the default is True.
 
 Some are inspired by existing `os.path` and `shutil` functions:
 
@@ -193,8 +194,9 @@ See [CHANGES](CHANGES.md)
 Create [testing buckets](https://github.com/christopher-hesse/blobfile/blob/bb885e72e97ddade675d4493db235b43888a2191/blobfile/_ops_test.py#L30-L36) for each cloud provider with appropriate credentials.
 
 To make a new release:
-- Update CHANGES.md
-- Update blobfile/VERSION
+- Update `CHANGES.md`
+- Update the version in `pyproject.toml`
+- Update the version in `blobfile/__init__.py`
 - `rm -rf build dist`
 - `python -m build .`
 - `twine upload dist/*`

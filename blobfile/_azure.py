@@ -115,7 +115,6 @@ def _load_credentials() -> dict[str, Any]:
         }
 
     # look for a refresh token in the az command line credentials
-    # we could also try to use any found access tokens
     msal_tokens_path = os.path.expanduser("~/.azure/msal_token_cache.json")
     if os.path.exists(msal_tokens_path):
         with open(msal_tokens_path) as f:
@@ -124,24 +123,6 @@ def _load_credentials() -> dict[str, Any]:
                 if token["credential_type"] != "RefreshToken":
                     continue
                 return {"_azure_auth": "refresh", "refresh_token": token["secret"]}
-
-    access_tokens_path = os.path.expanduser("~/.azure/accessTokens.json")
-    if os.path.exists(access_tokens_path):
-        with open(access_tokens_path) as f:
-            tokens = json.load(f)
-            best_token = None
-            for token in tokens:
-                if "refreshToken" not in token:
-                    continue
-                creds = {"_azure_auth": "refresh", "refresh_token": token["refreshToken"]}
-                if best_token is None:
-                    best_token = creds
-                else:
-                    # expiresOn may be missing for tokens from service principals
-                    if token.get("expiresOn", "") > best_token.get("expiresOn", ""):
-                        best_token = creds
-            if best_token is not None:
-                return best_token
 
     return {}
 

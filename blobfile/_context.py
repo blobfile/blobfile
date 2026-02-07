@@ -949,7 +949,7 @@ class Context:
                 #
                 # The workaround appears to be to set the _CHUNK_SIZE property or monkey patch binary_f.read1 to call binary_f.read
                 if hasattr(text_f, "_CHUNK_SIZE"):
-                    text_f._CHUNK_SIZE = buffer_size
+                    setattr(text_f, "_CHUNK_SIZE", buffer_size)
                 return cast(TextIO, text_f)
         else:
             remote_path = None

@@ -194,8 +194,9 @@ See [CHANGES](CHANGES.md)
 Create [testing buckets](https://github.com/christopher-hesse/blobfile/blob/bb885e72e97ddade675d4493db235b43888a2191/blobfile/_ops_test.py#L30-L36) for each cloud provider with appropriate credentials.
 
 To make a new release:
-- Update CHANGES.md
-- Update blobfile/VERSION
+- Update `CHANGES.md`
+- Update the version in `pyproject.toml`
+- Update the version in `blobfile/__init__.py`
 - `rm -rf build dist`
 - `python -m build .`
 - `twine upload dist/*`

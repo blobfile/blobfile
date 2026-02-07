@@ -10,7 +10,7 @@
         "scripts/**",
         "testing/**",
     ],
-    "pythonVersion": "3.8",
+    "pythonVersion": "3.10",
     "disableBytesTypePromotions": true,
     "reportAssertAlwaysTrue": "error",
     "reportInvalidStringEscapeSequence": "error",

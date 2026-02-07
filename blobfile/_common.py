@@ -12,16 +12,11 @@ import urllib.parse
 from typing import (
     Any,
     Callable,
-    Dict,
     Iterator,
-    List,
     Mapping,
     NamedTuple,
-    Optional,
     Protocol,
     Sequence,
-    Tuple,
-    Type,
     Union,
     runtime_checkable,
 )
@@ -84,8 +79,8 @@ class Request:
         self,
         method: str,
         url: str,
-        params: Optional[Mapping[str, str]] = None,
-        headers: Optional[Mapping[str, str]] = None,
+        params: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
         data: Any = None,
         preload_content: bool = True,
         success_codes: Sequence[int] = (200,),
@@ -94,8 +89,8 @@ class Request:
     ) -> None:
         self.method: str = method
         self.url: str = url
-        self.params: Optional[Mapping[str, str]] = params
-        self.headers: Optional[Mapping[str, str]] = headers
+        self.params: Mapping[str, str] | None = params
+        self.headers: Mapping[str, str] | None = headers
         self.data: Any = data
         self.preload_content: bool = preload_content
         self.success_codes: Sequence[int] = success_codes
@@ -135,7 +130,7 @@ class Error(Exception):
         super().__init__(message, *args)
 
 
-def _extract_error(data: bytes) -> Tuple[Optional[str], Optional[str]]:
+def _extract_error(data: bytes) -> tuple[str | None, str | None]:
     if data.startswith(b"\xef\xbb\xbf<?xml"):
         try:
             result = xml.parse(data)
@@ -153,7 +148,7 @@ def _extract_error(data: bytes) -> Tuple[Optional[str], Optional[str]]:
 
 def _extract_error_from_response(
     response: "urllib3.BaseHTTPResponse",
-) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None, str | None]:
     err = None
     err_desc = None
     err_headers = None
@@ -175,15 +170,15 @@ class RequestFailure(Error):
         message: str,
         request_string: str,
         response_status: int,
-        error: Optional[str],
-        error_description: Optional[str],
-        error_headers: Optional[str] = None,
+        error: str | None,
+        error_description: str | None,
+        error_headers: str | None = None,
     ):
         self.request_string: str = request_string
         self.response_status: int = response_status
-        self.error: Optional[str] = error
-        self.error_description: Optional[str] = error_description
-        self.error_headers: Optional[str] = error_headers
+        self.error: str | None = error
+        self.error_description: str | None = error_description
+        self.error_headers: str | None = error_headers
         super().__init__(
             message,
             self.request_string,
@@ -255,8 +250,8 @@ class Stat(NamedTuple):
     size: int
     mtime: float
     ctime: float
-    md5: Optional[str]
-    version: Optional[str]
+    md5: str | None
+    version: str | None
 
 
 class DirEntry(NamedTuple):
@@ -264,7 +259,7 @@ class DirEntry(NamedTuple):
     name: str
     is_dir: bool
     is_file: bool
-    stat: Optional[Stat]
+    stat: Stat | None
 
 
 class PoolDirector:
@@ -291,7 +286,7 @@ class PoolDirector:
 
     # we don't want to serialize locks or other unpicklable objects
     # when this object is passed to concurrent.futures executors
-    def __getstate__(self) -> Dict[str, Any]:
+    def __getstate__(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items() if k not in ["lock", "pool_manager"]}
 
     def __setstate__(self, state: Any) -> None:
@@ -321,16 +316,16 @@ class Config:
         google_write_chunk_size: int,
         retry_log_threshold: int,
         retry_common_log_threshold: int,
-        retry_limit: Optional[int],
-        connect_timeout: Optional[int],
-        read_timeout: Optional[int],
+        retry_limit: int | None,
+        connect_timeout: int | None,
+        read_timeout: int | None,
         output_az_paths: bool,
         use_azure_storage_account_key_fallback: bool,
-        get_http_pool: Optional[Callable[[], urllib3.PoolManager]],
+        get_http_pool: Callable[[], urllib3.PoolManager] | None,
         use_streaming_read: bool,
         use_blind_writes: bool,
         default_buffer_size: int,
-        get_deadline: Optional[Callable[[], Optional[float]]],
+        get_deadline: Callable[[], float | None] | None,
         save_access_token_to_disk: bool,
         multiprocessing_start_method: str,
     ) -> None:
@@ -391,7 +386,7 @@ class WindowedFile:
         self._f.seek(new_pos, whence)
         self._pos = new_pos
 
-    def read(self, n: Optional[int] = None) -> Any:
+    def read(self, n: int | None = None) -> Any:
         assert self._pos <= self._end
         if n is None:
             n = self._end - self._pos
@@ -404,7 +399,7 @@ class WindowedFile:
         return buf
 
 
-_hostname_check_cache: Dict[str, Tuple[float, int]] = {}
+_hostname_check_cache: dict[str, tuple[float, int]] = {}
 
 
 def _check_hostname(hostname: str) -> int:
@@ -459,7 +454,7 @@ def _read_with_deadline(
     try:
         # the peek is done with the hopes that this will get any buffered data
         initial_data = fp.peek()
-    except socket.timeout:
+    except TimeoutError:
         raise Timeout("Timed out waiting for read")
 
     buf = bytearray(nbytes_to_read)
@@ -473,7 +468,7 @@ def _read_with_deadline(
         sock.settimeout(timeout)
         try:
             n = sock.recv_into(mv[nbytes_read:])
-        except socket.timeout:
+        except TimeoutError:
             raise Timeout("Timed out waiting for read")
         nbytes_read += n
     return bytes(buf)
@@ -668,7 +663,7 @@ class TokenManager:
     Automatically refresh tokens when they expire
     """
 
-    def __init__(self, get_token_fn: Callable[[Config, Any], Tuple[Any, float]], name: str) -> None:
+    def __init__(self, get_token_fn: Callable[[Config, Any], tuple[Any, float]], name: str) -> None:
         self._get_token_fn = get_token_fn
         self._tokens = {}
         self._expirations = {}
@@ -763,9 +758,9 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
 
     def __exit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         # Store the exception so that in close we can decide whether or not to write the file.
         self.had_exception = exc_val is not None
@@ -836,7 +831,7 @@ class BaseStreamingReadFile(io.RawIOBase):
         self.bytes_read = 0
 
     def _request_chunk(
-        self, streaming: bool, start: int, end: Optional[int] = None
+        self, streaming: bool, start: int, end: int | None = None
     ) -> "urllib3.BaseHTTPResponse":
         raise NotImplementedError
 
@@ -860,7 +855,7 @@ class BaseStreamingReadFile(io.RawIOBase):
         return b"".join(pieces)
 
     # https://bugs.python.org/issue27501
-    def readinto(self, b: Any) -> Optional[int]:
+    def readinto(self, b: Any) -> int | None:
         bytes_remaining = self._size - self._offset
         if bytes_remaining <= 0 or len(b) == 0:
             return 0
@@ -991,7 +986,7 @@ def block_md5(f: Any) -> bytes:
     return m.digest()
 
 
-def calc_range(start: Optional[int] = None, end: Optional[int] = None) -> str:
+def calc_range(start: int | None = None, end: int | None = None) -> str:
     # https://cloud.google.com/storage/docs/xml-api/get-object-download
     # oddly range requests are not mentioned in the JSON API, only in the XML api
     if start is not None and end is not None:
@@ -1032,7 +1027,7 @@ def path_join(a: str, b: str) -> str:
         segments = base_parts + b.split("/")
         segments[1:-1] = [s for s in segments[1:-1] if s != ""]
 
-    resolved_path: List[str] = []
+    resolved_path: list[str] = []
 
     for seg in segments:
         if seg == "..":

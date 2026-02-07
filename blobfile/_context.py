@@ -24,15 +24,10 @@ from typing import (
     BinaryIO,
     Callable,
     Iterator,
-    List,
     Literal,
     NamedTuple,
-    Optional,
     Sequence,
     TextIO,
-    Tuple,
-    Type,
-    Union,
     cast,
     overload,
 )
@@ -86,10 +81,10 @@ class Context:
         dst: RemoteOrLocalPath,
         overwrite: bool = False,
         parallel: bool = False,
-        parallel_executor: Optional[concurrent.futures.Executor] = None,
+        parallel_executor: concurrent.futures.Executor | None = None,
         return_md5: bool = False,
-        dst_version: Optional[str] = None,
-    ) -> Optional[str]:
+        dst_version: str | None = None,
+    ) -> str | None:
         src = path_to_str(src)
         dst = path_to_str(dst)
         # it would be best to check isdir() for remote paths, but that would
@@ -529,9 +524,7 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
-    def set_mtime(
-        self, path: RemoteOrLocalPath, mtime: float, version: Optional[str] = None
-    ) -> bool:
+    def set_mtime(self, path: RemoteOrLocalPath, mtime: float, version: str | None = None) -> bool:
         path = path_to_str(path)
         if _is_local_path(path):
             assert version is None
@@ -548,7 +541,7 @@ class Context:
         self,
         path: RemoteOrLocalPath,
         parallel: bool = False,
-        parallel_executor: Optional[concurrent.futures.Executor] = None,
+        parallel_executor: concurrent.futures.Executor | None = None,
     ) -> None:
         path = path_to_str(path)
         if not self.isdir(path):
@@ -639,8 +632,8 @@ class Context:
         self,
         top: RemoteOrLocalPath,
         topdown: bool = True,
-        onerror: Optional[Callable[[OSError], None]] = None,
-    ) -> Iterator[Tuple[str, Sequence[str], Sequence[str]]]:
+        onerror: Callable[[OSError], None] | None = None,
+    ) -> Iterator[tuple[str, Sequence[str], Sequence[str]]]:
         top = path_to_str(top)
         if not self.isdir(top):
             return
@@ -737,7 +730,7 @@ class Context:
             out = _join2(self._conf, out, b)
         return out
 
-    def get_url(self, path: RemoteOrLocalPath) -> Tuple[str, Optional[float]]:
+    def get_url(self, path: RemoteOrLocalPath) -> tuple[str, float | None]:
         path = path_to_str(path)
         if _is_gcp_path(path):
             return gcp.get_url(self._conf, path)
@@ -783,7 +776,7 @@ class Context:
             with self.BlobFile(path, "rb") as f:
                 return common.block_md5(f).hex()
 
-    def last_version_seen(self, file: TextIO | BinaryIO) -> Optional[str]:
+    def last_version_seen(self, file: TextIO | BinaryIO) -> str | None:
         actual: object
         actual = file
         if isinstance(actual, io.TextIOWrapper):
@@ -815,11 +808,11 @@ class Context:
         self,
         path: RemoteOrLocalPath,
         mode: Literal["rb", "wb", "ab"],
-        streaming: Optional[bool] = ...,
-        buffer_size: Optional[int] = ...,
-        cache_dir: Optional[str] = ...,
-        file_size: Optional[int] = None,
-        version: Optional[str] = None,
+        streaming: bool | None = ...,
+        buffer_size: int | None = ...,
+        cache_dir: str | None = ...,
+        file_size: int | None = None,
+        version: str | None = None,
         partial_writes_on_exc: bool = True,
     ) -> BinaryIO:
         ...
@@ -829,11 +822,11 @@ class Context:
         self,
         path: RemoteOrLocalPath,
         mode: Literal["r", "w", "a"] = ...,
-        streaming: Optional[bool] = ...,
-        buffer_size: Optional[int] = ...,
-        cache_dir: Optional[str] = ...,
-        file_size: Optional[int] = None,
-        version: Optional[str] = None,
+        streaming: bool | None = ...,
+        buffer_size: int | None = ...,
+        cache_dir: str | None = ...,
+        file_size: int | None = None,
+        version: str | None = None,
         partial_writes_on_exc: bool = True,
     ) -> TextIO:
         ...
@@ -842,11 +835,11 @@ class Context:
         self,
         path: RemoteOrLocalPath,
         mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r",
-        streaming: Optional[bool] = None,
-        buffer_size: Optional[int] = None,
-        cache_dir: Optional[str] = None,
-        file_size: Optional[int] = None,
-        version: Optional[str] = None,
+        streaming: bool | None = None,
+        buffer_size: int | None = None,
+        cache_dir: str | None = None,
+        file_size: int | None = None,
+        version: str | None = None,
         partial_writes_on_exc: bool = True,
     ):
         """
@@ -1125,7 +1118,7 @@ def _download_chunk(
 
 def _parallel_download(
     conf: Config, executor: concurrent.futures.Executor, src: str, dst: str, return_md5: bool
-) -> Optional[str]:
+) -> str | None:
     ctx = Context(conf=conf)
 
     s = ctx.stat(src)
@@ -1164,7 +1157,7 @@ def _string_overlap(s1: str, s2: str) -> int:
     return length
 
 
-def _split_path(path: str) -> List[str]:
+def _split_path(path: str) -> list[str]:
     # a/b/c => a/, b/, c
     # a/b/ => a/, b/
     # /a/b/c => /, a/, b/, c
@@ -1249,9 +1242,7 @@ class _GlobTaskComplete(NamedTuple):
     pass
 
 
-def _process_glob_task(
-    conf: Config, root: str, t: _GlobTask
-) -> Iterator[Union[_GlobTask, _GlobEntry]]:
+def _process_glob_task(conf: Config, root: str, t: _GlobTask) -> Iterator[_GlobTask | _GlobEntry]:
     cur = t.cur + t.rem[0]
     rem = t.rem[1:]
     if "**" in cur:
@@ -1287,7 +1278,7 @@ def _glob_worker(
     conf: Config,
     root: str,
     tasks: mp.Queue[_GlobTask],
-    results: mp.Queue[Union[_GlobEntry, _GlobTask, _GlobTaskComplete]],
+    results: mp.Queue[_GlobEntry | _GlobTask | _GlobTaskComplete],
 ) -> None:
     while True:
         t = tasks.get()
@@ -1359,7 +1350,7 @@ def _guess_isdir(path: str) -> bool:
     return False
 
 
-def _list_blobs(conf: Config, path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
+def _list_blobs(conf: Config, path: str, delimiter: str | None = None) -> Iterator[DirEntry]:
     params = {}
     if delimiter is not None:
         params["delimiter"] = delimiter
@@ -1392,7 +1383,7 @@ def _list_blobs_in_dir(conf: Config, prefix: str, exclude_prefix: bool) -> Itera
         yield entry
 
 
-def _get_entry(conf: Config, path: str) -> Optional[DirEntry]:
+def _get_entry(conf: Config, path: str) -> DirEntry | None:
     ctx = Context(conf)
     if _is_gcp_path(path):
         st = gcp.maybe_stat(conf, path)
@@ -1419,7 +1410,7 @@ def _get_entry(conf: Config, path: str) -> Optional[DirEntry]:
 
 
 def _sharded_listdir_worker(
-    conf: Config, prefixes: mp.Queue[Tuple[str, str, bool]], items: mp.Queue[Optional[DirEntry]]
+    conf: Config, prefixes: mp.Queue[tuple[str, str, bool]], items: mp.Queue[DirEntry | None]
 ) -> None:
     while True:
         base, prefix, exact = prefixes.get(True)
@@ -1470,9 +1461,9 @@ class _BufferedWriterForProxyFile(io.BufferedWriter):
 
     def __exit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         assert isinstance(self.raw, _ProxyFile)
         self.raw.had_exception = exc_val is not None
@@ -1486,9 +1477,9 @@ class _ProxyFile(io.FileIO):
         ctx: Context,
         local_path: str,
         mode: Literal["r", "rb", "w", "wb", "a", "ab"],
-        tmp_dir: Optional[str],
-        remote_path: Optional[str],
-        version: Optional[str],
+        tmp_dir: str | None,
+        remote_path: str | None,
+        version: str | None,
         partial_writes_on_exc: bool = True,
     ) -> None:
         super().__init__(local_path, mode=mode)
@@ -1535,16 +1526,16 @@ def create_context(
     google_write_chunk_size: int = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
     retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
     retry_common_log_threshold: int = DEFAULT_RETRY_COMMON_LOG_THRESHOLD,
-    retry_limit: Optional[int] = None,
-    connect_timeout: Optional[int] = DEFAULT_CONNECT_TIMEOUT,
-    read_timeout: Optional[int] = DEFAULT_READ_TIMEOUT,
+    retry_limit: int | None = None,
+    connect_timeout: int | None = DEFAULT_CONNECT_TIMEOUT,
+    read_timeout: int | None = DEFAULT_READ_TIMEOUT,
     output_az_paths: bool = True,
     use_azure_storage_account_key_fallback: bool = False,
-    get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
+    get_http_pool: Callable[[], urllib3.PoolManager] | None = None,
     use_streaming_read: bool = False,
     use_blind_writes: bool = DEFAULT_USE_BLIND_WRITES,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
-    get_deadline: Optional[Callable[[], float]] = None,
+    get_deadline: Callable[[], float] | None = None,
     save_access_token_to_disk: bool = True,
     multiprocessing_start_method: str = "spawn",
 ):

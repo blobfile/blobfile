@@ -599,13 +599,7 @@ def test_listdir_sharded(ctx):
         with bf.BlobFile(bf.join(dirpath, "c/a"), "wb") as w:
             w.write(contents)
         # this should also test shard_prefix_length=2 but that takes too long
-        assert sorted(bf.listdir(dirpath, shard_prefix_length=1)) == [
-            "a",
-            "aa",
-            "b",
-            "c",
-            "ca",
-        ]
+        assert sorted(bf.listdir(dirpath, shard_prefix_length=1)) == ["a", "aa", "b", "c", "ca"]
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
@@ -772,10 +766,10 @@ def test_scanglob(ctx):
                 normal_entries = sorted(bf.scanglob(bf.join(dirpath, pattern)))
                 parallel_entries = sorted(
                     bf.scanglob(
-                            bf.join(dirpath, pattern),
-                            parallel=True,
-                            shard_prefix_length=shard_prefix_length,
-                        )
+                        bf.join(dirpath, pattern),
+                        parallel=True,
+                        shard_prefix_length=shard_prefix_length,
+                    )
                 )
                 assert parallel_entries == normal_entries
 

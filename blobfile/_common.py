@@ -518,9 +518,14 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
         if DEFAULT_REDIRECT_RETRY_COUNT > 0:
             redirect = True
             retries = Retry(
-                total=DEFAULT_REDIRECT_RETRY_COUNT, connect=0, read=0, status=0,
+                total=DEFAULT_REDIRECT_RETRY_COUNT,
+                connect=0,
+                read=0,
+                status=0,
                 redirect=DEFAULT_REDIRECT_RETRY_COUNT,
-                raise_on_status=False, raise_on_redirect=False, backoff_factor=0.0,
+                raise_on_status=False,
+                raise_on_redirect=False,
+                backoff_factor=0.0,
             )
 
         err = None

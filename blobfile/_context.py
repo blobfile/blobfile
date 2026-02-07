@@ -18,6 +18,7 @@ import tempfile
 import time
 import urllib.parse
 from functools import partial
+from types import TracebackType
 from typing import (
     Any,
     BinaryIO,
@@ -30,6 +31,7 @@ from typing import (
     Sequence,
     TextIO,
     Tuple,
+    Type,
     Union,
     cast,
     overload,
@@ -150,7 +152,7 @@ class Context:
         for attempt, backoff in enumerate(common.exponential_sleep_generator()):
             try:
                 with self.BlobFile(src, "rb", streaming=True) as src_f, self.BlobFile(
-                    dst, "wb", streaming=True, version=dst_version
+                    dst, "wb", streaming=True, version=dst_version, partial_writes_on_exc=False
                 ) as dst_f:
                     m = hashlib.md5()
                     while True:
@@ -238,10 +240,16 @@ class Context:
                     name=self.basename(filepath),
                     is_dir=is_dir,
                     is_file=not is_dir,
-                    stat=None
-                    if is_dir
-                    else Stat(
-                        size=s.st_size, mtime=s.st_mtime, ctime=s.st_ctime, md5=None, version=None
+                    stat=(
+                        None
+                        if is_dir
+                        else Stat(
+                            size=s.st_size,
+                            mtime=s.st_mtime,
+                            ctime=s.st_ctime,
+                            md5=None,
+                            version=None,
+                        )
                     ),
                 )
         elif _is_gcp_path(pattern) or _is_azure_path(pattern):
@@ -795,11 +803,11 @@ class Context:
             return f.read()
 
     def write_text(self, path: RemoteOrLocalPath, text: str) -> None:
-        with self.BlobFile(path, "w") as f:
+        with self.BlobFile(path, "w", partial_writes_on_exc=False) as f:
             f.write(text)
 
     def write_bytes(self, path: RemoteOrLocalPath, data: bytes) -> None:
-        with self.BlobFile(path, "wb") as f:
+        with self.BlobFile(path, "wb", partial_writes_on_exc=False) as f:
             f.write(data)
 
     @overload
@@ -812,6 +820,7 @@ class Context:
         cache_dir: Optional[str] = ...,
         file_size: Optional[int] = None,
         version: Optional[str] = None,
+        partial_writes_on_exc: bool = True,
     ) -> BinaryIO:
         ...
 
@@ -825,6 +834,7 @@ class Context:
         cache_dir: Optional[str] = ...,
         file_size: Optional[int] = None,
         version: Optional[str] = None,
+        partial_writes_on_exc: bool = True,
     ) -> TextIO:
         ...
 
@@ -837,6 +847,7 @@ class Context:
         cache_dir: Optional[str] = None,
         file_size: Optional[int] = None,
         version: Optional[str] = None,
+        partial_writes_on_exc: bool = True,
     ):
         """
         Open a local or remote file for reading or writing
@@ -857,6 +868,7 @@ class Context:
             cache_dir: a directory in which to cache files for reading, only valid if `streaming=False` and `mode` is in `"r", "rb"`.   You are reponsible for cleaning up the cache directory.
             file_size: size of the file being opened, can be specified directly to avoid checking the file size when opening the file.  While this will avoid a network request, it also means that you may get an error when first reading a file that does not exist rather than when opening it.  Only valid for modes "r" and "rb".  This valid will be ignored for local files.
             version: a version number of the file being opened, used to prevent overwriting a file that has changed since it was opened.  Only valid for modes "w", "wb", "a", "ab"
+            partial_writes_on_exc: whether to write partially-written data to the file if an exception occurs. Only valid for writing modes, and otherwise ignored. For backwards compatibility, the default is True.
 
         Returns:
             A file-like object
@@ -891,16 +903,23 @@ class Context:
             if cache_dir is not None:
                 raise Error("Cannot specify cache_dir for streaming files")
             if _is_local_path(path):
+                # Note: io.FileIO eagerly creates the file if it doesn't exist. This behavior is different from the
+                # cloud file implementations below, where the file is only created once the chunks are finalized and
+                # committed.
                 f = io.FileIO(path, mode=mode)
                 if "r" in mode:
                     f = io.BufferedReader(f, buffer_size=buffer_size)
                 else:
+                    # We do not need to use _BufferedWriterForProxyFile, which is only needed for the case that the
+                    # underlying file is remote.
                     f = io.BufferedWriter(f, buffer_size=buffer_size)
             elif _is_gcp_path(path):
                 if version:
                     raise NotImplementedError("Cannot specify version for GCP files")
                 if mode in ("w", "wb"):
-                    f = gcp.StreamingWriteFile(self._conf, path)
+                    f = gcp.StreamingWriteFile(
+                        self._conf, path, partial_writes_on_exc=partial_writes_on_exc
+                    )
                 elif mode in ("r", "rb"):
                     f = gcp.StreamingReadFile(self._conf, path, size=file_size)
                     f = io.BufferedReader(f, buffer_size=buffer_size)
@@ -908,7 +927,9 @@ class Context:
                     raise Error(f"Unsupported mode: '{mode}'")
             elif _is_azure_path(path):
                 if mode in ("w", "wb"):
-                    f = azure.StreamingWriteFile(self._conf, path, version)
+                    f = azure.StreamingWriteFile(
+                        self._conf, path, version, partial_writes_on_exc=partial_writes_on_exc
+                    )
                 elif mode in ("r", "rb"):
                     f = azure.StreamingReadFile(self._conf, path, size=file_size, version=version)
                     f = io.BufferedReader(f, buffer_size=buffer_size)
@@ -1043,11 +1064,12 @@ class Context:
                 tmp_dir=tmp_dir,
                 remote_path=remote_path,
                 version=version,
+                partial_writes_on_exc=partial_writes_on_exc,
             )
             if "r" in mode:
                 f = io.BufferedReader(f, buffer_size=buffer_size)
             else:
-                f = io.BufferedWriter(f, buffer_size=buffer_size)
+                f = _BufferedWriterForProxyFile(f, buffer_size=buffer_size)
             binary_f = cast(BinaryIO, f)
             if "b" in mode:
                 return binary_f
@@ -1424,6 +1446,40 @@ def _join2(conf: Config, a: str, b: str) -> str:
         raise Error(f"Unrecognized path: '{a}'")
 
 
+class _BufferedWriterForProxyFile(io.BufferedWriter):
+    """
+    This class is needed preventing partial writes from being written in the non-streaming case.
+    Suppose a user does the following:
+
+    with bf.BlobFile("path", "wb", streaming=False, partial_writes_on_exc=False) as f:
+        f.write(b"meow")
+        f.write(b"woof")
+
+    and an exception occurs after the first write. Since partial_writes_on_exc is False, we do not
+    want either of the writes to occur. The object returned by bf.BlobFile used to be an
+    io.BufferedWriter wrapping a _ProxyFile. When an exception occurred, the __exit__ method of the
+    io.BufferedWriter would be invoked, that would call the close() method of the _ProxyFile, and
+    then the _ProxyFile would copy the local (proxy) file to the remote file. But at that point, the
+    close method would have no idea that it's being invoked from exceptional context, and will copy
+    the file.
+
+    To fix this, we wrap the io.BufferedWriter with this class, which forwards whether an exception
+    occurred to the underlying raw object, i.e. the _ProxyFile. This class is designed to solve
+    *only* this problem, and should never be used for any other purpose.
+    """
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
+        assert isinstance(self.raw, _ProxyFile)
+        self.raw.had_exception = exc_val is not None
+
+        return super().__exit__(exc_type, exc_val, exc_tb)
+
+
 class _ProxyFile(io.FileIO):
     def __init__(
         self,
@@ -1433,6 +1489,7 @@ class _ProxyFile(io.FileIO):
         tmp_dir: Optional[str],
         remote_path: Optional[str],
         version: Optional[str],
+        partial_writes_on_exc: bool = True,
     ) -> None:
         super().__init__(local_path, mode=mode)
         self._ctx = ctx
@@ -1443,13 +1500,19 @@ class _ProxyFile(io.FileIO):
         self._closed = False
         self._version = version
 
+        self._partial_writes_on_exc = partial_writes_on_exc
+        self.had_exception: bool = False
+
     def close(self) -> None:
         if not hasattr(self, "_closed") or self._closed:
             return
 
         super().close()
         try:
-            if self._remote_path is not None and self._mode in ("w", "wb", "a", "ab"):
+            mode_should_write = self._mode in ("w", "wb", "a", "ab")
+            should_do_write = not self.had_exception or self._partial_writes_on_exc
+
+            if self._remote_path is not None and mode_should_write and should_do_write:
                 self._ctx.copy(
                     self._local_path, self._remote_path, overwrite=True, dst_version=self._version
                 )

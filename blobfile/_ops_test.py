@@ -1026,7 +1026,6 @@ def test_more_exists():
 def test_invalid_paths(base_path):
     for suffix in ["", "/", "//", "/invalid.file", "/invalid/dir/"]:
         path = base_path + suffix
-        print(path)
         if path.endswith("/"):
             expected_error = IsADirectoryError
         else:
@@ -1152,7 +1151,7 @@ def test_cache_dir(ctx):
 def test_change_file_size(ctx, use_random):
     chunk_size = 8 * 2**20
     long_contents = b"\x00" * chunk_size * 3
-    short_contents = b"\xFF" * chunk_size * 2
+    short_contents = b"\xff" * chunk_size * 2
     if use_random:
         long_contents = os.urandom(len(long_contents))
         short_contents = os.urandom(len(short_contents))
@@ -1193,7 +1192,7 @@ def test_change_file_size(ctx, use_random):
 def test_overwrite_while_reading(ctx):
     chunk_size = 8 * 2**20
     contents = b"\x00" * chunk_size * 2
-    alternative_contents = b"\xFF" * chunk_size * 4
+    alternative_contents = b"\xff" * chunk_size * 4
     with ctx() as path:
         with bf.BlobFile(path, "wb") as f:
             f.write(contents)
@@ -1223,6 +1222,29 @@ def test_create_local_intermediate_dirs():
             ]:
                 with bf.BlobFile(filepath, "wb") as f:
                     f.write(contents)
+
+
+@pytest.mark.parametrize("partial_writes_on_exc", [True, False])
+@pytest.mark.parametrize("streaming", [True, False])
+@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+def test_partial_writes_on_exc(partial_writes_on_exc, streaming, ctx):
+    with ctx() as path:
+        try:
+            with bf.BlobFile(
+                path, "wb", streaming=streaming, partial_writes_on_exc=partial_writes_on_exc
+            ) as w:
+                w.write(b"meow")
+                raise InterruptedError("interrupted while writing")
+        except InterruptedError:
+            pass
+
+        # Local paths are special in that they are created even if the write is exceptional.
+        is_local_path = ctx == _get_temp_local_path
+        if partial_writes_on_exc or is_local_path:
+            assert bf.exists(path)
+            assert bf.read_bytes(path) == b"meow"
+        else:
+            assert not bf.exists(path)
 
 
 @pytest.mark.parametrize("binary", [True, False])
@@ -1686,7 +1708,7 @@ def test_use_blind_writes_skips_uncommited_blocks_check():
     ctx = bf.create_context(use_blind_writes=True)
     path = f"https://{AS_TEST_ACCOUNT}.blob.core.windows.net/{AS_TEST_CONTAINER}/file"
     with unittest.mock.patch("blobfile._azure.execute_api_request") as mock_exec:
-        azure.StreamingWriteFile(ctx._conf, path, None)
+        azure.StreamingWriteFile(ctx._conf, path, None, partial_writes_on_exc=True)
         for call in mock_exec.call_args_list:
             assert call.args[1].method in ("PUT", "POST")
 

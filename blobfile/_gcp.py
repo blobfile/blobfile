@@ -442,7 +442,7 @@ class StreamingReadFile(BaseStreamingReadFile):
 
 
 class StreamingWriteFile(BaseStreamingWriteFile):
-    def __init__(self, conf: Config, path: str) -> None:
+    def __init__(self, conf: Config, path: str, partial_writes_on_exc: bool) -> None:
         bucket, name = split_path(path)
         req = Request(
             url=build_url("/upload/storage/v1/b/{bucket}/o?uploadType=resumable", bucket=bucket),
@@ -456,7 +456,11 @@ class StreamingWriteFile(BaseStreamingWriteFile):
         self._upload_url = resp.headers["Location"]
         # https://cloud.google.com/storage/docs/json_api/v1/how-tos/resumable-upload
         assert conf.google_write_chunk_size % (256 * 1024) == 0
-        super().__init__(conf=conf, chunk_size=conf.google_write_chunk_size)
+        super().__init__(
+            conf=conf,
+            chunk_size=conf.google_write_chunk_size,
+            partial_writes_on_exc=partial_writes_on_exc,
+        )
 
     def _upload_chunk(self, chunk: memoryview, finalize: bool) -> None:
         offset = self._offset
@@ -592,7 +596,7 @@ def parallel_upload(
     s = os.stat(src)
     if s.st_size == 0:
         # write an empty file, the normal upload requires at least one part
-        with StreamingWriteFile(conf, dst) as f:
+        with StreamingWriteFile(conf, dst, partial_writes_on_exc=True) as f:
             pass
         return hexdigest if return_md5 else None
 

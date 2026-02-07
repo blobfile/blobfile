@@ -7,6 +7,7 @@ import socket
 import ssl
 import threading
 import time
+from types import TracebackType
 import urllib.parse
 from typing import (
     Any,
@@ -20,6 +21,7 @@ from typing import (
     Protocol,
     Sequence,
     Tuple,
+    Type,
     Union,
     runtime_checkable,
 )
@@ -731,12 +733,15 @@ class TokenManager:
 
 
 class BaseStreamingWriteFile(io.BufferedIOBase):
-    def __init__(self, conf: Config, chunk_size: int) -> None:
+    def __init__(self, conf: Config, chunk_size: int, partial_writes_on_exc: bool) -> None:
         self._offset = 0
         # contents waiting to be uploaded
         self._buf = bytearray()
         self._chunk_size = chunk_size
         self._conf = conf
+
+        self.partial_writes_on_exc = partial_writes_on_exc
+        self.had_exception: bool = False
 
     def _upload_chunk(self, chunk: memoryview, finalize: bool) -> None:
         raise NotImplementedError
@@ -756,13 +761,26 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
             del chunk, buf  # pyright: ignore[reportPossiblyUnboundVariable]
         return size
 
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
+        # Store the exception so that in close we can decide whether or not to write the file.
+        self.had_exception = exc_val is not None
+        super().__exit__(exc_type, exc_val, exc_tb)
+
     def close(self) -> None:
         if self.closed:
             return
 
-        # we will have a partial remaining buffer at this point, upload it
-        size = self._upload_buf(memoryview(self._buf), finalize=True)
-        assert size == len(self._buf)
+        if not self.had_exception or self.partial_writes_on_exc:
+            # we will have a partial remaining buffer at this point, upload it
+            size = self._upload_buf(memoryview(self._buf), finalize=True)
+            assert size == len(self._buf)
+
+        # Always clear the buffer whether or not we uploaded the file
         self._buf = bytearray()
         super().close()
 

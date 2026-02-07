@@ -1247,7 +1247,7 @@ class _GlobTaskComplete(NamedTuple):
 
 def _process_glob_task(
     conf: Config, root: str, t: _GlobTask
-) -> Iterator[Union[_GlobTask, _GlobEntry]]:
+) -> Iterator[_GlobTask | _GlobEntry]:
     cur = t.cur + t.rem[0]
     rem = t.rem[1:]
     if "**" in cur:
@@ -1283,7 +1283,7 @@ def _glob_worker(
     conf: Config,
     root: str,
     tasks: mp.Queue[_GlobTask],
-    results: mp.Queue[Union[_GlobEntry, _GlobTask, _GlobTaskComplete]],
+    results: mp.Queue[_GlobEntry | _GlobTask | _GlobTaskComplete],
 ) -> None:
     while True:
         t = tasks.get()

@@ -20,7 +20,7 @@ def parse(document: bytes, repeated_tags: set[str] | None = None) -> dict[str, A
     return {root.tag: children}
 
 
-def _recursive_dict(elem: Element, repeated_tags: set[str]) -> Union[dict[str, Any], str | None]:
+def _recursive_dict(elem: Element, repeated_tags: set[str]) -> dict[str, Any] | str | None:
     if len(elem) == 0:
         return elem.text
     else:

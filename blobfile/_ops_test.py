@@ -1238,7 +1238,9 @@ def test_partial_writes_on_exc(partial_writes_on_exc, streaming, ctx):
         except InterruptedError:
             pass
 
-        if partial_writes_on_exc:
+        # Local paths are special in that they are created even if the write is exceptional.
+        is_local_path = ctx == _get_temp_local_path
+        if partial_writes_on_exc or is_local_path:
             assert bf.exists(path)
             assert bf.read_bytes(path) == b"meow"
         else:

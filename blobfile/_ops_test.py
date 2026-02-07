@@ -219,10 +219,10 @@ def test_basename():
 
 
 def test_rejects_provider_like_local_paths():
-    with pytest.raises(bf.Error, match="unsupported remote path"):
+    with pytest.raises(bf.Error, match="Unrecognized path: 's3://bucket'"):
         bf.exists("s3://bucket")
 
-    with pytest.raises(bf.Error, match="unsupported remote path"):
+    with pytest.raises(bf.Error, match="Unrecognized path: 's3://bucket/obj'"):
         bf.BlobFile("s3://bucket/obj", "rb")
 
 

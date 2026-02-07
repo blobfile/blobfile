@@ -524,9 +524,7 @@ class Context:
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
-    def set_mtime(
-        self, path: RemoteOrLocalPath, mtime: float, version: str | None = None
-    ) -> bool:
+    def set_mtime(self, path: RemoteOrLocalPath, mtime: float, version: str | None = None) -> bool:
         path = path_to_str(path)
         if _is_local_path(path):
             assert version is None
@@ -1244,9 +1242,7 @@ class _GlobTaskComplete(NamedTuple):
     pass
 
 
-def _process_glob_task(
-    conf: Config, root: str, t: _GlobTask
-) -> Iterator[_GlobTask | _GlobEntry]:
+def _process_glob_task(conf: Config, root: str, t: _GlobTask) -> Iterator[_GlobTask | _GlobEntry]:
     cur = t.cur + t.rem[0]
     rem = t.rem[1:]
     if "**" in cur:

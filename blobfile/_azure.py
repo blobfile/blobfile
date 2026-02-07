@@ -1027,9 +1027,7 @@ def create_page_iterator(
 
 
 class StreamingReadFile(BaseStreamingReadFile):
-    def __init__(
-        self, conf: Config, path: str, size: int | None, version: str | None
-    ) -> None:
+    def __init__(self, conf: Config, path: str, size: int | None, version: str | None) -> None:
         self._version: str | None = version
         if size is None:
             st = maybe_stat(conf, path, version=version)

@@ -2,15 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
-from typing import (
-    BinaryIO,
-    Callable,
-    Iterator,
-    Literal,
-    Sequence,
-    TextIO,
-    overload,
-)
+from typing import BinaryIO, Callable, Iterator, Literal, Sequence, TextIO, overload
 
 import urllib3
 
@@ -255,9 +247,7 @@ def rmtree(
 
 
 def walk(
-    top: RemoteOrLocalPath,
-    topdown: bool = True,
-    onerror: Callable[[OSError], None] | None = None,
+    top: RemoteOrLocalPath, topdown: bool = True, onerror: Callable[[OSError], None] | None = None
 ) -> Iterator[tuple[str, Sequence[str], Sequence[str]]]:
     """
     Walk a directory tree in a similar manner to os.walk

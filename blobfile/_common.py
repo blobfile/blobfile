@@ -328,6 +328,7 @@ class Config:
         use_azure_storage_account_key_fallback: bool,
         get_http_pool: Optional[Callable[[], urllib3.PoolManager]],
         use_streaming_read: bool,
+        eagerly_get_size: bool,
         use_blind_writes: bool,
         default_buffer_size: int,
         get_deadline: Optional[Callable[[], Optional[float]]],
@@ -347,6 +348,7 @@ class Config:
         self.output_az_paths = output_az_paths
         self.use_azure_storage_account_key_fallback = use_azure_storage_account_key_fallback
         self.use_streaming_read = use_streaming_read
+        self.eagerly_get_size = eagerly_get_size
         self.use_blind_writes = use_blind_writes
         self.default_buffer_size = default_buffer_size
         self.get_deadline = get_deadline
@@ -823,10 +825,10 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
 
 
 class BaseStreamingReadFile(io.RawIOBase):
-    def __init__(self, conf: Config, path: str, size: int) -> None:
+    def __init__(self, conf: Config, path: str, size: Optional[int]) -> None:
         super().__init__()
         self._conf = conf
-        self._size = size
+        self._size: Optional[int] = size
         self._path = path
         # current reading byte offset in the file
         self._offset = 0
@@ -848,10 +850,17 @@ class BaseStreamingReadFile(io.RawIOBase):
         # instead, read into a buffer and return the buffer
         pieces = []
         while True:
-            bytes_remaining = self._size - self._offset
-            assert bytes_remaining >= 0, "read more bytes than expected"
-            # if a user doesn't like this value, it is easy to use .read(size) directly
-            opt_piece = self.read(min(CHUNK_SIZE, bytes_remaining))
+            if self._size is None:
+                to_read = CHUNK_SIZE
+            else:
+                bytes_remaining = self._size - self._offset
+                assert bytes_remaining >= 0, "read more bytes than expected"
+                if bytes_remaining == 0:
+                    break
+                # if a user doesn't like this value, it is easy to use .read(size) directly
+                to_read = min(CHUNK_SIZE, bytes_remaining)
+
+            opt_piece = self.read(to_read)
             assert opt_piece is not None, "file is in non-blocking mode"
             piece = opt_piece
             if len(piece) == 0:
@@ -861,15 +870,21 @@ class BaseStreamingReadFile(io.RawIOBase):
 
     # https://bugs.python.org/issue27501
     def readinto(self, b: Any) -> Optional[int]:
-        bytes_remaining = self._size - self._offset
-        if bytes_remaining <= 0 or len(b) == 0:
+        if self._size is None:
+            bytes_remaining: Optional[int] = None
+        else:
+            bytes_remaining = self._size - self._offset
+            if bytes_remaining <= 0:
+                return 0
+
+        if len(b) == 0:
             return 0
 
         # make sure we can slice the memoryview below
         if not isinstance(b, memoryview):
             b = memoryview(b)
 
-        if len(b) > bytes_remaining:
+        if bytes_remaining is not None and len(b) > bytes_remaining:
             # if we get a file that was larger than we expected, don't read the extra data
             b = b[:bytes_remaining]
 
@@ -944,7 +959,7 @@ class BaseStreamingReadFile(io.RawIOBase):
         elif whence == io.SEEK_CUR:
             new_offset = self._offset + offset
         elif whence == io.SEEK_END:
-            new_offset = self._size + offset
+            new_offset = self.get_size() + offset
         else:
             raise ValueError(
                 f"Invalid whence ({whence}, should be {io.SEEK_SET}, {io.SEEK_CUR}, or {io.SEEK_END})"
@@ -955,6 +970,11 @@ class BaseStreamingReadFile(io.RawIOBase):
                 self._f.close()
             self._f = None
         return self._offset
+
+    def get_size(self) -> int:
+        # If the subclass passes in size None, it must implement get_size().
+        assert self._size is not None, "subclass must implement get_size"
+        return self._size
 
     def tell(self) -> int:
         return self._offset

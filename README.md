@@ -84,6 +84,7 @@ There are a few bonus functions:
     * `use_azure_storage_account_key_fallback=False`: fallback to storage account keys for azure containers, having this enabled requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
     * `get_http_pool=None`: a function that returns a `urllib3.PoolManager` to be used for requests
     * `use_streaming_read=False`: if set to `True`, use a single read per file instead of reading a chunk at a time (not recommended for azure)
+    * `eagerly_get_size=False`: if set to `True`, eagerly retrieve the size of remote files before reading them (Azure only). Defaults to False unless `BLOBFILE_EAGERLY_GET_SIZE` is set to `1`.
     * `use_blind_writes=False`: if set to `True`, skip certain read checks during Azure writes. Defaults to checking if `BLOBFILE_USE_BLIND_WRITES` is set to `1`.
     * `default_buffer_size=io.DEFAULT_BUFFER_SIZE`: the default buffer size to use for reading files (and writing local files)
     * `save_access_token_to_disk=True`: if set to `True` to save access tokens to disk so that other processes can read the access tokens to avoid the small amount of time it usually takes to get a token (if the token is still valid).

@@ -1031,7 +1031,7 @@ class StreamingReadFile(BaseStreamingReadFile):
         self, conf: Config, path: str, size: Optional[int], version: Optional[str]
     ) -> None:
         self._version: Optional[str] = version
-        if size is None:
+        if size is None and conf.eagerly_get_size:
             st = maybe_stat(conf, path, version=version)
             if st is None:
                 raise FileNotFoundError(f"No such file or directory: '{path}'")
@@ -1043,21 +1043,47 @@ class StreamingReadFile(BaseStreamingReadFile):
         self, streaming: bool, start: int, end: Optional[int] = None
     ) -> "urllib3.BaseHTTPResponse":
         account, container, blob = split_path(self._path)
+        if not blob:
+            raise FileNotFoundError(f"No such file or directory: '{self._path}'")
         headers = {"Range": common.calc_range(start=start, end=end)}
         if self._version is not None:
             headers["If-Match"] = self._version
+        success_codes = [206, 416]
+        if self._size is None:
+            # We haven't yet validated that the file exists, so we want to
+            # accept 404s and INVALID_HOSTNAME_STATUS so we can provide a more
+            # helpful exception.
+            success_codes.extend([404, INVALID_HOSTNAME_STATUS])
         req = Request(
             url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
             method="GET",
             headers=headers,
-            success_codes=(206, 416),
+            success_codes=success_codes,
             # if we are streaming the data, make
             # sure we don't preload it
             preload_content=not streaming,
         )
         resp = execute_api_request(self._conf, req)
+        if resp.status in (404, INVALID_HOSTNAME_STATUS):
+            raise FileNotFoundError(f"No such file or directory: '{self._path}'")
         self._version = self._version or resp.headers.get("ETag")
+        # Opportunistically set size if it's not already set.
+        # This works whether we get a 206 or 416.
+        if self._size is None:
+            content_range = resp.headers.get("Content-Range")
+            assert content_range is not None, "Content-Range header missing from response"
+            self._size = int(content_range.rsplit("/", 1)[1])
         return resp
+
+    def get_size(self) -> int:
+        if self._size is None:
+            st = maybe_stat(self._conf, self._path, version=self._version)
+            if st is None:
+                raise FileNotFoundError(f"No such file or directory: '{self._path}'")
+            self._size = st.size
+            if self._version is None:
+                self._version = st.version
+        return super().get_size()
 
 
 class StreamingWriteFile(BaseStreamingWriteFile):

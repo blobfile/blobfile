@@ -69,6 +69,7 @@ DEFAULT_RETRY_COMMON_LOG_THRESHOLD = 2
 DEFAULT_CONNECT_TIMEOUT = 10
 DEFAULT_READ_TIMEOUT = 30
 DEFAULT_BUFFER_SIZE = 8 * 2**20
+DEFAULT_EAGERLY_GET_SIZE = os.getenv("BLOBFILE_EAGERLY_GET_SIZE", "0") == "1"
 DEFAULT_USE_BLIND_WRITES = os.getenv("BLOBFILE_USE_BLIND_WRITES", "0") == "1"
 
 
@@ -1542,6 +1543,7 @@ def create_context(
     use_azure_storage_account_key_fallback: bool = False,
     get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
     use_streaming_read: bool = False,
+    eagerly_get_size: bool = DEFAULT_EAGERLY_GET_SIZE,
     use_blind_writes: bool = DEFAULT_USE_BLIND_WRITES,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
     get_deadline: Optional[Callable[[], float]] = None,
@@ -1566,6 +1568,7 @@ def create_context(
         use_azure_storage_account_key_fallback=use_azure_storage_account_key_fallback,
         get_http_pool=get_http_pool,
         use_streaming_read=use_streaming_read,
+        eagerly_get_size=eagerly_get_size,
         default_buffer_size=default_buffer_size,
         use_blind_writes=use_blind_writes,
         get_deadline=get_deadline,

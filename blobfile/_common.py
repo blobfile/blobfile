@@ -454,7 +454,7 @@ def _read_with_deadline(
     try:
         # the peek is done with the hopes that this will get any buffered data
         initial_data = fp.peek()
-    except socket.timeout:
+    except TimeoutError:
         raise Timeout("Timed out waiting for read")
 
     buf = bytearray(nbytes_to_read)
@@ -468,7 +468,7 @@ def _read_with_deadline(
         sock.settimeout(timeout)
         try:
             n = sock.recv_into(mv[nbytes_read:])
-        except socket.timeout:
+        except TimeoutError:
             raise Timeout("Timed out waiting for read")
         nbytes_read += n
     return bytes(buf)

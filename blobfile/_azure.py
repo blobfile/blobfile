@@ -389,7 +389,7 @@ def sign_with_shared_key(req: Request, key: str) -> str:
     u = urllib.parse.urlparse(req.url)
     storage_account = u.netloc.split(".")[0]
     canonical_url = f"/{storage_account}/{u.path[1:]}"
-    canonicalized_resource = "\n".join([canonical_url] + list(sorted(params_to_sign)))
+    canonicalized_resource = "\n".join([canonical_url] + sorted(params_to_sign))
 
     if req.headers is None:
         headers = {}

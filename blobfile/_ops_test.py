@@ -555,9 +555,9 @@ def test_listdir(ctx):
             w.write(contents)
         bf.makedirs(bf.join(dirpath, "c"))
         expected = ["a", "b", "c"]
-        assert sorted(list(bf.listdir(dirpath))) == expected
+        assert sorted(bf.listdir(dirpath)) == expected
         dirpath = _convert_https_to_az(dirpath)
-        assert sorted(list(bf.listdir(dirpath))) == expected
+        assert sorted(bf.listdir(dirpath)) == expected
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
@@ -572,7 +572,7 @@ def test_scandir(ctx):
         with bf.BlobFile(b_path, "wb") as w:
             w.write(contents)
         bf.makedirs(bf.join(dirpath, "c"))
-        entries = sorted(list(bf.scandir(dirpath)))
+        entries = sorted(bf.scandir(dirpath))
         assert [e.name for e in entries] == ["a", "b", "c"]
         assert [e.path for e in entries] == [bf.join(dirpath, name) for name in ["a", "b", "c"]]
         assert [e.is_dir for e in entries] == [False, False, True]
@@ -599,7 +599,7 @@ def test_listdir_sharded(ctx):
         with bf.BlobFile(bf.join(dirpath, "c/a"), "wb") as w:
             w.write(contents)
         # this should also test shard_prefix_length=2 but that takes too long
-        assert sorted(list(bf.listdir(dirpath, shard_prefix_length=1))) == [
+        assert sorted(bf.listdir(dirpath, shard_prefix_length=1)) == [
             "a",
             "aa",
             "b",
@@ -647,7 +647,7 @@ def test_local_glob(ctx):
 
         def assert_listing_equal(path, desired):
             desired = sorted([bf.join(dirpath, p) for p in desired])
-            actual = sorted(list(bf.glob(path)))
+            actual = sorted(bf.glob(path))
             assert actual == desired, f"{actual} != {desired}"
 
         # example patterns (didn't add tests for all these)
@@ -691,7 +691,7 @@ def test_glob(ctx, parallel):
 
         def assert_listing_equal(path, desired):
             desired = sorted([bf.join(dirpath, p) for p in desired])
-            actual = sorted(list(bf.glob(path, parallel=parallel)))
+            actual = sorted(bf.glob(path, parallel=parallel))
             assert actual == desired, f"{actual} != {desired}"
 
         assert_listing_equal(bf.join(dirpath, "*b"), ["ab", "bb"])
@@ -762,28 +762,26 @@ def test_scanglob(ctx):
         with bf.BlobFile(path, "wb") as f:
             f.write(contents)
 
-        entries = sorted(list(bf.scanglob(bf.join(dirpath, "*b*"))))
+        entries = sorted(bf.scanglob(bf.join(dirpath, "*b*")))
         assert entries[0].name == "ab" and entries[0].is_file
         assert entries[1].name == "bb" and entries[1].is_file
         assert entries[2].name == "subdir" and entries[2].is_dir
 
         for shard_prefix_length in [0, 1]:
             for pattern in ["*b", "b*", "**", "b**", "**t", "*b*"]:
-                normal_entries = sorted(list(bf.scanglob(bf.join(dirpath, pattern))))
+                normal_entries = sorted(bf.scanglob(bf.join(dirpath, pattern)))
                 parallel_entries = sorted(
-                    list(
-                        bf.scanglob(
+                    bf.scanglob(
                             bf.join(dirpath, pattern),
                             parallel=True,
                             shard_prefix_length=shard_prefix_length,
                         )
-                    )
                 )
                 assert parallel_entries == normal_entries
 
         if "://" in path:
             # ** behaves a bit differently on local paths, so don't check those
-            entries = sorted(list(bf.scanglob(bf.join(dirpath, "**"))))
+            entries = sorted(bf.scanglob(bf.join(dirpath, "**")))
             assert entries[0].name == "ab" and entries[0].is_file
             assert entries[1].name == "bb" and entries[1].is_file
             assert entries[2].name == "subdir" and entries[2].is_dir
@@ -1309,7 +1307,7 @@ def test_more_read_write(binary, streaming, ctx):
             assert r.readlines() == lines
 
         with bf.BlobFile(path, read_mode, streaming=streaming) as r:
-            assert [line for line in r] == lines
+            assert list(r) == lines
 
         if binary:
             for size in [2 * 2**20, 12_345_678]:

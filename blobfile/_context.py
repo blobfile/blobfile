@@ -163,7 +163,7 @@ class Context:
                     if return_md5:
                         return m.hexdigest()
                     else:
-                        return
+                        return None
             except RestartableStreamingWriteFailure as err:
                 # currently this is the only type of failure we retry, since we can re-read the source
                 # stream from the beginning

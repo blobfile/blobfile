@@ -146,9 +146,12 @@ class Context:
 
         for attempt, backoff in enumerate(common.exponential_sleep_generator()):
             try:
-                with self.BlobFile(src, "rb", streaming=True) as src_f, self.BlobFile(
-                    dst, "wb", streaming=True, version=dst_version, partial_writes_on_exc=False
-                ) as dst_f:
+                with (
+                    self.BlobFile(src, "rb", streaming=True) as src_f,
+                    self.BlobFile(
+                        dst, "wb", streaming=True, version=dst_version, partial_writes_on_exc=False
+                    ) as dst_f,
+                ):
                     m = hashlib.md5()
                     while True:
                         block = src_f.read(CHUNK_SIZE)
@@ -814,8 +817,7 @@ class Context:
         file_size: int | None = None,
         version: str | None = None,
         partial_writes_on_exc: bool = True,
-    ) -> BinaryIO:
-        ...
+    ) -> BinaryIO: ...
 
     @overload
     def BlobFile(
@@ -828,8 +830,7 @@ class Context:
         file_size: int | None = None,
         version: str | None = None,
         partial_writes_on_exc: bool = True,
-    ) -> TextIO:
-        ...
+    ) -> TextIO: ...
 
     def BlobFile(
         self,

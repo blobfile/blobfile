@@ -163,7 +163,7 @@ class Context:
                     if return_md5:
                         return m.hexdigest()
                     else:
-                        return
+                        return None
             except RestartableStreamingWriteFailure as err:
                 # currently this is the only type of failure we retry, since we can re-read the source
                 # stream from the beginning
@@ -1290,7 +1290,7 @@ def _glob_worker(
 
 def _local_glob(pattern: str) -> Iterator[str]:
     normalized_pattern = os.path.normpath(pattern)
-    if pattern.endswith("/") or pattern.endswith("\\"):
+    if pattern.endswith(("/", "\\")):
         # normpath will remove a trailing separator
         # but these affect the output of the glob
         normalized_pattern += os.sep

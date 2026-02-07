@@ -772,7 +772,7 @@ def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> str | Non
             if return_md5:
                 return get_md5(result["resource"])
             else:
-                return
+                return None
         params["rewriteToken"] = result["rewriteToken"]
 
 

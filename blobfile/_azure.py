@@ -389,7 +389,7 @@ def sign_with_shared_key(req: Request, key: str) -> str:
     u = urllib.parse.urlparse(req.url)
     storage_account = u.netloc.split(".")[0]
     canonical_url = f"/{storage_account}/{u.path[1:]}"
-    canonicalized_resource = "\n".join([canonical_url] + list(sorted(params_to_sign)))
+    canonicalized_resource = "\n".join([canonical_url] + sorted(params_to_sign))
 
     if req.headers is None:
         headers = {}
@@ -878,11 +878,11 @@ def _clear_uncommitted_blocks(
     req = Request(url=url, params=dict(comp="blocklist"), method="GET", success_codes=(200, 404))
     resp = execute_api_request(conf, req)
     if resp.status != 200:
-        return
+        return None
 
     result = xml.parse(resp.data, repeated_tags={"Block"})
     if result["BlockList"]["CommittedBlocks"] is None:
-        return
+        return None
 
     blocks = result["BlockList"]["CommittedBlocks"]["Block"]
     body = {"BlockList": {"Latest": [b["Name"] for b in blocks]}}
@@ -1578,7 +1578,7 @@ def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> str | Non
         st = maybe_stat(conf, dst)
         if st is not None and st.version == etag:
             return st.md5
-    return
+    return None
 
 
 def join_paths(conf: Config, url: str, relpath: str) -> str:

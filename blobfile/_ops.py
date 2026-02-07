@@ -7,10 +7,8 @@ from typing import (
     Callable,
     Iterator,
     Literal,
-    Optional,
     Sequence,
     TextIO,
-    Tuple,
     overload,
 )
 

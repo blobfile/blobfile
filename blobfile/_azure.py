@@ -11,7 +11,7 @@ import os
 import re
 import time
 import urllib.parse
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Iterator, Mapping, Optional, Sequence
 
 import urllib3
 

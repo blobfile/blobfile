@@ -10,7 +10,7 @@ import platform
 import socket
 import time
 import urllib.parse
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
+from typing import Any, Iterator, Mapping
 
 import urllib3
 

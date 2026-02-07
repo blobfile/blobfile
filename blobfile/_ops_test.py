@@ -14,7 +14,6 @@ import tempfile
 import time
 import unittest.mock
 import urllib.request
-import warnings
 import zipfile
 
 import numpy as np

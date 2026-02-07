@@ -12,16 +12,11 @@ import urllib.parse
 from typing import (
     Any,
     Callable,
-    Dict,
     Iterator,
-    List,
     Mapping,
     NamedTuple,
-    Optional,
     Protocol,
     Sequence,
-    Tuple,
-    Type,
     Union,
     runtime_checkable,
 )

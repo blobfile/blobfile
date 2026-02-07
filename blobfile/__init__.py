@@ -36,7 +36,7 @@ from blobfile._ops import walk as walk
 from blobfile._ops import write_bytes as write_bytes
 from blobfile._ops import write_text as write_text
 
-__version__ = "3.1.0"
+__version__ = "3.2.0"
 
 __all__ = [
     "copy",

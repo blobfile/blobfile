@@ -46,12 +46,12 @@ def configure(
     google_write_chunk_size: int = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
     retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
     retry_common_log_threshold: int = DEFAULT_RETRY_COMMON_LOG_THRESHOLD,
-    retry_limit: Optional[int] = None,
-    connect_timeout: Optional[int] = DEFAULT_CONNECT_TIMEOUT,
-    read_timeout: Optional[int] = DEFAULT_READ_TIMEOUT,
+    retry_limit: int | None = None,
+    connect_timeout: int | None = DEFAULT_CONNECT_TIMEOUT,
+    read_timeout: int | None = DEFAULT_READ_TIMEOUT,
     output_az_paths: bool = True,
     use_azure_storage_account_key_fallback: bool = False,
-    get_http_pool: Optional[Callable[[], urllib3.PoolManager]] = None,
+    get_http_pool: Callable[[], urllib3.PoolManager] | None = None,
     use_streaming_read: bool = False,
     use_blind_writes: bool = DEFAULT_USE_BLIND_WRITES,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
@@ -104,10 +104,10 @@ def copy(
     dst: RemoteOrLocalPath,
     overwrite: bool = False,
     parallel: bool = False,
-    parallel_executor: Optional[concurrent.futures.Executor] = None,
+    parallel_executor: concurrent.futures.Executor | None = None,
     return_md5: bool = False,
-    dst_version: Optional[str] = None,
-) -> Optional[str]:
+    dst_version: str | None = None,
+) -> str | None:
     """
     Copy a file from one path to another
 
@@ -235,7 +235,7 @@ def stat(path: RemoteOrLocalPath) -> Stat:
     return default_context.stat(path=path)
 
 
-def set_mtime(path: RemoteOrLocalPath, mtime: float, version: Optional[str] = None) -> bool:
+def set_mtime(path: RemoteOrLocalPath, mtime: float, version: str | None = None) -> bool:
     """
     Set the mtime for a path, returns True on success
 
@@ -248,7 +248,7 @@ def set_mtime(path: RemoteOrLocalPath, mtime: float, version: Optional[str] = No
 def rmtree(
     path: RemoteOrLocalPath,
     parallel: bool = False,
-    parallel_executor: Optional[concurrent.futures.Executor] = None,
+    parallel_executor: concurrent.futures.Executor | None = None,
 ) -> None:
     """
     Delete a directory tree
@@ -259,8 +259,8 @@ def rmtree(
 def walk(
     top: RemoteOrLocalPath,
     topdown: bool = True,
-    onerror: Optional[Callable[[OSError], None]] = None,
-) -> Iterator[Tuple[str, Sequence[str], Sequence[str]]]:
+    onerror: Callable[[OSError], None] | None = None,
+) -> Iterator[tuple[str, Sequence[str], Sequence[str]]]:
     """
     Walk a directory tree in a similar manner to os.walk
     """
@@ -284,7 +284,7 @@ def join(a: RemoteOrLocalPath, *args: str) -> str:
     return default_context.join(a, *args)
 
 
-def get_url(path: RemoteOrLocalPath) -> Tuple[str, Optional[float]]:
+def get_url(path: RemoteOrLocalPath) -> tuple[str, float | None]:
     """
     Get a URL for the given path that a browser could open
     """
@@ -303,7 +303,7 @@ def md5(path: RemoteOrLocalPath) -> str:
     return default_context.md5(path=path)
 
 
-def last_version_seen(file: TextIO | BinaryIO) -> Optional[str]:
+def last_version_seen(file: TextIO | BinaryIO) -> str | None:
     """
     Get the last seen version of a file opened with `BlobFile`
     """
@@ -342,11 +342,11 @@ def write_bytes(path: RemoteOrLocalPath, data: bytes) -> None:
 def BlobFile(
     path: RemoteOrLocalPath,
     mode: Literal["rb", "wb", "ab"],
-    streaming: Optional[bool] = ...,
+    streaming: bool | None = ...,
     buffer_size: int = ...,
-    cache_dir: Optional[str] = ...,
-    file_size: Optional[int] = None,
-    version: Optional[str] = None,
+    cache_dir: str | None = ...,
+    file_size: int | None = None,
+    version: str | None = None,
     partial_writes_on_exc: bool = True,
 ) -> BinaryIO:
     ...
@@ -356,11 +356,11 @@ def BlobFile(
 def BlobFile(
     path: RemoteOrLocalPath,
     mode: Literal["r", "w", "a"] = ...,
-    streaming: Optional[bool] = ...,
+    streaming: bool | None = ...,
     buffer_size: int = ...,
-    cache_dir: Optional[str] = ...,
-    file_size: Optional[int] = None,
-    version: Optional[str] = None,
+    cache_dir: str | None = ...,
+    file_size: int | None = None,
+    version: str | None = None,
     partial_writes_on_exc: bool = True,
 ) -> TextIO:
     ...
@@ -369,11 +369,11 @@ def BlobFile(
 def BlobFile(
     path: RemoteOrLocalPath,
     mode: Literal["r", "rb", "w", "wb", "a", "ab"] = "r",
-    streaming: Optional[bool] = None,
-    buffer_size: Optional[int] = None,
-    cache_dir: Optional[str] = None,
-    file_size: Optional[int] = None,
-    version: Optional[str] = None,
+    streaming: bool | None = None,
+    buffer_size: int | None = None,
+    cache_dir: str | None = None,
+    file_size: int | None = None,
+    version: str | None = None,
     partial_writes_on_exc: bool = True,
 ):
     """

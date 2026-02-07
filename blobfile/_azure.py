@@ -63,7 +63,7 @@ RESPONSE_HEADER_TO_REQUEST_HEADER = {
 }
 
 
-def _load_credentials() -> Dict[str, Any]:
+def _load_credentials() -> dict[str, Any]:
     # When AZURE_USE_IDENTITY=1, blobfile will use the azure-identity package to retrieve AAD access tokens
     if os.getenv("AZURE_USE_IDENTITY", "0") == "1":
         return {"_azure_auth": "azure-identity"}
@@ -146,7 +146,7 @@ def _load_credentials() -> Dict[str, Any]:
     return {}
 
 
-def load_subscription_ids() -> List[str]:
+def load_subscription_ids() -> list[str]:
     """
     Return a list of subscription ids from the local azure profile
     the default subscription will appear first in the list
@@ -208,7 +208,7 @@ def _create_access_token_request(
     )
 
 
-def create_api_request(req: Request, auth: Tuple[str, str]) -> Request:
+def create_api_request(req: Request, auth: tuple[str, str]) -> Request:
     if req.headers is None:
         headers = {}
     else:
@@ -250,7 +250,7 @@ def create_api_request(req: Request, auth: Tuple[str, str]) -> Request:
     return result
 
 
-def generate_signed_url(key: Mapping[str, str], url: str) -> Tuple[str, float]:
+def generate_signed_url(key: Mapping[str, str], url: str) -> tuple[str, float]:
     # https://docs.microsoft.com/en-us/rest/api/storageservices/delegate-access-with-shared-access-signature
     # https://docs.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas
     # https://docs.microsoft.com/en-us/rest/api/storageservices/service-sas-examples
@@ -314,7 +314,7 @@ def generate_signed_url(key: Mapping[str, str], url: str) -> Tuple[str, float]:
     return url + "?" + query, t
 
 
-def split_path(path: str) -> Tuple[str, str, str]:
+def split_path(path: str) -> tuple[str, str, str]:
     if path.startswith("az://"):
         return split_az_path(path)
     elif path.startswith("https://"):
@@ -323,7 +323,7 @@ def split_path(path: str) -> Tuple[str, str, str]:
         raise Error(f"Invalid path: '{path}'")
 
 
-def split_az_path(path: str) -> Tuple[str, str, str]:
+def split_az_path(path: str) -> tuple[str, str, str]:
     parts = path[len("az://") :].split("/")
     if len(parts) < 2:
         raise Error(f"Invalid path: '{path}'")
@@ -335,7 +335,7 @@ def split_az_path(path: str) -> Tuple[str, str, str]:
     return account, container, obj
 
 
-def split_https_path(path: str) -> Tuple[str, str, str]:
+def split_https_path(path: str) -> tuple[str, str, str]:
     parts = path[len("https://") :].split("/")
     if len(parts) < 2:
         raise Error(f"Invalid path: '{path}'")
@@ -433,7 +433,7 @@ def sign_with_shared_key(req: Request, key: str) -> str:
     return f"SharedKey {storage_account}:{signature}"
 
 
-def _get_md5(metadata: Mapping[str, Any]) -> Optional[str]:
+def _get_md5(metadata: Mapping[str, Any]) -> str | None:
     if "Content-MD5" in metadata:
         b64_encoded = metadata["Content-MD5"]
         if b64_encoded is None:
@@ -491,8 +491,8 @@ def _can_access_container(
     conf: Config,
     account: str,
     container: str,
-    auth: Tuple[str, str],
-    out_failures: List[RequestFailure],
+    auth: tuple[str, str],
+    out_failures: list[RequestFailure],
 ) -> bool:
     # Skip this check and hope the credentials work if we're blind writing.
     if conf.use_blind_writes:
@@ -540,8 +540,8 @@ def _can_access_container(
 
 
 def _get_storage_account_id(
-    conf: Config, subscription_id: str, account: str, auth: Tuple[str, str]
-) -> Optional[str]:
+    conf: Config, subscription_id: str, account: str, auth: tuple[str, str]
+) -> str | None:
     # get a list of storage accounts
     url = f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.Storage/storageAccounts"
     params = {"api-version": "2019-04-01"}
@@ -569,7 +569,7 @@ def _get_storage_account_id(
         params = None  # the url will already have params on it
 
 
-def _get_subscription_ids(conf: Config, auth: Tuple[str, str]) -> List[str]:
+def _get_subscription_ids(conf: Config, auth: tuple[str, str]) -> list[str]:
     url = "https://management.azure.com/subscriptions"
     params = {"api-version": "2020-01-01"}
     result = []
@@ -593,8 +593,8 @@ def _get_storage_account_key(
     account: str,
     container: str,
     creds: Mapping[str, Any],
-    out_failures: List[RequestFailure],
-) -> Optional[Tuple[Any, float]]:
+    out_failures: list[RequestFailure],
+) -> tuple[Any, float] | None:
     # azure resource manager has very low limits on number of requests, so we have
     # to be careful to avoid extra requests here
     # https://docs.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits#storage-resource-provider-limits
@@ -660,12 +660,12 @@ def _get_storage_account_key(
     raise Error(f"Storage account was found, but storage account keys were missing: '{account}'")
 
 
-def _get_access_token(conf: Config, key: Any) -> Tuple[Any, float]:
+def _get_access_token(conf: Config, key: Any) -> tuple[Any, float]:
     account, container = key
     now = time.time()
     creds = _load_credentials()
     azure_auth = creds.get("_azure_auth")
-    access_failures: List[RequestFailure] = []
+    access_failures: list[RequestFailure] = []
     if azure_auth == "sakey":
         if "account" in creds:
             if creds["account"] != account:
@@ -803,7 +803,7 @@ No Azure credentials were found.  If the container is not marked as public, plea
     raise Error(msg)
 
 
-def _get_sas_token(conf: Config, key: Any) -> Tuple[Any, float]:
+def _get_sas_token(conf: Config, key: Any) -> tuple[Any, float]:
     auth = access_token_manager.get_token(conf, key=key)
     if auth[0] == ANONYMOUS:
         # for public containers, use None as the token so that this will be cached
@@ -887,7 +887,7 @@ def _clear_uncommitted_blocks(
     blocks = result["BlockList"]["CommittedBlocks"]["Block"]
     body = {"BlockList": {"Latest": [b["Name"] for b in blocks]}}
     # make sure to preserve metadata for the file
-    headers: Dict[str, str] = {k: v for k, v in metadata.items() if k.startswith("x-ms-meta-")}
+    headers: dict[str, str] = {k: v for k, v in metadata.items() if k.startswith("x-ms-meta-")}
     for src, dst in RESPONSE_HEADER_TO_REQUEST_HEADER.items():
         if src in metadata:
             headers[dst] = metadata[src]
@@ -907,9 +907,9 @@ def _finalize_blob(
     conf: Config,
     path: str,
     url: str,
-    block_ids: List[str],
-    md5_digest: Optional[bytes],
-    version: Optional[str],
+    block_ids: list[str],
+    md5_digest: bytes | None,
+    version: str | None,
 ) -> "urllib3.BaseHTTPResponse":
     body = {"BlockList": {"Latest": block_ids}}
     headers = {}
@@ -997,9 +997,9 @@ def create_page_iterator(
     conf: Config,
     url: str,
     method: str,
-    data: Optional[Mapping[str, str]] = None,
-    params: Optional[Mapping[str, str]] = None,
-) -> Iterator[Dict[str, Any]]:
+    data: Mapping[str, str] | None = None,
+    params: Mapping[str, str] | None = None,
+) -> Iterator[dict[str, Any]]:
     if params is None:
         p = {}
     else:
@@ -1028,9 +1028,9 @@ def create_page_iterator(
 
 class StreamingReadFile(BaseStreamingReadFile):
     def __init__(
-        self, conf: Config, path: str, size: Optional[int], version: Optional[str]
+        self, conf: Config, path: str, size: int | None, version: str | None
     ) -> None:
-        self._version: Optional[str] = version
+        self._version: str | None = version
         if size is None:
             st = maybe_stat(conf, path, version=version)
             if st is None:
@@ -1040,7 +1040,7 @@ class StreamingReadFile(BaseStreamingReadFile):
         super().__init__(conf=conf, path=path, size=size)
 
     def _request_chunk(
-        self, streaming: bool, start: int, end: Optional[int] = None
+        self, streaming: bool, start: int, end: int | None = None
     ) -> "urllib3.BaseHTTPResponse":
         account, container, blob = split_path(self._path)
         headers = {"Range": common.calc_range(start=start, end=end)}
@@ -1062,14 +1062,14 @@ class StreamingReadFile(BaseStreamingReadFile):
 
 class StreamingWriteFile(BaseStreamingWriteFile):
     def __init__(
-        self, conf: Config, path: str, version: Optional[str], partial_writes_on_exc: bool
+        self, conf: Config, path: str, version: str | None, partial_writes_on_exc: bool
     ) -> None:
         self._path = path
         account, container, blob = split_path(path)
         self._url = build_url(account, "/{container}/{blob}", container=container, blob=blob)
         self._upload_id = rng.randint(0, 2**47 - 1)
         self._block_index = 0
-        self._version: Optional[str] = version  # for azure, this is an etag
+        self._version: str | None = version  # for azure, this is an etag
         self._md5 = hashlib.md5()
         super().__init__(
             conf=conf,
@@ -1269,8 +1269,8 @@ def parallel_upload(
     src: str,
     dst: str,
     return_md5: bool,
-    dst_version: Optional[str],
-) -> Optional[str]:
+    dst_version: str | None,
+) -> str | None:
     with open(src, "rb") as f:
         md5_digest = common.block_md5(f)
 
@@ -1311,7 +1311,7 @@ def parallel_upload(
     return binascii.hexlify(md5_digest).decode("utf8") if return_md5 else None
 
 
-def maybe_stat(conf: Config, path: str, *, version: Optional[str] = None) -> Optional[Stat]:
+def maybe_stat(conf: Config, path: str, *, version: str | None = None) -> Stat | None:
     account, container, blob = split_path(path)
     if blob == "":
         return None
@@ -1358,7 +1358,7 @@ def maybe_update_md5(conf: Config, path: str, etag: str, hexdigest: str) -> bool
 
     # these will be cleared if not provided, there does not appear to be a PATCH method like for GCS
     # https://docs.microsoft.com/en-us/rest/api/storageservices/set-blob-properties#remarks
-    headers: Dict[str, str] = {}
+    headers: dict[str, str] = {}
     for src, dst in RESPONSE_HEADER_TO_REQUEST_HEADER.items():
         if src in resp.headers:
             headers[dst] = resp.headers[src]
@@ -1385,7 +1385,7 @@ def maybe_update_md5(conf: Config, path: str, etag: str, hexdigest: str) -> bool
     return resp.status == 200
 
 
-def list_blobs(conf: Config, path: str, delimiter: Optional[str] = None) -> Iterator[DirEntry]:
+def list_blobs(conf: Config, path: str, delimiter: str | None = None) -> Iterator[DirEntry]:
     params = {}
     if delimiter is not None:
         params["delimiter"] = delimiter
@@ -1436,7 +1436,7 @@ def _get_entries(
                 yield entry_from_path_stat(path, make_stat(props))
 
 
-def get_url(conf: Config, path: str) -> Tuple[str, Optional[float]]:
+def get_url(conf: Config, path: str) -> tuple[str, float | None]:
     account, container, blob = split_path(path)
     url = build_url(account, "/{container}/{blob}", container=container, blob=blob)
     token = sas_token_manager.get_token(conf=conf, key=(account, container))
@@ -1446,7 +1446,7 @@ def get_url(conf: Config, path: str) -> Tuple[str, Optional[float]]:
     return generate_signed_url(key=token, url=url)
 
 
-def set_mtime(conf: Config, path: str, mtime: float, version: Optional[str] = None) -> bool:
+def set_mtime(conf: Config, path: str, mtime: float, version: str | None = None) -> bool:
     account, container, blob = split_path(path)
     headers = {}
     if version is not None:
@@ -1491,7 +1491,7 @@ def dirname(conf: Config, path: str) -> str:
         return combine_path(conf, account, container, "")[:-1]
 
 
-def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> Optional[str]:
+def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> str | None:
     # https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob
     dst_account, dst_container, dst_blob = split_path(dst)
     src_account, src_container, src_blob = split_path(src)
@@ -1668,8 +1668,8 @@ def parallel_remote_copy(
     src: str,
     dst: str,
     return_md5: bool,
-    dst_version: Optional[str],
-) -> Optional[str]:
+    dst_version: str | None,
+) -> str | None:
     # for whatever reason, put block from url is faster than copy blob when you run multiple requests in parallel
     # https://docs.microsoft.com/en-us/rest/api/storageservices/put-block-from-url
 

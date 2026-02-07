@@ -9,7 +9,7 @@ from lxml import etree
 Element = etree._Element  # type: ignore
 
 
-def parse(document: bytes, repeated_tags: Optional[Set[str]] = None) -> Dict[str, Any]:
+def parse(document: bytes, repeated_tags: set[str] | None = None) -> dict[str, Any]:
     """
     Convert an XML document to a dictionary, like xmltodict.parse but with lxml
     """
@@ -20,7 +20,7 @@ def parse(document: bytes, repeated_tags: Optional[Set[str]] = None) -> Dict[str
     return {root.tag: children}
 
 
-def _recursive_dict(elem: Element, repeated_tags: Set[str]) -> Union[Dict[str, Any], Optional[str]]:
+def _recursive_dict(elem: Element, repeated_tags: set[str]) -> Union[dict[str, Any], str | None]:
     if len(elem) == 0:
         return elem.text
     else:
@@ -39,7 +39,7 @@ def _recursive_dict(elem: Element, repeated_tags: Set[str]) -> Union[Dict[str, A
         return result
 
 
-def unparse(data: Dict[str, Any]) -> bytes:
+def unparse(data: dict[str, Any]) -> bytes:
     """
     Convert a dictionary into an XML document, like xmltodict.unparse but with lxml
     """
@@ -51,7 +51,7 @@ def unparse(data: Dict[str, Any]) -> bytes:
     return b'<?xml version="1.0" encoding="utf-8"?>\n' + etree.tostring(root, encoding="utf8")
 
 
-def _create_tree(name: str, data: Dict[str, Any]) -> Element:
+def _create_tree(name: str, data: dict[str, Any]) -> Element:
     elem = etree.Element(name)
     for k, v in data.items():
         if isinstance(v, dict):

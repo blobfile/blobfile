@@ -71,7 +71,7 @@ resp = b"""\
 """
 
 
-def remove_attributes(d: Dict[str, Any]) -> Dict[str, Any]:
+def remove_attributes(d: dict[str, Any]) -> dict[str, Any]:
     result = {}
     for k, v in d.items():
         if k.startswith("@"):
@@ -82,13 +82,13 @@ def remove_attributes(d: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def xmltodict_parse(data: bytes) -> Dict[str, Any]:
+def xmltodict_parse(data: bytes) -> dict[str, Any]:
     parsed = xmltodict.parse(data.decode("utf8"))
     # we don't support attributes in our parser since we don't use them anyway
     return remove_attributes(parsed)
 
 
-def xmltodict_unparse(d: Dict[str, Any]) -> bytes:
+def xmltodict_unparse(d: dict[str, Any]) -> bytes:
     return xmltodict.unparse(d).encode("utf8")
 
 

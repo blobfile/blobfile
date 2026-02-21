@@ -872,7 +872,7 @@ class Context:
             raise IsADirectoryError(f"Is a directory: '{path}'")
 
         if streaming is None:
-            # It's a little lost to time why streaming defaults to True for writes.
+            # It's a little lost to time why streaming defaults to False for writes.
             # I think it allows for retries within blobfile when writing to GCP.
             streaming = mode in ("r", "rb")
 

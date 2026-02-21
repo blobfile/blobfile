@@ -799,11 +799,11 @@ class Context:
             return f.read()
 
     def write_text(self, path: RemoteOrLocalPath, text: str) -> None:
-        with self.BlobFile(path, "w", partial_writes_on_exc=False) as f:
+        with self.BlobFile(path, "w", streaming=True, partial_writes_on_exc=False) as f:
             f.write(text)
 
     def write_bytes(self, path: RemoteOrLocalPath, data: bytes) -> None:
-        with self.BlobFile(path, "wb", partial_writes_on_exc=False) as f:
+        with self.BlobFile(path, "wb", streaming=True, partial_writes_on_exc=False) as f:
             f.write(data)
 
     @overload
@@ -872,6 +872,8 @@ class Context:
             raise IsADirectoryError(f"Is a directory: '{path}'")
 
         if streaming is None:
+            # It's a little lost to time why streaming defaults to True for writes.
+            # I think it allows for retries within blobfile when writing to GCP.
             streaming = mode in ("r", "rb")
 
         if file_size is not None:

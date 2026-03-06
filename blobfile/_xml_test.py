@@ -7,67 +7,67 @@ import xmltodict
 from blobfile import _xml as xml
 
 resp = b"""\
-<?xml version="1.0" encoding="utf-8"?>  
-<EnumerationResults ContainerName="https://myaccount.blob.core.windows.net/mycontainer">  
-  <MaxResults>4</MaxResults>  
-  <Blobs>  
-    <Blob>  
-      <Name>blob1.txt</Name>  
-      <Url>https://myaccount.blob.core.windows.net/mycontainer/blob1.txt</Url>  
-      <Properties>  
-        <Last-Modified>Sun, 27 Sep 2009 18:41:57 GMT</Last-Modified>  
-        <Etag>0x8CAE7D55D050B8B</Etag>  
-        <Content-Length>8</Content-Length>  
-        <Content-Type>text/html</Content-Type>  
-        <Content-Encoding />  
-        <Content-Language>en-US</Content-Language>  
-        <Content-MD5 />  
-        <Cache-Control>no-cache</Cache-Control>  
-        <BlobType>BlockBlob</BlobType>  
-        <LeaseStatus>unlocked</LeaseStatus>  
-      </Properties>  
-    </Blob>  
-    <Blob>  
-      <Name>blob2.txt</Name>  
-      <Url>https://myaccount.blob.core.windows.net/mycontainer/blob2.txt</Url>  
-      <Properties>  
-        <Last-Modified>Sun, 27 Sep 2009 12:18:50 GMT</Last-Modified>  
-        <Etag>0x8CAE7D55CF6C339</Etag>  
-        <Content-Length>100</Content-Length>  
-        <Content-Type>text/html</Content-Type>  
-        <Content-Encoding />  
-        <Content-Language>en-US</Content-Language>  
-        <Content-MD5 />  
-        <Cache-Control>no-cache</Cache-Control>  
-        <BlobType>BlockBlob</BlobType>  
-        <LeaseStatus>unlocked</LeaseStatus>  
-      </Properties>  
-    </Blob>  
-    <BlobPrefix>  
-      <Name>myfolder/</Name>  
-    </BlobPrefix>  
-    <Blob>  
-      <Name>newblob1.txt</Name>  
-      <Url>https://myaccount.blob.core.windows.net/mycontainer/newblob1.txt</Url>  
-      <Properties>  
-        <Last-Modified>Sun, 27 Sep 2009 16:31:57 GMT</Last-Modified>  
-        <Etag>0x8CAE7D55CF6C339</Etag>  
-        <Content-Length>25</Content-Length>  
-        <Content-Type>text/html</Content-Type>  
-        <Content-Encoding />  
-        <Content-Language>en-US</Content-Language>  
-        <Content-MD5 />  
-        <Cache-Control>no-cache</Cache-Control>  
-        <BlobType>BlockBlob</BlobType>  
-        <LeaseStatus>unlocked</LeaseStatus>  
-      </Properties>  
-    </Blob>  
-    <BlobPrefix>  
-      <Name>myfolder2/</Name>  
-    </BlobPrefix>  
-  </Blobs>  
-  <NextMarker>newblob2.txt</NextMarker>  
-</EnumerationResults>  
+<?xml version="1.0" encoding="utf-8"?>
+<EnumerationResults ContainerName="https://myaccount.blob.core.windows.net/mycontainer">
+  <MaxResults>4</MaxResults>
+  <Blobs>
+    <Blob>
+      <Name>blob1.txt</Name>
+      <Url>https://myaccount.blob.core.windows.net/mycontainer/blob1.txt</Url>
+      <Properties>
+        <Last-Modified>Sun, 27 Sep 2009 18:41:57 GMT</Last-Modified>
+        <Etag>0x8CAE7D55D050B8B</Etag>
+        <Content-Length>8</Content-Length>
+        <Content-Type>text/html</Content-Type>
+        <Content-Encoding />
+        <Content-Language>en-US</Content-Language>
+        <Content-MD5 />
+        <Cache-Control>no-cache</Cache-Control>
+        <BlobType>BlockBlob</BlobType>
+        <LeaseStatus>unlocked</LeaseStatus>
+      </Properties>
+    </Blob>
+    <Blob>
+      <Name>blob2.txt</Name>
+      <Url>https://myaccount.blob.core.windows.net/mycontainer/blob2.txt</Url>
+      <Properties>
+        <Last-Modified>Sun, 27 Sep 2009 12:18:50 GMT</Last-Modified>
+        <Etag>0x8CAE7D55CF6C339</Etag>
+        <Content-Length>100</Content-Length>
+        <Content-Type>text/html</Content-Type>
+        <Content-Encoding />
+        <Content-Language>en-US</Content-Language>
+        <Content-MD5 />
+        <Cache-Control>no-cache</Cache-Control>
+        <BlobType>BlockBlob</BlobType>
+        <LeaseStatus>unlocked</LeaseStatus>
+      </Properties>
+    </Blob>
+    <BlobPrefix>
+      <Name>myfolder/</Name>
+    </BlobPrefix>
+    <Blob>
+      <Name>newblob1.txt</Name>
+      <Url>https://myaccount.blob.core.windows.net/mycontainer/newblob1.txt</Url>
+      <Properties>
+        <Last-Modified>Sun, 27 Sep 2009 16:31:57 GMT</Last-Modified>
+        <Etag>0x8CAE7D55CF6C339</Etag>
+        <Content-Length>25</Content-Length>
+        <Content-Type>text/html</Content-Type>
+        <Content-Encoding />
+        <Content-Language>en-US</Content-Language>
+        <Content-MD5 />
+        <Cache-Control>no-cache</Cache-Control>
+        <BlobType>BlockBlob</BlobType>
+        <LeaseStatus>unlocked</LeaseStatus>
+      </Properties>
+    </Blob>
+    <BlobPrefix>
+      <Name>myfolder2/</Name>
+    </BlobPrefix>
+  </Blobs>
+  <NextMarker>newblob2.txt</NextMarker>
+</EnumerationResults>
 """
 
 
@@ -127,39 +127,3 @@ def test_roundtrip():
     assert ref_unparsed == xml.unparse(
         xml.parse(xml.unparse(ref_parsed), repeated_tags={"Blob", "BlobPrefix"})
     )
-
-
-def main():
-    # benchmarking
-    doc = xmltodict_parse(resp)
-    doc2 = doc.copy()
-    doc2["EnumerationResults"]["Blobs"]["Blob"] = doc2["EnumerationResults"]["Blobs"]["Blob"] * 300
-    expanded_resp_utf8 = xmltodict_unparse(doc2)
-
-    start = time.perf_counter()
-    for _ in range(100):
-        xmltodict.parse(expanded_resp)
-    end = time.perf_counter()
-    print(f"xmltodict parse elapsed {end - start}")
-
-    start = time.perf_counter()
-    for _ in range(100):
-        lxml_parse(expanded_resp_utf8, repeated_tags={"Blob", "BlobPrefix"})
-    end = time.perf_counter()
-    print(f"lxml parse elapsed {end - start}")
-
-    start = time.perf_counter()
-    for _ in range(100):
-        xmltodict.unparse(doc2)
-    end = time.perf_counter()
-    print(f"xmltodict unparse elapsed {end - start}")
-
-    start = time.perf_counter()
-    for _ in range(100):
-        lxml_unparse(doc2)
-    end = time.perf_counter()
-    print(f"lxml unparse elapsed {end - start}")
-
-
-if __name__ == "__main__":
-    main()

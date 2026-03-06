@@ -987,13 +987,6 @@ def test_concurrent_write_as():
             assert f.read() == inner_contents
 
 
-@contextlib.contextmanager
-def environ_context():
-    env = os.environ.copy()
-    yield
-    os.environ = env
-
-
 def test_more_exists():
     testcases = [
         (AZURE_INVALID_CONTAINER, False),

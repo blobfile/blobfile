@@ -1,4 +1,4 @@
-name: Lint and type check
+name: Static checks
 
 on: [push, pull_request, workflow_dispatch]
 
@@ -17,6 +17,15 @@ jobs:
       - run: pip install pytest lxml-stubs
       - run: pip install 'pyright>=1.1.363'
       - run: pyright
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+      - run: pip install ruff
+      - run: ruff check .
   format:
     runs-on: ubuntu-latest
     steps:

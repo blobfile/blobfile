@@ -17,6 +17,7 @@ import urllib3
 
 from blobfile import _common as common
 from blobfile import _xml as xml
+from blobfile._azure_cloud import AzureCloudConfig, get_cloud_config
 from blobfile._common import (
     DEFAULT_RETRY_CODES,
     INVALID_HOSTNAME_STATUS,
@@ -40,6 +41,7 @@ from blobfile._common import (
 SHARED_KEY = "shared_key"
 OAUTH_TOKEN = "oauth_token"
 ANONYMOUS = "anonymous"
+AzureCacheKey = tuple[str, str, str, str]
 
 # it looks like azure signed urls cannot exceed the lifetime of the token used
 # to create them, so don't keep the key around too long
@@ -149,12 +151,30 @@ def load_subscription_ids() -> list[str]:
     return [sub["id"] for sub in subscriptions]
 
 
-def build_url(account: str, template: str, **data: str) -> str:
-    return common.build_url(f"https://{account}.blob.core.windows.net", template, **data)
+def _cloud_config(conf: Config | None = None) -> AzureCloudConfig:
+    if conf is not None:
+        return conf.azure_cloud
+    return get_cloud_config()
+
+
+def _is_https_blob_host_candidate(hostname: str) -> bool:
+    return ".blob." in hostname
+
+
+def azure_cache_key(conf: Config, account: str, container: str) -> AzureCacheKey:
+    cloud = conf.azure_cloud
+    return (cloud.login_endpoint, cloud.storage_endpoint_suffix, account, container)
+
+
+def build_url(account: str, template: str, conf: Config | None = None, **data: str) -> str:
+    return common.build_url(_cloud_config(conf).blob_endpoint_url(account), template, **data)
 
 
 def _create_access_token_request(
-    creds: Mapping[str, str], scope: str, success_codes: Sequence[int] = (200,)
+    creds: Mapping[str, str],
+    scope: str,
+    success_codes: Sequence[int] = (200,),
+    conf: Config | None = None,
 ) -> Request:
     if creds["_azure_auth"] == "refresh":
         # https://docs.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-auth-code-flow#refresh-the-access-token
@@ -180,8 +200,9 @@ def _create_access_token_request(
         tenant_id = creds["tenant_id"]
     else:
         raise AssertionError
+    cloud = _cloud_config(conf)
     return Request(
-        url=f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+        url=f"{cloud.login_endpoint}/{tenant_id}/oauth2/v2.0/token",
         method="POST",
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data=urllib.parse.urlencode(data).encode("utf8"),
@@ -295,11 +316,13 @@ def generate_signed_url(key: Mapping[str, str], url: str) -> tuple[str, float]:
     return url + "?" + query, t
 
 
-def split_path(path: str) -> tuple[str, str, str]:
+def split_path(
+    path: str, conf: Config | None = None, *, validate: bool = True
+) -> tuple[str, str, str]:
     if path.startswith("az://"):
         return split_az_path(path)
     elif path.startswith("https://"):
-        return split_https_path(path)
+        return split_https_path(path, conf=conf, validate=validate)
     else:
         raise Error(f"Invalid path: '{path}'")
 
@@ -316,21 +339,45 @@ def split_az_path(path: str) -> tuple[str, str, str]:
     return account, container, obj
 
 
-def split_https_path(path: str) -> tuple[str, str, str]:
-    parts = path[len("https://") :].split("/")
-    if len(parts) < 2:
+def _split_https_path_parts(path: str) -> tuple[str, str, str, str]:
+    parsed = urllib.parse.urlparse(path)
+    hostname = parsed.hostname
+    if parsed.scheme != "https" or hostname is None:
         raise Error(f"Invalid path: '{path}'")
-    hostname = parts[0]
-    container = parts[1]
-    if not hostname.endswith(".blob.core.windows.net") or container == "":
+    if not _is_https_blob_host_candidate(hostname):
         raise Error(f"Invalid path: '{path}'")
-    obj = "/".join(parts[2:])
-    account = hostname.split(".")[0]
+
+    account, sep, host_suffix = hostname.partition(".blob.")
+    if sep == "" or not account or not host_suffix:
+        raise Error(f"Invalid path: '{path}'")
+
+    path_parts = parsed.path.split("/")
+    if len(path_parts) < 2:
+        raise Error(f"Invalid path: '{path}'")
+    container = path_parts[1]
+    if container == "":
+        raise Error(f"Invalid path: '{path}'")
+    obj = "/".join(path_parts[2:])
+    return account, host_suffix, container, obj
+
+
+def split_https_path(
+    path: str, conf: Config | None = None, *, validate: bool = True
+) -> tuple[str, str, str]:
+    account, host_suffix, container, obj = _split_https_path_parts(path)
+    if validate and host_suffix != _cloud_config(conf).storage_endpoint_suffix:
+        raise Error(f"Invalid path: '{path}'")
     return account, container, obj
 
 
-def combine_https_path(account: str, container: str, obj: str) -> str:
-    return f"https://{account}.blob.core.windows.net/{container}/{obj}"
+def _combine_https_path_with_host_suffix(
+    account: str, host_suffix: str, container: str, obj: str
+) -> str:
+    return f"https://{account}.blob.{host_suffix}/{container}/{obj}"
+
+
+def combine_https_path(account: str, container: str, obj: str, conf: Config | None = None) -> str:
+    return f"{_cloud_config(conf).blob_endpoint_url(account)}/{container}/{obj}"
 
 
 def combine_az_path(account: str, container: str, obj: str) -> str:
@@ -341,15 +388,15 @@ def combine_path(conf: Config, account: str, container: str, obj: str) -> str:
     if conf.output_az_paths:
         return combine_az_path(account, container, obj)
     else:
-        return combine_https_path(account, container, obj)
+        return combine_https_path(account, container, obj, conf=conf)
 
 
 def mkdirfile(conf: Config, path: str) -> None:
     if not path.endswith("/"):
         path += "/"
-    account, container, blob = split_path(path)
+    account, container, blob = split_path(path, conf=conf)
     req = Request(
-        url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
+        url=build_url(account, "/{container}/{blob}", conf=conf, container=container, blob=blob),
         method="PUT",
         headers={"x-ms-blob-type": "BlockBlob"},
         success_codes=(201, 400),
@@ -487,7 +534,7 @@ def _can_access_container(
     def build_req() -> Request:
         req = Request(
             method="GET",
-            url=build_url(account, "/{container}", container=container),
+            url=build_url(account, "/{container}", conf=conf, container=container),
             params={"restype": "container", "comp": "list", "maxresults": "1"},
             success_codes=success_codes,
         )
@@ -524,7 +571,10 @@ def _get_storage_account_id(
     conf: Config, subscription_id: str, account: str, auth: tuple[str, str]
 ) -> str | None:
     # get a list of storage accounts
-    url = f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.Storage/storageAccounts"
+    url = (
+        f"{conf.azure_cloud.arm_endpoint}/subscriptions/{subscription_id}"
+        "/providers/Microsoft.Storage/storageAccounts"
+    )
     params = {"api-version": "2019-04-01"}
     while True:
 
@@ -551,7 +601,7 @@ def _get_storage_account_id(
 
 
 def _get_subscription_ids(conf: Config, auth: tuple[str, str]) -> list[str]:
-    url = "https://management.azure.com/subscriptions"
+    url = f"{conf.azure_cloud.arm_endpoint}/subscriptions"
     params = {"api-version": "2020-01-01"}
     result = []
     while True:
@@ -586,7 +636,7 @@ def _get_storage_account_key(
     # get an access token for the management service
     def build_req_access_token() -> Request:
         return _create_access_token_request(
-            creds=creds, scope="https://management.azure.com/.default"
+            creds=creds, scope=f"{conf.azure_cloud.arm_endpoint}/.default", conf=conf
         )
 
     resp = common.execute_request(conf, build_req_access_token)
@@ -620,7 +670,7 @@ def _get_storage_account_key(
     def build_req_list_keys() -> Request:
         req = Request(
             method="POST",
-            url=f"https://management.azure.com{storage_account_id}/listKeys",
+            url=f"{conf.azure_cloud.arm_endpoint}{storage_account_id}/listKeys",
             params={"api-version": "2019-04-01"},
         )
         return create_api_request(req, auth=auth)
@@ -641,8 +691,8 @@ def _get_storage_account_key(
     raise Error(f"Storage account was found, but storage account keys were missing: '{account}'")
 
 
-def _get_access_token(conf: Config, key: Any) -> tuple[Any, float]:
-    account, container = key
+def _get_access_token(conf: Config, key: AzureCacheKey) -> tuple[Any, float]:
+    _, _, account, container = key
     now = time.time()
     creds = _load_credentials()
     azure_auth = creds.get("_azure_auth")
@@ -662,8 +712,9 @@ def _get_access_token(conf: Config, key: Any) -> tuple[Any, float]:
         def build_req() -> Request:
             return _create_access_token_request(
                 creds=creds,
-                scope=f"https://{account}.blob.core.windows.net/.default",
+                scope=conf.azure_cloud.storage_scope(account),
                 success_codes=(200, 400),
+                conf=conf,
             )
 
         resp = common.execute_request(conf, build_req)
@@ -712,7 +763,7 @@ def _get_access_token(conf: Config, key: Any) -> tuple[Any, float]:
         # we have a service principal, get an oauth token
         def build_req() -> Request:
             return _create_access_token_request(
-                creds=creds, scope="https://storage.azure.com/.default"
+                creds=creds, scope=conf.azure_cloud.storage_scope(), conf=conf
             )
 
         resp = common.execute_request(conf, build_req)
@@ -737,14 +788,14 @@ def _get_access_token(conf: Config, key: Any) -> tuple[Any, float]:
     # This enables the use of Managed Identity, Workload Identity, and other auth methods not implemented here
     elif azure_auth == "azure-identity":
         try:
-            from azure.identity import DefaultAzureCredential  # pyright: ignore
+            from azure.identity import DefaultAzureCredential
         except ImportError:
             raise RuntimeError(
                 "When setting AZURE_USE_IDENTITY=1, you must also install the azure-identity package"
             )
 
-        with DefaultAzureCredential() as cred:
-            token = cred.get_token("https://storage.azure.com/.default")
+        with DefaultAzureCredential(authority=conf.azure_cloud.authority_host) as cred:
+            token = cred.get_token(conf.azure_cloud.storage_scope())
         auth = (OAUTH_TOKEN, token.token)
         if _can_access_container(conf, account, container, auth, out_failures=access_failures):
             return (auth, token.expires_on)
@@ -784,14 +835,14 @@ No Azure credentials were found.  If the container is not marked as public, plea
     raise Error(msg)
 
 
-def _get_sas_token(conf: Config, key: Any) -> tuple[Any, float]:
+def _get_sas_token(conf: Config, key: AzureCacheKey) -> tuple[Any, float]:
     auth = access_token_manager.get_token(conf, key=key)
     if auth[0] == ANONYMOUS:
         # for public containers, use None as the token so that this will be cached
         # and we can tell when we don't have a real SAS token for a container
         return (None, time.time() + SAS_TOKEN_EXPIRATION_SECONDS)
 
-    account, container = key
+    _, _, account, container = key
 
     def build_req() -> Request:
         # https://docs.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas
@@ -799,7 +850,7 @@ def _get_sas_token(conf: Config, key: Any) -> tuple[Any, float]:
         start = (now + datetime.timedelta(hours=-1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         expiry = (now + datetime.timedelta(days=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
         req = Request(
-            url=f"https://{account}.blob.core.windows.net/",
+            url=build_url(account, "/", conf=conf),
             method="POST",
             params=dict(restype="service", comp="userdelegationkey"),
             data={"KeyInfo": {"Start": start, "Expiry": expiry}},
@@ -837,7 +888,10 @@ def execute_api_request(conf: Config, req: Request) -> "urllib3.BaseHTTPResponse
 
     def build_req() -> Request:
         return create_api_request(
-            req, auth=access_token_manager.get_token(conf, key=(account, container))
+            req,
+            auth=access_token_manager.get_token(
+                conf, key=azure_cache_key(conf, account, container)
+            ),
         )
 
     return common.execute_request(conf, build_req)
@@ -947,10 +1001,10 @@ def isdir(conf: Config, path: str) -> bool:
     """
     if not path.endswith("/"):
         path += "/"
-    account, container, blob = split_path(path)
+    account, container, blob = split_path(path, conf=conf)
     if blob == "":
         req = Request(
-            url=build_url(account, "/{container}", container=container, blob=blob),
+            url=build_url(account, "/{container}", conf=conf, container=container, blob=blob),
             method="GET",
             params=dict(restype="container"),
             success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
@@ -962,7 +1016,7 @@ def isdir(conf: Config, path: str) -> bool:
         # iterator. as it happens, azure is perfectly willing to return an empty first page.
         it = create_page_iterator(
             conf,
-            url=build_url(account, "/{container}", container=container),
+            url=build_url(account, "/{container}", conf=conf, container=container),
             method="GET",
             params=dict(
                 comp="list", restype="container", prefix=blob, delimiter="/", maxresults="1"
@@ -1021,12 +1075,14 @@ class StreamingReadFile(BaseStreamingReadFile):
     def _request_chunk(
         self, streaming: bool, start: int, end: int | None = None
     ) -> "urllib3.BaseHTTPResponse":
-        account, container, blob = split_path(self._path)
+        account, container, blob = split_path(self._path, conf=self._conf)
         headers = {"Range": common.calc_range(start=start, end=end)}
         if self._version is not None:
             headers["If-Match"] = self._version
         req = Request(
-            url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
+            url=build_url(
+                account, "/{container}/{blob}", conf=self._conf, container=container, blob=blob
+            ),
             method="GET",
             headers=headers,
             success_codes=(206, 416),
@@ -1044,8 +1100,10 @@ class StreamingWriteFile(BaseStreamingWriteFile):
         self, conf: Config, path: str, version: str | None, partial_writes_on_exc: bool
     ) -> None:
         self._path = path
-        account, container, blob = split_path(path)
-        self._url = build_url(account, "/{container}/{blob}", container=container, blob=blob)
+        account, container, blob = split_path(path, conf=conf)
+        self._url = build_url(
+            account, "/{container}/{blob}", conf=conf, container=container, blob=blob
+        )
         self._upload_id = rng.randint(0, 2**47 - 1)
         self._block_index = 0
         self._version: str | None = version  # for azure, this is an etag
@@ -1253,8 +1311,8 @@ def parallel_upload(
     with open(src, "rb") as f:
         md5_digest = common.block_md5(f)
 
-    account, container, blob = split_path(dst)
-    dst_url = build_url(account, "/{container}/{blob}", container=container, blob=blob)
+    account, container, blob = split_path(dst, conf=conf)
+    dst_url = build_url(account, "/{container}/{blob}", conf=conf, container=container, blob=blob)
 
     upload_id = rng.randint(0, 2**47 - 1)
     s = os.stat(src)
@@ -1291,11 +1349,11 @@ def parallel_upload(
 
 
 def maybe_stat(conf: Config, path: str, *, version: str | None = None) -> Stat | None:
-    account, container, blob = split_path(path)
+    account, container, blob = split_path(path, conf=conf)
     if blob == "":
         return None
     req = Request(
-        url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
+        url=build_url(account, "/{container}/{blob}", conf=conf, container=container, blob=blob),
         method="HEAD",
         success_codes=(200, 404, INVALID_HOSTNAME_STATUS),
     )
@@ -1311,11 +1369,11 @@ def maybe_stat(conf: Config, path: str, *, version: str | None = None) -> Stat |
 
 
 def remove(conf: Config, path: str) -> bool:
-    account, container, blob = split_path(path)
+    account, container, blob = split_path(path, conf=conf)
     if blob == "":
         raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
     req = Request(
-        url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
+        url=build_url(account, "/{container}/{blob}", conf=conf, container=container, blob=blob),
         method="DELETE",
         success_codes=(202, 404, INVALID_HOSTNAME_STATUS),
     )
@@ -1324,9 +1382,9 @@ def remove(conf: Config, path: str) -> bool:
 
 
 def maybe_update_md5(conf: Config, path: str, etag: str, hexdigest: str) -> bool:
-    account, container, blob = split_path(path)
+    account, container, blob = split_path(path, conf=conf)
     req = Request(
-        url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
+        url=build_url(account, "/{container}/{blob}", conf=conf, container=container, blob=blob),
         method="HEAD",
         headers={"If-Match": etag},
         success_codes=(200, 404, 412),
@@ -1346,7 +1404,7 @@ def maybe_update_md5(conf: Config, path: str, etag: str, hexdigest: str) -> bool
     )
 
     req = Request(
-        url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
+        url=build_url(account, "/{container}/{blob}", conf=conf, container=container, blob=blob),
         method="PUT",
         params=dict(comp="properties"),
         headers={
@@ -1369,10 +1427,10 @@ def list_blobs(conf: Config, path: str, delimiter: str | None = None) -> Iterato
     if delimiter is not None:
         params["delimiter"] = delimiter
 
-    account, container, prefix = split_path(path)
+    account, container, prefix = split_path(path, conf=conf)
     it = create_page_iterator(
         conf,
-        url=build_url(account, "/{container}", container=container),
+        url=build_url(account, "/{container}", conf=conf, container=container),
         method="GET",
         params=dict(comp="list", restype="container", prefix=prefix, **params),
     )
@@ -1380,17 +1438,17 @@ def list_blobs(conf: Config, path: str, delimiter: str | None = None) -> Iterato
         yield from _get_entries(conf, account, container, result)
 
 
-def entry_from_dirpath(path: str) -> DirEntry:
+def entry_from_dirpath(path: str, conf: Config | None = None) -> DirEntry:
     if path.endswith("/"):
         path = path[:-1]
-    _, _, obj = split_path(path)
+    _, _, obj = split_path(path, conf=conf)
     name = obj.split("/")[-1]
     return DirEntry(name=name, path=path, is_dir=True, is_file=False, stat=None)
 
 
-def entry_from_path_stat(path: str, stat: Stat) -> DirEntry:
+def entry_from_path_stat(path: str, stat: Stat, conf: Config | None = None) -> DirEntry:
     assert not path.endswith("/")
-    _, _, obj = split_path(path)
+    _, _, obj = split_path(path, conf=conf)
     name = obj.split("/")[-1]
     return DirEntry(name=name, path=path, is_dir=False, is_file=True, stat=stat)
 
@@ -1404,21 +1462,21 @@ def _get_entries(
     if "BlobPrefix" in blobs:
         for bp in blobs["BlobPrefix"]:
             path = combine_path(conf, account, container, bp["Name"])
-            yield entry_from_dirpath(path)
+            yield entry_from_dirpath(path, conf=conf)
     if "Blob" in blobs:
         for b in blobs["Blob"]:
             path = combine_path(conf, account, container, b["Name"])
             if b["Name"].endswith("/"):
-                yield entry_from_dirpath(path)
+                yield entry_from_dirpath(path, conf=conf)
             else:
                 props = b["Properties"]
-                yield entry_from_path_stat(path, make_stat(props))
+                yield entry_from_path_stat(path, make_stat(props), conf=conf)
 
 
 def get_url(conf: Config, path: str) -> tuple[str, float | None]:
-    account, container, blob = split_path(path)
-    url = build_url(account, "/{container}/{blob}", container=container, blob=blob)
-    token = sas_token_manager.get_token(conf=conf, key=(account, container))
+    account, container, blob = split_path(path, conf=conf)
+    url = build_url(account, "/{container}/{blob}", conf=conf, container=container, blob=blob)
+    token = sas_token_manager.get_token(conf=conf, key=azure_cache_key(conf, account, container))
     if token is None:
         # the container has public access
         return url, float("inf")
@@ -1426,12 +1484,12 @@ def get_url(conf: Config, path: str) -> tuple[str, float | None]:
 
 
 def set_mtime(conf: Config, path: str, mtime: float, version: str | None = None) -> bool:
-    account, container, blob = split_path(path)
+    account, container, blob = split_path(path, conf=conf)
     headers = {}
     if version is not None:
         headers["If-Match"] = version
     req = Request(
-        url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
+        url=build_url(account, "/{container}/{blob}", conf=conf, container=container, blob=blob),
         method="HEAD",
         params=dict(comp="metadata"),
         headers=headers,
@@ -1448,7 +1506,7 @@ def set_mtime(conf: Config, path: str, mtime: float, version: str | None = None)
     if version is not None:
         headers["If-Match"] = version
     req = Request(
-        url=build_url(account, "/{container}/{blob}", container=container, blob=blob),
+        url=build_url(account, "/{container}/{blob}", conf=conf, container=container, blob=blob),
         method="PUT",
         params=dict(comp="metadata"),
         headers=headers,
@@ -1460,29 +1518,46 @@ def set_mtime(conf: Config, path: str, mtime: float, version: str | None = None)
     return resp.status == 200
 
 
-def dirname(conf: Config, path: str) -> str:
-    account, container, obj = split_path(path)
+def dirname(conf: Config, path: str, *, validate: bool = True) -> str:
+    host_suffix: str | None = None
+    if path.startswith("https://"):
+        account, host_suffix, container, obj = _split_https_path_parts(path)
+        if validate and host_suffix != conf.azure_cloud.storage_endpoint_suffix:
+            raise Error(f"Invalid path: '{path}'")
+    else:
+        account, container, obj = split_path(path, conf=conf, validate=validate)
+
     obj = strip_slashes(obj)
     if "/" in obj:
         obj = "/".join(obj.split("/")[:-1])
-        return combine_path(conf, account, container, obj)
+        if conf.output_az_paths:
+            return combine_az_path(account, container, obj)
+        if host_suffix is not None:
+            return _combine_https_path_with_host_suffix(account, host_suffix, container, obj)
+        return combine_https_path(account, container, obj, conf=conf)
     else:
-        return combine_path(conf, account, container, "")[:-1]
+        if conf.output_az_paths:
+            return combine_az_path(account, container, "")[:-1]
+        if host_suffix is not None:
+            return _combine_https_path_with_host_suffix(account, host_suffix, container, "")[:-1]
+        return combine_https_path(account, container, "", conf=conf)[:-1]
 
 
 def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> str | None:
     # https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob
-    dst_account, dst_container, dst_blob = split_path(dst)
-    src_account, src_container, src_blob = split_path(src)
+    dst_account, dst_container, dst_blob = split_path(dst, conf=conf)
+    src_account, src_container, src_blob = split_path(src, conf=conf)
 
     def build_req() -> Request:
         src_url = build_url(
-            src_account, "/{container}/{blob}", container=src_container, blob=src_blob
+            src_account, "/{container}/{blob}", conf=conf, container=src_container, blob=src_blob
         )
         if src_account != dst_account:
             # the signed url can expire, so technically we should get the sas_token and build the signed url
             # each time we build a new request
-            sas_token = sas_token_manager.get_token(conf=conf, key=(src_account, src_container))
+            sas_token = sas_token_manager.get_token(
+                conf=conf, key=azure_cache_key(conf, src_account, src_container)
+            )
             # if we don't get a token, it's likely we have anonymous access to the container
             # if we do get a token, the container is likely private and we need to use
             # a signed url as the source
@@ -1490,14 +1565,21 @@ def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> str | Non
                 src_url, _ = generate_signed_url(key=sas_token, url=src_url)
         req = Request(
             url=build_url(
-                dst_account, "/{container}/{blob}", container=dst_container, blob=dst_blob
+                dst_account,
+                "/{container}/{blob}",
+                conf=conf,
+                container=dst_container,
+                blob=dst_blob,
             ),
             method="PUT",
             headers={"x-ms-copy-source": src_url},
             success_codes=(202, 404, 409, INVALID_HOSTNAME_STATUS),
         )
         return create_api_request(
-            req, auth=access_token_manager.get_token(conf=conf, key=(dst_account, dst_container))
+            req,
+            auth=access_token_manager.get_token(
+                conf=conf, key=azure_cache_key(conf, dst_account, dst_container)
+            ),
         )
 
     copy_id = None
@@ -1543,7 +1625,11 @@ def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> str | Non
         time.sleep(next(backoff_generator))
         req = Request(
             url=build_url(
-                dst_account, "/{container}/{blob}", container=dst_container, blob=dst_blob
+                dst_account,
+                "/{container}/{blob}",
+                conf=conf,
+                container=dst_container,
+                blob=dst_blob,
             ),
             method="GET",
         )
@@ -1562,11 +1648,22 @@ def remote_copy(conf: Config, src: str, dst: str, return_md5: bool) -> str | Non
     return None
 
 
-def join_paths(conf: Config, url: str, relpath: str) -> str:
+def join_paths(conf: Config, url: str, relpath: str, *, validate: bool = True) -> str:
     parsed_url = urllib.parse.urlparse(url)
+    host_suffix: str | None = None
     if parsed_url.scheme == "https":
-        account, host = parsed_url.netloc.split(".", maxsplit=1)
-        if host != "blob.core.windows.net":
+        hostname = parsed_url.hostname
+        if hostname is None or not _is_https_blob_host_candidate(hostname):
+            raise Error(f"Invalid URL '{url}'; expected Azure blob host")
+        account, sep, host_suffix = hostname.partition(".blob.")
+        if sep == "" or not account or not host_suffix:
+            raise Error(f"Invalid URL '{url}'; expected Azure blob host")
+        if validate and host_suffix != conf.azure_cloud.storage_endpoint_suffix:
+            host = (
+                parsed_url.netloc.split(".", maxsplit=1)[1]
+                if "." in parsed_url.netloc
+                else parsed_url.netloc
+            )
             raise Error(f"Invalid URL '{url}'; unexpected host '{host}'")
     elif parsed_url.scheme == "az":
         account = parsed_url.netloc
@@ -1591,23 +1688,33 @@ def join_paths(conf: Config, url: str, relpath: str) -> str:
     blob = path_join(blob, relpath)
     if blob.startswith("/"):
         blob = blob[1:]
-    return combine_path(conf, account, container, blob)
+    if conf.output_az_paths:
+        return combine_az_path(account, container, blob)
+    if host_suffix is not None:
+        return _combine_https_path_with_host_suffix(account, host_suffix, container, blob)
+    return combine_https_path(account, container, blob, conf=conf)
 
 
 def _put_block_from_url(
     conf: Config, src: str, start: int, size: int, dst: str, block_id: str
 ) -> None:
-    src_account, src_container, src_blob = split_path(src)
-    dst_account, dst_container, dst_blob = split_path(dst)
+    src_account, src_container, src_blob = split_path(src, conf=conf)
+    dst_account, dst_container, dst_blob = split_path(dst, conf=conf)
 
-    src_url = build_url(src_account, "/{container}/{blob}", container=src_container, blob=src_blob)
+    src_url = build_url(
+        src_account, "/{container}/{blob}", conf=conf, container=src_container, blob=src_blob
+    )
 
-    dst_url = build_url(dst_account, "/{container}/{blob}", container=dst_container, blob=dst_blob)
+    dst_url = build_url(
+        dst_account, "/{container}/{blob}", conf=conf, container=dst_container, blob=dst_blob
+    )
 
     def build_req() -> Request:
         # the signed url can expire, so technically we should get the sas_token and build the signed url
         # each time we build a new request
-        sas_token = sas_token_manager.get_token(conf=conf, key=(src_account, src_container))
+        sas_token = sas_token_manager.get_token(
+            conf=conf, key=azure_cache_key(conf, src_account, src_container)
+        )
         # if we don't get a token, it's likely we have anonymous access to the container
         # if we do get a token, the container is likely private and we need to use
         # a signed url as the source
@@ -1627,7 +1734,10 @@ def _put_block_from_url(
             success_codes=(201, 404, INVALID_HOSTNAME_STATUS),
         )
         return create_api_request(
-            req, auth=access_token_manager.get_token(conf=conf, key=(dst_account, dst_container))
+            req,
+            auth=access_token_manager.get_token(
+                conf=conf, key=azure_cache_key(conf, dst_account, dst_container)
+            ),
         )
 
     resp = common.execute_request(conf, build_req)
@@ -1679,8 +1789,10 @@ def parallel_remote_copy(
     for future in futures:
         future.result()
 
-    dst_account, dst_container, dst_blob = split_path(dst)
-    dst_url = build_url(dst_account, "/{container}/{blob}", container=dst_container, blob=dst_blob)
+    dst_account, dst_container, dst_blob = split_path(dst, conf=conf)
+    dst_url = build_url(
+        dst_account, "/{container}/{blob}", conf=conf, container=dst_container, blob=dst_blob
+    )
 
     _finalize_blob(
         conf=conf,

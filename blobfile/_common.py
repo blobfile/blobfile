@@ -25,6 +25,7 @@ import filelock
 import urllib3
 from urllib3.util.retry import Retry
 
+from blobfile._azure_cloud import AzureCloudConfig, get_cloud_config, resolve_cloud_config
 from blobfile import _xml as xml
 
 CHUNK_SIZE = 8 * 2**20
@@ -330,6 +331,9 @@ class Config:
         get_deadline: Callable[[], float | None] | None,
         save_access_token_to_disk: bool,
         multiprocessing_start_method: str,
+        azure_cloud_name: str | None,
+        arm_cloud_metadata_url: str | None,
+        use_env_for_azure_cloud: bool,
     ) -> None:
         self.log_callback = log_callback
         self.connection_pool_max_size = connection_pool_max_size
@@ -349,6 +353,10 @@ class Config:
         self.get_deadline = get_deadline
         self.save_access_token_to_disk = save_access_token_to_disk
         self.multiprocessing_start_method = multiprocessing_start_method
+        self._azure_cloud_name = azure_cloud_name
+        self._arm_cloud_metadata_url = arm_cloud_metadata_url
+        self._use_env_for_azure_cloud = use_env_for_azure_cloud
+        self._azure_cloud_cache: AzureCloudConfig | None = None
 
         if get_http_pool is None:
             if (
@@ -365,6 +373,18 @@ class Config:
             return global_pool_director.get_http_pool()
         else:
             return self._get_http_pool()
+
+    @property
+    def azure_cloud(self) -> AzureCloudConfig:
+        if self._azure_cloud_cache is None:
+            if self._use_env_for_azure_cloud:
+                self._azure_cloud_cache = get_cloud_config()
+            else:
+                self._azure_cloud_cache = resolve_cloud_config(
+                    metadata_url=self._arm_cloud_metadata_url,
+                    cloud_name=self._azure_cloud_name,
+                )
+        return self._azure_cloud_cache
 
 
 class WindowedFile:
@@ -615,23 +635,25 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
                 # an invalid hostname from a network error
                 url = urllib.parse.urlparse(req.url)
                 assert url.hostname is not None
-                if (
-                    url.hostname.endswith(".blob.core.windows.net")
-                    and _check_hostname(url.hostname) == HOSTNAME_DOES_NOT_EXIST
-                ):
-                    # in order to handle the azure failures in some sort-of-reasonable way
-                    # create a fake response that has a special status code we can
-                    # handle just like a 404
-                    fake_resp = urllib3.response.HTTPResponse(
-                        status=INVALID_HOSTNAME_STATUS,
-                        body=io.BytesIO(b""),  # avoid error when using "with resp:"
-                    )
-                    if fake_resp.status in req.success_codes:
-                        return fake_resp
-                    else:
-                        raise RequestFailure.create_from_request_response(
-                            "host does not exist", request=req, response=fake_resp
-                        ) from e
+                if ".blob." in url.hostname:
+                    azure_blob_suffix = f".blob.{conf.azure_cloud.storage_endpoint_suffix}"
+                    if (
+                        url.hostname.endswith(azure_blob_suffix)
+                        and _check_hostname(url.hostname) == HOSTNAME_DOES_NOT_EXIST
+                    ):
+                        # in order to handle the azure failures in some sort-of-reasonable way
+                        # create a fake response that has a special status code we can
+                        # handle just like a 404
+                        fake_resp = urllib3.response.HTTPResponse(
+                            status=INVALID_HOSTNAME_STATUS,
+                            body=io.BytesIO(b""),  # avoid error when using "with resp:"
+                        )
+                        if fake_resp.status in req.success_codes:
+                            return fake_resp
+                        else:
+                            raise RequestFailure.create_from_request_response(
+                                "host does not exist", request=req, response=fake_resp
+                            ) from e
 
             err = RequestFailure.create_from_request_response(
                 message=f"request failed with exception {e}",

@@ -22,7 +22,9 @@ from blobfile._context import (
     default_log_fn,
 )
 
-default_context = create_context()
+# Keep the import-time default context bound to the live environment so users who
+# set Azure cloud env vars after `import blobfile` still get the expected cloud.
+default_context = create_context(_use_env_for_azure_cloud=True)
 
 
 def configure(
@@ -86,6 +88,7 @@ def configure(
         default_buffer_size=default_buffer_size,
         save_access_token_to_disk=save_access_token_to_disk,
         multiprocessing_start_method=multiprocessing_start_method,
+        _use_env_for_azure_cloud=True,
     )
 
 

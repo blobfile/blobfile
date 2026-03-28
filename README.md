@@ -113,6 +113,11 @@ The following methods will be tried in order:
 
 If access using credentials fails, anonymous access will be tried.  `blobfile` supports public access for containers marked as public, but not individual blobs.
 
+By default, `blobfile` assumes the public Azure cloud. To target another cloud, set either:
+
+* `AZURE_CLOUD` to a known cloud name such as `AzureUSGovernment`
+* `ARM_CLOUD_METADATA_URL` to the full ARM metadata URL, for example `https://management.usgovcloudapi.net/metadata/endpoints?api-version=2019-05-01`
+
 ## Paths
 
 For Google Cloud Storage and Azure Blobs, directories don't really exist.  These storage systems store the files in a single flat list.  The "/" separators are just part of the filenames and there is no need to call the equivalent of `os.mkdir` on one of these systems.
@@ -134,7 +139,7 @@ GCS paths have the format `gs://<bucket>/<blob>`, you cannot perform any operati
 
 ### Azure Blobs
 
-Azure Blobs URLs have the format `az://<account>/<container>` or `https://<account>.blob.core.windows.net/<container>/<blob>`.  The highest you can go up the hierarchy is `az://<account>/<container>/`, `blobfile` cannot perform any operations on `az://<account>/`.  The `https://` url is the output format by default, but the `az://` urls are accepted as inputs and you can set `output_az_paths=True` to get `az://` urls as output.
+Azure Blobs URLs have the format `az://<account>/<container>` or `https://<account>.blob.<storage suffix>/<container>/<blob>`. The active cloud controls the storage suffix for `https://` Azure URLs, for example `core.windows.net` in public Azure or `core.usgovcloudapi.net` in Azure US Government. The highest you can go up the hierarchy is `az://<account>/<container>/`, `blobfile` cannot perform any operations on `az://<account>/`. The `https://` url is the output format by default, but the `az://` urls are accepted as inputs and you can set `output_az_paths=True` to get `az://` urls as output.
 
 ## Errors
 

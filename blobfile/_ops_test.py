@@ -1593,6 +1593,133 @@ def test_fork():
     assert child != parent1
 
 
+class _FakeHttpPool:
+    def __init__(self, name):
+        self.name = name
+        self.requests = []
+
+    def request(self, method, url, **kwargs):
+        self.requests.append((method, url, kwargs))
+        return self.name
+
+
+def test_default_http_pool_honors_https_proxy():
+    direct_pool = _FakeHttpPool("direct")
+    proxy_pools = {}
+    proxy_manager_calls = []
+
+    def pool_manager(**kwargs):
+        assert kwargs == {"maxsize": 3, "num_pools": 4}
+        return direct_pool
+
+    def proxy_manager(proxy_url, **kwargs):
+        assert kwargs == {"maxsize": 3, "num_pools": 4}
+        proxy_manager_calls.append(proxy_url)
+        proxy_pool = _FakeHttpPool(proxy_url)
+        proxy_pools[proxy_url] = proxy_pool
+        return proxy_pool
+
+    director = common.PoolDirector(connection_pool_max_size=3, max_connection_pool_count=4)
+    with (
+        unittest.mock.patch("blobfile._common.urllib3.PoolManager", side_effect=pool_manager),
+        unittest.mock.patch("blobfile._common.urllib3.ProxyManager", side_effect=proxy_manager),
+        unittest.mock.patch(
+            "blobfile._common.urllib.request.getproxies",
+            return_value={"https": "http://proxy.example:3128"},
+        ),
+    ):
+        pool = director.get_http_pool()
+        assert pool.request("GET", "https://storage.googleapis.com/bucket") == (
+            "http://proxy.example:3128"
+        )
+        assert pool.request("HEAD", "https://example.blob.core.windows.net/container") == (
+            "http://proxy.example:3128"
+        )
+
+    assert direct_pool.requests == []
+    assert proxy_manager_calls == ["http://proxy.example:3128"]
+    assert proxy_pools["http://proxy.example:3128"].requests == [
+        ("GET", "https://storage.googleapis.com/bucket", {}),
+        ("HEAD", "https://example.blob.core.windows.net/container", {}),
+    ]
+
+
+def test_default_http_pool_respects_no_proxy():
+    direct_pool = _FakeHttpPool("direct")
+
+    def pool_manager(**kwargs):
+        return direct_pool
+
+    def proxy_manager(proxy_url, **kwargs):
+        raise AssertionError(f"unexpected proxy manager for {proxy_url}")
+
+    director = common.PoolDirector(connection_pool_max_size=3, max_connection_pool_count=4)
+    with (
+        unittest.mock.patch("blobfile._common.urllib3.PoolManager", side_effect=pool_manager),
+        unittest.mock.patch("blobfile._common.urllib3.ProxyManager", side_effect=proxy_manager),
+        unittest.mock.patch(
+            "blobfile._common.urllib.request.getproxies",
+            return_value={"https": "http://proxy.example:3128", "no": "storage.googleapis.com"},
+        ),
+    ):
+        pool = director.get_http_pool()
+        assert pool.request("GET", "https://storage.googleapis.com/bucket") == "direct"
+
+    assert direct_pool.requests == [("GET", "https://storage.googleapis.com/bucket", {})]
+
+
+def test_default_http_pool_accepts_proxy_without_scheme():
+    proxy_manager_calls = []
+
+    def proxy_manager(proxy_url, **kwargs):
+        proxy_manager_calls.append(proxy_url)
+        return _FakeHttpPool(proxy_url)
+
+    director = common.PoolDirector(connection_pool_max_size=3, max_connection_pool_count=4)
+    with (
+        unittest.mock.patch(
+            "blobfile._common.urllib3.PoolManager", return_value=_FakeHttpPool("direct")
+        ),
+        unittest.mock.patch("blobfile._common.urllib3.ProxyManager", side_effect=proxy_manager),
+        unittest.mock.patch(
+            "blobfile._common.urllib.request.getproxies",
+            return_value={"https": "proxy.example:3128"},
+        ),
+    ):
+        pool = director.get_http_pool()
+        assert pool.request("GET", "https://storage.googleapis.com/bucket") == (
+            "http://proxy.example:3128"
+        )
+
+    assert proxy_manager_calls == ["http://proxy.example:3128"]
+
+
+def test_default_http_pool_uses_all_proxy_fallback():
+    proxy_manager_calls = []
+
+    def proxy_manager(proxy_url, **kwargs):
+        proxy_manager_calls.append(proxy_url)
+        return _FakeHttpPool(proxy_url)
+
+    director = common.PoolDirector(connection_pool_max_size=3, max_connection_pool_count=4)
+    with (
+        unittest.mock.patch(
+            "blobfile._common.urllib3.PoolManager", return_value=_FakeHttpPool("direct")
+        ),
+        unittest.mock.patch("blobfile._common.urllib3.ProxyManager", side_effect=proxy_manager),
+        unittest.mock.patch(
+            "blobfile._common.urllib.request.getproxies",
+            return_value={"all": "http://proxy.example:3128"},
+        ),
+    ):
+        pool = director.get_http_pool()
+        assert pool.request("GET", "https://storage.googleapis.com/bucket") == (
+            "http://proxy.example:3128"
+        )
+
+    assert proxy_manager_calls == ["http://proxy.example:3128"]
+
+
 def test_azure_public_container():
     for error, path in [
         (None, f"https://{AS_EXTERNAL_ACCOUNT}.blob.core.windows.net/publiccontainer/test_cat.png"),

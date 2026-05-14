@@ -18,6 +18,7 @@ import zipfile
 
 import numpy as np
 import pytest
+import urllib3
 
 import blobfile as bf
 from blobfile import _azure as azure
@@ -1685,6 +1686,32 @@ def test_pickle_config():
     c.get_http_pool()
     c2 = pickle.loads(pickle.dumps(c))
     c2.get_http_pool()
+
+
+def test_retryable_http_failures_periodically_refresh_connection():
+    statuses = [503] * 20 + [200]
+    request_headers = []
+
+    def request(**kwargs):
+        request_headers.append(kwargs["headers"])
+        return urllib3.response.HTTPResponse(status=statuses.pop(0), body=b"")
+
+    pool = unittest.mock.Mock()
+    pool.request.side_effect = request
+    ctx = bf.create_context(get_http_pool=lambda: pool, retry_limit=20)
+    req = common.Request(method="HEAD", url="https://example.com/blob", success_codes=(200,))
+
+    with unittest.mock.patch("blobfile._common.time.sleep"):
+        resp = common.execute_request(ctx._conf, lambda: req)
+
+    assert resp.status == 200
+    assert pool.request.call_count == 21
+    assert request_headers[8] is None
+    assert request_headers[9] == {"Connection": "close"}
+    assert request_headers[18] is None
+    assert request_headers[19] == {"Connection": "close"}
+    assert request_headers[20] is None
+    assert req.headers is None
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])

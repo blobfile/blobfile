@@ -41,6 +41,7 @@ INVALID_HOSTNAME_STATUS = 600  # fake status for invalid hostname
 
 BACKOFF_INITIAL = 0.1
 BACKOFF_MAX = 60.0
+RETRYABLE_HTTP_FAILURES_BEFORE_CONNECTION_REFRESH = 10
 
 HOSTNAME_EXISTS = 0
 HOSTNAME_DOES_NOT_EXIST = 1
@@ -477,8 +478,22 @@ def _read_with_deadline(
 
 
 def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.BaseHTTPResponse":
+    retryable_http_failures = 0
     for attempt, backoff in enumerate(exponential_sleep_generator()):
         req = build_req()
+        close_connection_for_this_attempt = (
+            retryable_http_failures == RETRYABLE_HTTP_FAILURES_BEFORE_CONNECTION_REFRESH - 1
+        )
+        request_headers = req.headers
+        if close_connection_for_this_attempt:
+            request_headers = {}
+            if req.headers is not None:
+                request_headers = {
+                    name: value
+                    for name, value in req.headers.items()
+                    if name.lower() != "connection"
+                }
+            request_headers["Connection"] = "close"
         url = req.url
         if req.params is not None:
             if len(req.params) > 0:
@@ -533,7 +548,7 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
             resp = conf.get_http_pool().request(
                 method=req.method,
                 url=url,
-                headers=req.headers,
+                headers=request_headers,
                 # WindowedFile isn't actually an IO[Any] or Iterable[bytes]
                 body=body,  # type: ignore
                 timeout=urllib3.Timeout(
@@ -594,6 +609,7 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
                 )
                 if resp.status not in req.retry_codes:
                     raise err
+                retryable_http_failures += 1
         except (
             urllib3.exceptions.ConnectTimeoutError,
             urllib3.exceptions.ReadTimeoutError,
@@ -644,6 +660,9 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
 
         if conf.retry_limit is not None and attempt >= conf.retry_limit:
             raise err
+
+        if close_connection_for_this_attempt:
+            retryable_http_failures = 0
 
         if attempt >= get_log_threshold_for_error(conf, str(err)):
             conf.log_callback(

@@ -662,6 +662,7 @@ def execute_request(conf: Config, build_req: Callable[[], Request]) -> "urllib3.
             raise err
 
         if close_connection_for_this_attempt:
+            conf.get_http_pool().clear()
             retryable_http_failures = 0
 
         if attempt >= get_log_threshold_for_error(conf, str(err)):

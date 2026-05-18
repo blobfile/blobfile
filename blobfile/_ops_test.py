@@ -11,10 +11,12 @@ import re
 import string
 import subprocess as sp
 import tempfile
+import threading
 import time
 import unittest.mock
 import urllib.request
 import zipfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 import pytest
@@ -1706,12 +1708,59 @@ def test_retryable_http_failures_periodically_refresh_connection():
 
     assert resp.status == 200
     assert pool.request.call_count == 21
+    assert pool.clear.call_count == 2
     assert request_headers[8] is None
     assert request_headers[9] == {"Connection": "close"}
     assert request_headers[18] is None
     assert request_headers[19] == {"Connection": "close"}
     assert request_headers[20] is None
     assert req.headers is None
+
+
+def test_retryable_http_failures_refresh_underlying_pool_connection():
+    seen_ports = []
+    request_ports = []
+
+    class StickyConnectionHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_HEAD(self):
+            client_port = self.client_address[1]
+            request_ports.append(client_port)
+            if client_port not in seen_ports:
+                seen_ports.append(client_port)
+
+            self.send_response(503 if len(seen_ports) == 1 else 200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            self.close_connection = False
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), StickyConnectionHandler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        pool = urllib3.PoolManager()
+        ctx = bf.create_context(get_http_pool=lambda: pool, retry_limit=10)
+        req = common.Request(
+            method="HEAD", url=f"http://127.0.0.1:{server.server_port}/blob", success_codes=(200,)
+        )
+
+        with unittest.mock.patch("blobfile._common.time.sleep"):
+            resp = common.execute_request(ctx._conf, lambda: req)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
+
+    assert resp.status == 200
+    assert len(seen_ports) == 2
+    assert request_ports[:10] == [seen_ports[0]] * 10
+    assert request_ports[10] == seen_ports[1]
 
 
 @pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])

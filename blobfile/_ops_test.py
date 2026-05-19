@@ -1736,6 +1736,7 @@ def test_retryable_http_failures_refresh_underlying_pool_connection():
             self.close_connection = False
 
         def log_message(self, format, *args):
+            # Keep the test output quiet when the local HTTP server handles retries.
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), StickyConnectionHandler)

@@ -920,7 +920,7 @@ class BaseStreamingReadFile(io.RawIOBase):
                 err = None
                 try:
                     # urllib3 should actually admit a memoryview over here
-                    opt_n = self._f.readinto(b)  # type: ignore
+                    opt_n = self._f.readinto(b)
                     assert opt_n is not None, "file is in non-blocking mode"
                     n = opt_n
                     if n == 0:

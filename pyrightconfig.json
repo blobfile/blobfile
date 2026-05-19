@@ -1,8 +1,7 @@
 {
     "venv": "blobfile",
     "include": [
-        "blobfile",
-        "setup.py"
+        "blobfile"
     ],
     "exclude": [
         "blobfile/**/*_test.py",
@@ -51,7 +50,6 @@
     "reportUntypedNamedTuple": "error",
     "reportCallInDefaultInitializer": "error",
     "reportPropertyTypeMismatch": "error",
-    "reportShadowedImports": "error",
     "reportUninitializedInstanceVariable": "error",
     "reportUnnecessaryTypeIgnoreComment": "error",
 }

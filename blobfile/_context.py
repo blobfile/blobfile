@@ -33,7 +33,6 @@ from typing import (
 )
 
 import filelock
-import urllib3
 
 from blobfile import _azure as azure
 from blobfile import _common as common
@@ -45,6 +44,7 @@ from blobfile._common import (
     Config,
     DirEntry,
     Error,
+    HttpPool,
     RemoteOrLocalPath,
     Request,
     RestartableStreamingWriteFailure,
@@ -1535,7 +1535,7 @@ def create_context(
     read_timeout: int | None = DEFAULT_READ_TIMEOUT,
     output_az_paths: bool = True,
     use_azure_storage_account_key_fallback: bool = False,
-    get_http_pool: Callable[[], urllib3.PoolManager] | None = None,
+    get_http_pool: Callable[[], HttpPool] | None = None,
     use_streaming_read: bool = False,
     use_blind_writes: bool = DEFAULT_USE_BLIND_WRITES,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,

@@ -4,9 +4,7 @@ from __future__ import annotations
 import concurrent.futures
 from typing import BinaryIO, Callable, Iterator, Literal, Sequence, TextIO, overload
 
-import urllib3
-
-from blobfile._common import DirEntry, RemoteOrLocalPath, Stat
+from blobfile._common import DirEntry, HttpPool, RemoteOrLocalPath, Stat
 from blobfile._context import (
     DEFAULT_AZURE_WRITE_CHUNK_SIZE,
     DEFAULT_BUFFER_SIZE,
@@ -41,7 +39,7 @@ def configure(
     read_timeout: int | None = DEFAULT_READ_TIMEOUT,
     output_az_paths: bool = True,
     use_azure_storage_account_key_fallback: bool = False,
-    get_http_pool: Callable[[], urllib3.PoolManager] | None = None,
+    get_http_pool: Callable[[], HttpPool] | None = None,
     use_streaming_read: bool = False,
     use_blind_writes: bool = DEFAULT_USE_BLIND_WRITES,
     default_buffer_size: int = DEFAULT_BUFFER_SIZE,
@@ -59,7 +57,9 @@ def configure(
     read_timeout: the maximum amount of time (in seconds) to wait between consecutive read operations for a response from the server, set to None to wait forever
     output_az_paths: output `az://` paths instead of using the `https://` for azure
     use_azure_storage_account_key_fallback: fallback to storage account keys for azure containers, having this enabled requires listing your subscriptions and may run into 429 errors if you hit the low azure quotas for subscription listing
-    get_http_pool: a function that returns a `urllib3.PoolManager` to be used for requests
+    get_http_pool: a function that returns a `urllib3.PoolManager`-compatible object to be used
+    for requests. By default, blobfile honors standard proxy environment variables such as
+    HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, and NO_PROXY.
     use_streaming_read: if set to `True`, use a single read per file instead of reading a chunk at a time (not recommended for azure)
     use_blind_writes: if set to `True`, skip certain read checks during Azure writes
     default_buffer_size: the default buffer size to use for reading files (and writing local files)

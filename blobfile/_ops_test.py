@@ -219,11 +219,11 @@ def test_basename():
 
 
 def test_rejects_provider_like_local_paths():
-    with pytest.raises(bf.Error, match="Unrecognized path: 's3://bucket'"):
-        bf.exists("s3://bucket")
+    with pytest.raises(bf.Error, match="Unrecognized path: 'unknown://bucket'"):
+        bf.exists("unknown://bucket")
 
-    with pytest.raises(bf.Error, match="Unrecognized path: 's3://bucket/obj'"):
-        bf.BlobFile("s3://bucket/obj", "rb")
+    with pytest.raises(bf.Error, match="Unrecognized path: 'unknown://bucket/obj'"):
+        bf.BlobFile("unknown://bucket/obj", "rb")
 
 
 def test_dirname():

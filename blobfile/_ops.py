@@ -6,6 +6,7 @@ from typing import BinaryIO, Callable, Iterator, Literal, Sequence, TextIO, over
 
 import urllib3
 
+from blobfile import _s3 as s3
 from blobfile._common import DirEntry, RemoteOrLocalPath, Stat
 from blobfile._context import (
     DEFAULT_AZURE_WRITE_CHUNK_SIZE,
@@ -34,6 +35,7 @@ def configure(
     # the chunk size determines the maximum size of an individual blob
     azure_write_chunk_size: int = DEFAULT_AZURE_WRITE_CHUNK_SIZE,
     google_write_chunk_size: int = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
+    s3_write_chunk_size: int = s3.DEFAULT_WRITE_CHUNK_SIZE,
     retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
     retry_common_log_threshold: int = DEFAULT_RETRY_COMMON_LOG_THRESHOLD,
     retry_limit: int | None = None,
@@ -54,6 +56,7 @@ def configure(
     max_connection_pool_count: the maximum count of per-host connection pools
     azure_write_chunk_size: the size of blocks to write to Azure Storage blobs, can be set to a maximum of 100MB
     google_write_chunk_size: the size of blocks to write to Google Cloud Storage blobs in bytes, this only determines the unit of request retries
+    s3_write_chunk_size: the size of each S3 multipart upload part in bytes (5 MiB to 5 GiB)
     retry_log_threshold: set a retry count threshold above which to log failures to the log callback function
     connect_timeout: the maximum amount of time (in seconds) to wait for a connection attempt to a server to succeed, set to None to wait forever
     read_timeout: the maximum amount of time (in seconds) to wait between consecutive read operations for a response from the server, set to None to wait forever
@@ -76,6 +79,7 @@ def configure(
         retry_common_log_threshold=retry_common_log_threshold,
         retry_limit=retry_limit,
         google_write_chunk_size=google_write_chunk_size,
+        s3_write_chunk_size=s3_write_chunk_size,
         connect_timeout=connect_timeout,
         read_timeout=read_timeout,
         output_az_paths=output_az_paths,

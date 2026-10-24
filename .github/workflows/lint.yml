@@ -13,8 +13,8 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: "3.10"
-      - run: pip install -e .
-      - run: pip install pytest lxml-stubs
+      - run: pip install -e ".[s3]"
+      - run: pip install lxml-stubs
       - run: pip install 'pyright>=1.1.411,<1.1.412'
       - run: pyright
   lint:

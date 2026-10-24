@@ -14,6 +14,7 @@ import tempfile
 import time
 import unittest.mock
 import urllib.request
+import uuid
 import zipfile
 
 import numpy as np
@@ -23,6 +24,7 @@ import blobfile as bf
 from blobfile import _azure as azure
 from blobfile import _common as common
 from blobfile import _ops as ops
+from blobfile import _s3 as s3
 
 GCS_TEST_BUCKET = os.getenv("GCS_TEST_BUCKET", "csh-test-3")
 AS_TEST_ACCOUNT = os.getenv("AS_TEST_ACCOUNT", "cshteststorage2")
@@ -113,6 +115,33 @@ def _get_temp_as_path(account=AS_TEST_ACCOUNT, container=AS_TEST_CONTAINER):
     sp.run(cmd, check=True, shell=platform.system() == "Windows", timeout=30)
 
 
+@contextlib.contextmanager
+def _get_temp_s3_path():
+    root = os.getenv("S3_TEST_ROOT")
+    if not root:
+        pytest.skip("Set S3_TEST_ROOT to an s3:// bucket or prefix to run S3 integration tests")
+    boto3 = pytest.importorskip("boto3")
+    path = bf.join(root, uuid.uuid4().hex)
+    bucket_name, key = s3.split_path(path)
+    bucket = boto3.resource("s3").Bucket(bucket_name)
+    prefix = key + "/"
+    try:
+        yield bf.join(path, "file.name")
+    finally:
+        for upload in bucket.multipart_uploads.filter(Prefix=prefix):
+            upload.abort()
+        for response in bucket.object_versions.filter(Prefix=prefix).delete():
+            assert not response.get("Errors"), response["Errors"]
+
+
+_ALL_PATH_CONTEXTS = [
+    _get_temp_local_path,
+    _get_temp_gcs_path,
+    _get_temp_as_path,
+    _get_temp_s3_path,
+]
+
+
 def _write_contents(path, contents):
     if ".blob.core.windows.net" in path or path.startswith("az://"):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -146,6 +175,11 @@ def _write_contents(path, contents):
                 stderr=sp.DEVNULL,
                 timeout=30,
             )
+    elif path.startswith("s3://"):
+        import boto3
+
+        bucket, key = s3.split_path(path)
+        boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=contents)
     else:
         try:
             from tensorflow.io import gfile
@@ -188,6 +222,13 @@ def _read_contents(path):
             )
             with open(filepath, "rb") as f:
                 return f.read()
+    elif path.startswith("s3://"):
+        import boto3
+
+        bucket, key = s3.split_path(path)
+        response = boto3.client("s3").get_object(Bucket=bucket, Key=key)
+        with contextlib.closing(response["Body"]) as body:
+            return body.read()
     else:
         from tensorflow.io import gfile
 
@@ -212,6 +253,9 @@ def test_basename():
         ("https://a.blob.core.windows.net/b/c/", ""),
         ("https://a.blob.core.windows.net/b/c", "c"),
         ("https://a.blob.core.windows.net/b/c/test.filename", "test.filename"),
+        ("s3://bucket", ""),
+        ("s3://bucket/a/", ""),
+        ("s3://bucket/nested/file", "file"),
     ]
     for input_, desired_output in testcases:
         actual_output = bf.basename(input_)
@@ -219,11 +263,11 @@ def test_basename():
 
 
 def test_rejects_provider_like_local_paths():
-    with pytest.raises(bf.Error, match="Unrecognized path: 's3://bucket'"):
-        bf.exists("s3://bucket")
+    with pytest.raises(bf.Error, match="Unrecognized path: 'unknown://bucket'"):
+        bf.exists("unknown://bucket")
 
-    with pytest.raises(bf.Error, match="Unrecognized path: 's3://bucket/obj'"):
-        bf.BlobFile("s3://bucket/obj", "rb")
+    with pytest.raises(bf.Error, match="Unrecognized path: 'unknown://bucket/obj'"):
+        bf.BlobFile("unknown://bucket/obj", "rb")
 
 
 def test_dirname():
@@ -264,6 +308,9 @@ def test_dirname():
             "https://a.blob.core.windows.net/container/b/c//////",
             "https://a.blob.core.windows.net/container/b",
         ),
+        ("s3://bucket", "s3://bucket"),
+        ("s3://bucket/file", "s3://bucket"),
+        ("s3://bucket/a/b/", "s3://bucket/a"),
     ]
     for input_, desired_output in testcases:
         actual_output = b.dirname(input_)
@@ -332,6 +379,8 @@ def test_join():
         ("gs://test/a/b", "c:d;", "gs://test/a/b/c:d;"),
         ("az://a", "c", "https://a.blob.core.windows.net/c/"),
         ("az://a", "c/b", "https://a.blob.core.windows.net/c/b"),
+        ("s3://bucket", "file", "s3://bucket/file"),
+        ("s3://bucket/dir/", "../a #;%2F", "s3://bucket/a #;%2F"),
     ]
     for input_a, input_b, desired_output in testcases:
         actual_output = b.join(input_a, input_b)
@@ -351,7 +400,7 @@ def _convert_az_to_https(path):
     return re.sub(r"^az://(.*?)/", r"https://\1.blob.core.windows.net/", path)
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 def test_get_url(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -367,7 +416,7 @@ def test_azure_public_get_url():
     assert urllib.request.urlopen(url).read() == contents
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 @pytest.mark.parametrize("streaming", [True, False])
 def test_read_write(ctx, streaming):
     contents = b"meow!\npurr\n"
@@ -385,7 +434,7 @@ def test_read_write(ctx, streaming):
             assert b"".join(lines) == contents
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path, _get_temp_s3_path])
 def test_zipfile(ctx):
     contents = b"meow!\npurr\n"
     with ctx() as path:
@@ -416,7 +465,7 @@ def test_az_path():
             assert b"".join(lines) == contents
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 def test_append(ctx):
     contents = b"meow!\n"
     additional_contents = b"purr\n"
@@ -429,7 +478,7 @@ def test_append(ctx):
             assert r.read() == contents + additional_contents
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 def test_stat(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -468,7 +517,7 @@ def test_azure_metadata(ctx):
         assert st.mtime == 1
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 def test_remove(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -481,7 +530,7 @@ def test_remove(ctx):
 @pytest.mark.parametrize(
     # don't test local path because that has slightly different behavior
     "ctx",
-    [_get_temp_gcs_path, _get_temp_as_path],
+    [_get_temp_gcs_path, _get_temp_as_path, _get_temp_s3_path],
 )
 def test_rmdir(ctx):
     contents = b"meow!"
@@ -508,7 +557,7 @@ def test_rmdir(ctx):
         bf.rmdir(new_dirpath)
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 def test_makedirs(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -518,7 +567,7 @@ def test_makedirs(ctx):
         _write_contents(bf.join(dirpath, "testfile"), contents)
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 def test_isdir(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -541,7 +590,7 @@ def test_isdir(ctx):
         assert not bf.isdir(dirpath[:-1])
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 def test_listdir(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -560,7 +609,7 @@ def test_listdir(ctx):
         assert sorted(bf.listdir(dirpath)) == expected
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 def test_scandir(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -602,7 +651,7 @@ def test_listdir_sharded(ctx):
         assert sorted(bf.listdir(dirpath, shard_prefix_length=1)) == ["a", "aa", "b", "c", "ca"]
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 @pytest.mark.parametrize("topdown", [False, True])
 def test_walk(ctx, topdown):
     contents = b"meow!"
@@ -670,7 +719,7 @@ def test_local_glob(ctx):
             assert_listing_equal("bb", ["bb"])
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 @pytest.mark.parametrize("parallel", [False, True])
 def test_glob(ctx, parallel):
     contents = b"meow!"
@@ -781,7 +830,7 @@ def test_scanglob(ctx):
             assert entries[2].name == "subdir" and entries[2].is_dir
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 @pytest.mark.parametrize("parallel", [False, True])
 def test_rmtree(ctx, parallel):
     contents = b"meow!"
@@ -789,7 +838,7 @@ def test_rmtree(ctx, parallel):
         root = bf.dirname(path)
         destroy_path = bf.join(root, "destroy")
         bf.makedirs(destroy_path)
-        save_path = bf.join(root, "save")
+        save_path = bf.join(root, "destroy-sibling")
         bf.makedirs(save_path)
 
         # implicit dir
@@ -808,14 +857,13 @@ def test_rmtree(ctx, parallel):
             w.write(contents)
 
         def assert_listing_equal(path, desired):
-            actual = list(bf.walk(path))
-            # ordering of os walk is weird, only compare sorted order
+            actual = [(p, sorted(dirs), sorted(files)) for p, dirs, files in bf.walk(path)]
             assert sorted(actual) == sorted(desired), f"{actual} != {desired}"
 
         assert_listing_equal(
             root,
             [
-                (root, ["destroy", "save"], []),
+                (root, ["destroy", "destroy-sibling"], []),
                 (destroy_path, ["adir", "bdir"], []),
                 (bf.join(destroy_path, "adir"), [], ["b"]),
                 (bf.join(destroy_path, "bdir"), [], ["b"]),
@@ -829,11 +877,46 @@ def test_rmtree(ctx, parallel):
         assert_listing_equal(
             root,
             [
-                (root, ["save"], []),
+                (root, ["destroy-sibling"], []),
                 (save_path, ["somedir"], ["somefile"]),
                 (bf.join(save_path, "somedir"), [], []),
             ],
         )
+
+
+def test_s3_multipart_copy(tmp_path):
+    with _get_temp_s3_path() as path:
+        part_size = s3.DEFAULT_WRITE_CHUNK_SIZE
+        data = b"a" * part_size + b"tail"
+        local = tmp_path / "source"
+        local.write_bytes(data)
+        bf.copy(local, path)
+        with bf.BlobFile(path, "rb", buffer_size=4) as reader:
+            reader.seek(part_size - 1)
+            assert reader.read() == b"atail"
+
+        copied = path + ".copy"
+        digest = hashlib.md5(data).hexdigest()
+        assert bf.copy(path, copied, return_md5=True) == digest
+        assert bf.copy(path, copied, overwrite=True) is None
+        dest = tmp_path / "download"
+        assert bf.copy(copied, dest, parallel=True, return_md5=True) == digest
+        assert dest.read_bytes() == data
+
+
+def test_s3_abort_multipart_overwrite():
+    with _get_temp_s3_path() as path:
+        import boto3
+
+        _write_contents(path, b"original")
+        with pytest.raises(InterruptedError):
+            with bf.BlobFile(path, "wb", streaming=True, partial_writes_on_exc=False) as writer:
+                writer.write(b"x" * s3.DEFAULT_WRITE_CHUNK_SIZE)
+                raise InterruptedError
+        assert _read_contents(path) == b"original"
+        bucket, key = s3.split_path(path)
+        uploads = boto3.client("s3").list_multipart_uploads(Bucket=bucket, Prefix=key)
+        assert not uploads.get("Uploads")
 
 
 @pytest.mark.parametrize("parallel", [False, True])
@@ -945,7 +1028,7 @@ def test_gcs_public():
     assert len(bf.BlobFile(filepath, "rb").read()) > 0
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 def test_exists(ctx):
     contents = b"meow!"
     with ctx() as path:
@@ -1222,7 +1305,7 @@ def test_create_local_intermediate_dirs():
 
 @pytest.mark.parametrize("partial_writes_on_exc", [True, False])
 @pytest.mark.parametrize("streaming", [True, False])
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 def test_partial_writes_on_exc(partial_writes_on_exc, streaming, ctx):
     with ctx() as path:
         try:
@@ -1245,7 +1328,7 @@ def test_partial_writes_on_exc(partial_writes_on_exc, streaming, ctx):
 
 @pytest.mark.parametrize("binary", [True, False])
 @pytest.mark.parametrize("streaming", [True, False])
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 def test_more_read_write(binary, streaming, ctx):
     rng = np.random.RandomState(0)
 
@@ -1409,7 +1492,7 @@ def test_composite_objects():
             assert bf.stat(remote_path).md5 == local_md5
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
 def test_md5(ctx):
     contents = b"meow!"
     meow_hash = hashlib.md5(contents).hexdigest()
@@ -1687,7 +1770,7 @@ def test_pickle_config():
     c2.get_http_pool()
 
 
-@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path])
+@pytest.mark.parametrize("ctx", [_get_temp_gcs_path, _get_temp_as_path, _get_temp_s3_path])
 def test_read_with_size(ctx):
     contents = b"meow!\npurr\n"
     with ctx() as path:

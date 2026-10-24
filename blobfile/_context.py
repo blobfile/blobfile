@@ -20,7 +20,6 @@ import urllib.parse
 from functools import partial
 from types import TracebackType
 from typing import (
-    Any,
     BinaryIO,
     Callable,
     Iterator,
@@ -38,6 +37,7 @@ import urllib3
 from blobfile import _azure as azure
 from blobfile import _common as common
 from blobfile import _gcp as gcp
+from blobfile import _s3 as s3
 from blobfile._common import (
     CHUNK_SIZE,
     DEFAULT_CONNECTION_POOL_MAX_SIZE,
@@ -65,10 +65,6 @@ DEFAULT_CONNECT_TIMEOUT = 10
 DEFAULT_READ_TIMEOUT = 30
 DEFAULT_BUFFER_SIZE = 8 * 2**20
 DEFAULT_USE_BLIND_WRITES = os.getenv("BLOBFILE_USE_BLIND_WRITES", "0") == "1"
-
-
-def _execute_fn_and_ignore_result(fn: Callable[..., object], *args: Any):
-    fn(*args)
 
 
 class Context:
@@ -101,13 +97,17 @@ class Context:
                 )
 
         if dst_version is not None:
+            if _is_s3_path(dst):
+                raise NotImplementedError("Cannot specify version for S3 files")
             assert _is_azure_path(
                 dst
             ), f"Destination version was specified, but destination path {dst} does not support a version check"
 
         if parallel:
             copy_fn = None
-            if (_is_azure_path(src) or _is_gcp_path(src)) and _is_local_path(dst):
+            if (_is_gcp_path(src) or _is_azure_path(src) or _is_s3_path(src)) and _is_local_path(
+                dst
+            ):
                 copy_fn = _parallel_download
 
             if _is_local_path(src) and _is_azure_path(dst):
@@ -143,6 +143,9 @@ class Context:
                 dst_version is None
             ), f"Destination version was specified, but destination path {dst} does not support a version check"
             return azure.remote_copy(self._conf, src=src, dst=dst, return_md5=return_md5)
+
+        if _is_s3_path(src) and _is_s3_path(dst):
+            return s3.remote_copy(self._conf, src=src, dst=dst, return_md5=return_md5)
 
         for attempt, backoff in enumerate(common.exponential_sleep_generator()):
             try:
@@ -193,6 +196,11 @@ class Context:
             if st is not None:
                 return True
             return self.isdir(path)
+        elif _is_s3_path(path):
+            st = s3.maybe_stat(self._conf, path)
+            if st is not None:
+                return True
+            return self.isdir(path)
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
@@ -203,6 +211,9 @@ class Context:
             return obj.split("/")[-1]
         elif _is_azure_path(path):
             _, _, obj = azure.split_path(path)
+            return obj.split("/")[-1]
+        elif _is_s3_path(path):
+            _, obj = s3.split_path(path)
             return obj.split("/")[-1]
         else:
             return os.path.basename(path)
@@ -250,7 +261,7 @@ class Context:
                         )
                     ),
                 )
-        elif _is_gcp_path(pattern) or _is_azure_path(pattern):
+        elif _is_gcp_path(pattern) or _is_azure_path(pattern) or _is_s3_path(pattern):
             if "*" not in pattern:
                 entry = _get_entry(self._conf, pattern)
                 if entry is not None:
@@ -262,11 +273,16 @@ class Context:
                 if "*" in bucket:
                     raise Error("Wildcards cannot be used in bucket name")
                 root = gcp.combine_path(bucket, "")
-            else:
+            elif _is_azure_path(pattern):
                 account, container, blob_prefix = azure.split_path(pattern)
                 if "*" in account or "*" in container:
                     raise Error("Wildcards cannot be used in account or container")
                 root = azure.combine_path(self._conf, account, container, "")
+            else:
+                bucket, blob_prefix = s3.split_path(pattern)
+                if "*" in bucket:
+                    raise Error("Wildcards cannot be used in bucket name")
+                root = s3.combine_path(bucket, "")
 
             if shard_prefix_length == 0:
                 initial_tasks = [_GlobTask("", _split_path(blob_prefix))]
@@ -342,6 +358,8 @@ class Context:
             return gcp.isdir(self._conf, path)
         elif _is_azure_path(path):
             return azure.isdir(self._conf, path)
+        elif _is_s3_path(path):
+            return s3.isdir(self._conf, path)
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
@@ -352,7 +370,9 @@ class Context:
 
     def scandir(self, path: RemoteOrLocalPath, shard_prefix_length: int = 0) -> Iterator[DirEntry]:
         path = path_to_str(path)
-        if (_is_gcp_path(path) or _is_azure_path(path)) and not path.endswith("/"):
+        if (_is_gcp_path(path) or _is_azure_path(path) or _is_s3_path(path)) and not path.endswith(
+            "/"
+        ):
             path += "/"
         if not self.exists(path):
             raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
@@ -383,7 +403,7 @@ class Context:
                             version=None,
                         ),
                     )
-        elif _is_gcp_path(path) or _is_azure_path(path):
+        elif _is_gcp_path(path) or _is_azure_path(path) or _is_s3_path(path):
             if shard_prefix_length == 0:
                 yield from _list_blobs_in_dir(conf=self._conf, prefix=path, exclude_prefix=True)
             else:
@@ -429,6 +449,8 @@ class Context:
             gcp.mkdirfile(self._conf, path)
         elif _is_azure_path(path):
             azure.mkdirfile(self._conf, path)
+        elif _is_s3_path(path):
+            s3.mkdirfile(self._conf, path)
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
@@ -446,6 +468,12 @@ class Context:
             if path.endswith("/"):
                 raise IsADirectoryError(f"Is a directory: '{path}'")
             ok = azure.remove(self._conf, path)
+            if not ok:
+                raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
+        elif _is_s3_path(path):
+            if _guess_isdir(path):
+                raise IsADirectoryError(f"Is a directory: '{path}'")
+            ok = s3.remove(self._conf, path)
             if not ok:
                 raise FileNotFoundError(f"The system cannot find the path specified: '{path}'")
         else:
@@ -472,6 +500,8 @@ class Context:
             _, blob = gcp.split_path(path)
         elif _is_azure_path(path):
             _, _, blob = azure.split_path(path)
+        elif _is_s3_path(path):
+            _, blob = s3.split_path(path)
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
@@ -506,6 +536,8 @@ class Context:
                 success_codes=(202,),
             )
             azure.execute_api_request(self._conf, req)
+        elif _is_s3_path(path):
+            s3.delete_object(self._conf, path)
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
@@ -524,6 +556,11 @@ class Context:
             if st is None:
                 raise FileNotFoundError(f"No such file: '{path}'")
             return st
+        elif _is_s3_path(path):
+            st = s3.maybe_stat(self._conf, path)
+            if st is None:
+                raise FileNotFoundError(f"No such file: '{path}'")
+            return st
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
@@ -537,6 +574,8 @@ class Context:
             return gcp.set_mtime(self._conf, path=path, mtime=mtime, version=version)
         elif _is_azure_path(path):
             return azure.set_mtime(self._conf, path=path, mtime=mtime, version=version)
+        elif _is_s3_path(path):
+            raise NotImplementedError("S3 manages the modification time of objects")
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
@@ -552,61 +591,28 @@ class Context:
 
         if _is_local_path(path):
             shutil.rmtree(path)
-        elif _is_gcp_path(path) or _is_azure_path(path):
+        elif _is_gcp_path(path) or _is_azure_path(path) or _is_s3_path(path):
             if not path.endswith("/"):
                 path += "/"
 
+            prefix = _normalize_path(self._conf, path)
             if _is_gcp_path(path):
-
-                def request_generator():
-                    bucket, blob = gcp.split_path(path)
-                    for entry in gcp.list_blobs(self._conf, path):
-                        entry_slash_path = _get_slash_path(entry)
-                        entry_bucket, entry_blob = gcp.split_path(entry_slash_path)
-                        assert entry_bucket == bucket and entry_blob.startswith(blob)
-                        req = Request(
-                            url=gcp.build_url(
-                                "/storage/v1/b/{bucket}/o/{object}",
-                                bucket=bucket,
-                                object=entry_blob,
-                            ),
-                            method="DELETE",
-                            # 404 is allowed in case a failed request successfully deleted the file
-                            # before erroring out
-                            success_codes=(204, 404),
-                        )
-                        yield req
-
-                fn = gcp.execute_api_request
-
+                entries = gcp.list_blobs(self._conf, prefix)
+                delete = gcp.remove
             elif _is_azure_path(path):
-
-                def request_generator():
-                    account, container, blob = azure.split_path(path)
-                    for entry in azure.list_blobs(self._conf, path):
-                        entry_slash_path = _get_slash_path(entry)
-                        entry_account, entry_container, entry_blob = azure.split_path(
-                            entry_slash_path
-                        )
-                        assert (
-                            entry_account == account
-                            and entry_container == container
-                            and entry_blob.startswith(blob)
-                        )
-                        req = Request(
-                            url=azure.build_url(
-                                account, "/{container}/{blob}", container=container, blob=entry_blob
-                            ),
-                            method="DELETE",
-                            # 404 is allowed in case a failed request successfully deleted the file
-                            # before erroring out
-                            success_codes=(202, 404),
-                        )
-                        yield req
-
-                fn = azure.execute_api_request
+                entries = azure.list_blobs(self._conf, prefix)
+                delete = azure.remove
+            elif _is_s3_path(path):
+                entries = s3.list_blobs(self._conf, prefix)
+                delete = s3.delete_object
             else:
                 raise Error(f"Unrecognized path: '{path}'")
+
+            def paths_to_delete():
+                for entry in entries:
+                    entry_path = _get_slash_path(entry)
+                    assert entry_path.startswith(prefix)
+                    yield entry_path
 
             if parallel:
                 if parallel_executor is None:
@@ -620,14 +626,14 @@ class Context:
 
                 futures = []
                 with context:
-                    for req in request_generator():
-                        f = executor.submit(_execute_fn_and_ignore_result, fn, self._conf, req)
+                    for entry_path in paths_to_delete():
+                        f = executor.submit(delete, self._conf, entry_path)
                         futures.append(f)
                 for f in futures:
                     f.result()
             else:
-                for req in request_generator():
-                    fn(self._conf, req)
+                for entry_path in paths_to_delete():
+                    delete(self._conf, entry_path)
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
@@ -648,7 +654,7 @@ class Context:
                 if root.endswith(os.sep):
                     root = root[:-1]
                 yield (root, sorted(dirnames), sorted(filenames))
-        elif _is_gcp_path(top) or _is_azure_path(top):
+        elif _is_gcp_path(top) or _is_azure_path(top) or _is_s3_path(top):
             top = _normalize_path(self._conf, top)
             if not top.endswith("/"):
                 top += "/"
@@ -662,6 +668,8 @@ class Context:
                         it = gcp.list_blobs(self._conf, cur, delimiter="/")
                     elif _is_azure_path(top):
                         it = azure.list_blobs(self._conf, cur, delimiter="/")
+                    elif _is_s3_path(top):
+                        it = s3.list_blobs(self._conf, cur, delimiter="/")
                     else:
                         raise Error(f"Unrecognized path: '{top}'")
                     dirnames = []
@@ -681,6 +689,8 @@ class Context:
                     it = gcp.list_blobs(self._conf, top)
                 elif _is_azure_path(top):
                     it = azure.list_blobs(self._conf, top)
+                elif _is_s3_path(top):
+                    it = s3.list_blobs(self._conf, top)
                 else:
                     raise Error(f"Unrecognized path: '{top}'")
 
@@ -723,6 +733,8 @@ class Context:
             return gcp.dirname(self._conf, path)
         elif _is_azure_path(path):
             return azure.dirname(self._conf, path)
+        elif _is_s3_path(path):
+            return s3.dirname(self._conf, path)
         else:
             return os.path.dirname(path)
 
@@ -741,6 +753,8 @@ class Context:
             return azure.get_url(self._conf, path)
         elif _is_local_path(path):
             return f"file://{path}", None
+        elif _is_s3_path(path):
+            return s3.get_url(self._conf, path)
         else:
             raise Error(f"Unrecognized path: '{path}'")
 
@@ -775,6 +789,8 @@ class Context:
                 assert st.version is not None
                 azure.maybe_update_md5(self._conf, path, st.version, h)
             return h
+        elif _is_s3_path(path):
+            return s3.md5(self._conf, path)
         else:
             with self.BlobFile(path, "rb") as f:
                 return common.block_md5(f).hex()
@@ -883,6 +899,9 @@ class Context:
             assert not _is_local_path(path), "Cannot specify version when writing to local file"
             # we check for gcp later to raise a NotImplementedError instead
 
+        if version is not None and _is_s3_path(path):
+            raise NotImplementedError("Cannot specify version for S3 files")
+
         if _is_local_path(path) and "w" in mode:
             # local filesystems require that intermediate directories exist, but this is not required by the
             # remote filesystems
@@ -931,6 +950,16 @@ class Context:
                     f = io.BufferedReader(f, buffer_size=buffer_size)
                 else:
                     raise Error(f"Unsupported mode: '{mode}'")
+            elif _is_s3_path(path):
+                if mode in ("w", "wb"):
+                    f = s3.StreamingWriteFile(
+                        self._conf, path, partial_writes_on_exc=partial_writes_on_exc
+                    )
+                elif mode in ("r", "rb"):
+                    f = s3.StreamingReadFile(self._conf, path, size=file_size)
+                    f = io.BufferedReader(f, buffer_size=buffer_size)
+                else:
+                    raise Error(f"Unsupported mode: '{mode}'")
             else:
                 raise Error(f"Unrecognized path: '{path}'")
 
@@ -965,7 +994,7 @@ class Context:
             local_filename = self.basename(path)
             if local_filename == "":
                 local_filename = "local.tmp"
-            if _is_gcp_path(path) or _is_azure_path(path):
+            if _is_gcp_path(path) or _is_azure_path(path) or _is_s3_path(path):
                 remote_path = path
                 if mode in ("a", "ab"):
                     tmp_dir = tempfile.mkdtemp()
@@ -985,26 +1014,10 @@ class Context:
                         lock_path = self.join(cache_dir, f"{path_md5}.lock")
                         tmp_path = self.join(cache_dir, f"{path_md5}.tmp")
                         with filelock.FileLock(lock_path):
-                            remote_version = ""
-                            # get some sort of consistent remote hash so we can check for a local file
-                            if _is_gcp_path(path):
-                                st = gcp.maybe_stat(self._conf, path)
-                                if st is None:
-                                    raise FileNotFoundError(f"No such file: '{path}'")
-                                assert st.version is not None
-                                remote_version = st.version
-                                remote_hash = st.md5
-                            elif _is_azure_path(path):
-                                # in the azure case the remote md5 may not exist
-                                # this duplicates some of md5() because we want more control
-                                st = azure.maybe_stat(self._conf, path)
-                                if st is None:
-                                    raise FileNotFoundError(f"No such file: '{path}'")
-                                assert st.version is not None
-                                remote_version = st.version
-                                remote_hash = st.md5
-                            else:
-                                raise Error(f"Unrecognized path: '{path}'")
+                            st = self.stat(path)
+                            assert st.version is not None
+                            remote_version = st.version
+                            remote_hash = st.md5
 
                             perform_copy = False
                             if remote_hash is None:
@@ -1093,6 +1106,10 @@ def _is_azure_path(path: str) -> bool:
 def _is_local_path(path: str) -> bool:
     url = urllib.parse.urlparse(path)
     return not url.scheme and not url.netloc
+
+
+def _is_s3_path(path: str) -> bool:
+    return urllib.parse.urlparse(path).scheme == "s3"
 
 
 def _download_chunk(
@@ -1188,6 +1205,8 @@ def _expand_implicit_dirs(root: str, it: Iterator[DirEntry]) -> Iterator[DirEntr
         entry_from_dirpath = gcp.entry_from_dirpath
     elif _is_azure_path(root):
         entry_from_dirpath = azure.entry_from_dirpath
+    elif _is_s3_path(root):
+        entry_from_dirpath = s3.entry_from_dirpath
     else:
         raise Error(f"Unrecognized path '{root}'")
 
@@ -1351,18 +1370,18 @@ def _guess_isdir(path: str) -> bool:
         return True
     elif (_is_gcp_path(path) or _is_azure_path(path)) and path.endswith("/"):
         return True
+    elif _is_s3_path(path):
+        return not s3.split_path(path)[1] or path.endswith("/")
     return False
 
 
 def _list_blobs(conf: Config, path: str, delimiter: str | None = None) -> Iterator[DirEntry]:
-    params = {}
-    if delimiter is not None:
-        params["delimiter"] = delimiter
-
     if _is_gcp_path(path):
         yield from gcp.list_blobs(conf, path, delimiter=delimiter)
     elif _is_azure_path(path):
         yield from azure.list_blobs(conf, path, delimiter=delimiter)
+    elif _is_s3_path(path):
+        yield from s3.list_blobs(conf, path, delimiter=delimiter)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -1407,6 +1426,15 @@ def _get_entry(conf: Config, path: str) -> DirEntry | None:
                 return azure.entry_from_path_stat(path, st)
         if ctx.isdir(path):
             return azure.entry_from_dirpath(path)
+    elif _is_s3_path(path):
+        st = s3.maybe_stat(conf, path)
+        if st is not None:
+            if path.endswith("/"):
+                return s3.entry_from_dirpath(path)
+            else:
+                return s3.entry_from_path_stat(path, st)
+        if ctx.isdir(path):
+            return s3.entry_from_dirpath(path)
     else:
         raise Error(f"Unrecognized path: '{path}'")
 
@@ -1437,6 +1465,8 @@ def _join2(conf: Config, a: str, b: str) -> str:
         return gcp.join_paths(conf, a, b)
     elif _is_azure_path(a):
         return azure.join_paths(conf, a, b)
+    elif _is_s3_path(a):
+        return s3.join_paths(conf, a, b)
     else:
         raise Error(f"Unrecognized path: '{a}'")
 
@@ -1528,6 +1558,7 @@ def create_context(
     # the chunk size determines the maximum size of an individual blob
     azure_write_chunk_size: int = DEFAULT_AZURE_WRITE_CHUNK_SIZE,
     google_write_chunk_size: int = DEFAULT_GOOGLE_WRITE_CHUNK_SIZE,
+    s3_write_chunk_size: int = s3.DEFAULT_WRITE_CHUNK_SIZE,
     retry_log_threshold: int = DEFAULT_RETRY_LOG_THRESHOLD,
     retry_common_log_threshold: int = DEFAULT_RETRY_COMMON_LOG_THRESHOLD,
     retry_limit: int | None = None,
@@ -1546,6 +1577,8 @@ def create_context(
     """
     Same argument as configure(), but returns a Context object that has all the blobfile methods on it.
     """
+    if not 5 * 2**20 <= s3_write_chunk_size <= 5 * 2**30:
+        raise ValueError("s3_write_chunk_size must be between 5 MiB and 5 GiB")
     conf = Config(
         log_callback=log_callback,
         connection_pool_max_size=connection_pool_max_size,
@@ -1555,6 +1588,7 @@ def create_context(
         retry_common_log_threshold=retry_common_log_threshold,
         retry_limit=retry_limit,
         google_write_chunk_size=google_write_chunk_size,
+        s3_write_chunk_size=s3_write_chunk_size,
         connect_timeout=connect_timeout,
         read_timeout=read_timeout,
         output_az_paths=output_az_paths,

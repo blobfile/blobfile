@@ -316,6 +316,7 @@ class Config:
         max_connection_pool_count: int,
         azure_write_chunk_size: int,
         google_write_chunk_size: int,
+        s3_write_chunk_size: int,
         retry_log_threshold: int,
         retry_common_log_threshold: int,
         retry_limit: int | None,
@@ -339,6 +340,7 @@ class Config:
         self.retry_common_log_threshold = retry_common_log_threshold
         self.retry_limit = retry_limit
         self.google_write_chunk_size = google_write_chunk_size
+        self.s3_write_chunk_size = s3_write_chunk_size
         self.connect_timeout = connect_timeout
         self.read_timeout = read_timeout
         self.output_az_paths = output_az_paths
@@ -803,6 +805,8 @@ class BaseStreamingWriteFile(io.BufferedIOBase):
         return True
 
     def write(self, b: bytes) -> int:  # type: ignore
+        if self.closed:
+            raise ValueError("write to closed file")
         if len(self._buf) == 0 and len(b) >= self._chunk_size:
             # optimization for when we want to do a single large f.write()
             mv = memoryview(b)

@@ -1237,19 +1237,18 @@ def test_create_local_intermediate_dirs():
                     f.write(contents)
 
 
+@pytest.mark.parametrize("mode, contents", [("wb", b"meow"), ("w", "meow")])
 @pytest.mark.parametrize("partial_writes_on_exc", [True, False])
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize("ctx", [_get_temp_local_path, _get_temp_gcs_path, _get_temp_as_path])
-def test_partial_writes_on_exc(partial_writes_on_exc, streaming, ctx):
+def test_partial_writes_on_exc(partial_writes_on_exc, streaming, ctx, mode, contents):
     with ctx() as path:
-        try:
+        with pytest.raises(InterruptedError, match="interrupted while writing"):
             with bf.BlobFile(
-                path, "wb", streaming=streaming, partial_writes_on_exc=partial_writes_on_exc
+                path, mode, streaming=streaming, partial_writes_on_exc=partial_writes_on_exc
             ) as w:
-                w.write(b"meow")
+                w.write(contents)
                 raise InterruptedError("interrupted while writing")
-        except InterruptedError:
-            pass
 
         # Local paths are special in that they are created even if the write is exceptional.
         is_local_path = ctx == _get_temp_local_path

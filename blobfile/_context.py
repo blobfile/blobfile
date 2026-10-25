@@ -940,7 +940,8 @@ class Context:
             if "b" in mode:
                 return binary_f
             else:
-                text_f = io.TextIOWrapper(binary_f, encoding="utf8")
+                wrapper = _TextWriter if mode == "w" else io.TextIOWrapper
+                text_f = wrapper(binary_f, encoding="utf8")
                 # TextIOWrapper bypasses buffering on purpose: https://bugs.python.org/issue13393
                 # Example: https://gist.github.com/christopher-hesse/b4aab4f6f9bcba597d079f3363dfab2c
                 #
@@ -1070,7 +1071,8 @@ class Context:
             if "b" in mode:
                 return binary_f
             else:
-                text_f = io.TextIOWrapper(binary_f, encoding="utf8")
+                wrapper = _TextWriter if mode in ("w", "a") else io.TextIOWrapper
+                text_f = wrapper(binary_f, encoding="utf8")
                 return cast(TextIO, text_f)
 
 
@@ -1439,6 +1441,24 @@ def _join2(conf: Config, a: str, b: str) -> str:
         return azure.join_paths(conf, a, b)
     else:
         raise Error(f"Unrecognized path: '{a}'")
+
+
+class _TextWriter(io.TextIOWrapper):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        # TextIOWrapper closes its buffer without calling the buffer's __exit__.
+        # Let the writer know about the exception before close decides whether to upload.
+        if exc_val is not None:
+            writer = self.buffer
+            if isinstance(writer, _BufferedWriterForProxyFile):
+                writer = writer.raw
+            if isinstance(writer, (common.BaseStreamingWriteFile, _ProxyFile)):
+                writer.had_exception = True
+        super().__exit__(exc_type, exc_val, exc_tb)
 
 
 class _BufferedWriterForProxyFile(io.BufferedWriter):

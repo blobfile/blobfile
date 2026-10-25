@@ -226,6 +226,23 @@ def test_rejects_provider_like_local_paths():
         bf.BlobFile("s3://bucket/obj", "rb")
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        r"az://tenant.attacker.invalid\suffix/container/object",
+        r"https://tenant\suffix.blob.core.windows.net/container/object",
+        "az://tenant@other/container/object",
+        "https://tenant.extra.blob.core.windows.net/container/object",
+        "https://ten\tant.blob.core.windows.net/container/object",
+    ],
+)
+def test_azure_rejects_untrusted_authority(path):
+    with unittest.mock.patch.object(azure.access_token_manager, "get_token") as get_token:
+        with pytest.raises(bf.Error):
+            bf.stat(path)
+    get_token.assert_not_called()
+
+
 def test_dirname():
     b = bf.create_context(output_az_paths=False)
     testcases = [

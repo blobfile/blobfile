@@ -8,6 +8,7 @@ import ssl
 import threading
 import time
 import urllib.parse
+import urllib.request
 from types import TracebackType
 from typing import (
     Any,
@@ -264,6 +265,80 @@ class DirEntry(NamedTuple):
     stat: Stat | None
 
 
+class HttpPool(Protocol):
+    """
+    Minimal interface required for HTTP connection pools used by blobfile.
+    """
+
+    def request(self, method: str, url: str, **kwargs: Any) -> "urllib3.BaseHTTPResponse":
+        pass
+
+
+def _normalize_proxy_url(proxy_url: str) -> str:
+    if "://" in proxy_url:
+        return proxy_url
+    return f"http://{proxy_url}"
+
+
+def _create_proxy_manager(proxy_url: str, *, maxsize: int, num_pools: int) -> HttpPool:
+    proxy_url = _normalize_proxy_url(proxy_url)
+    proxy_scheme = urllib.parse.urlparse(proxy_url).scheme.lower()
+    if proxy_scheme.startswith("socks"):
+        from urllib3.contrib.socks import SOCKSProxyManager
+
+        return SOCKSProxyManager(proxy_url, maxsize=maxsize, num_pools=num_pools)
+    return urllib3.ProxyManager(proxy_url, maxsize=maxsize, num_pools=num_pools)
+
+
+class ProxyAwarePoolManager:
+    """
+    Pool manager that follows standard proxy environment variables.
+
+    urllib3.PoolManager intentionally makes direct connections and does not read
+    HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, or NO_PROXY on its own. This wrapper
+    keeps direct pooling as the default, but routes through cached ProxyManager
+    instances when urllib.request reports a proxy for the request scheme.
+    """
+
+    def __init__(self, connection_pool_max_size: int, max_connection_pool_count: int) -> None:
+        self.connection_pool_max_size = connection_pool_max_size
+        self.max_connection_pool_count = max_connection_pool_count
+        self.direct_pool = urllib3.PoolManager(
+            maxsize=connection_pool_max_size, num_pools=max_connection_pool_count
+        )
+        self.proxy_pools: dict[str, HttpPool] = {}
+        self.lock = threading.Lock()
+
+    def request(self, method: str, url: str, **kwargs: Any) -> "urllib3.BaseHTTPResponse":
+        pool = self._pool_for_url(url)
+        return pool.request(method, url, **kwargs)
+
+    def _pool_for_url(self, url: str) -> HttpPool:
+        parsed = urllib.parse.urlparse(url)
+        proxies = urllib.request.getproxies()
+        host = parsed.netloc.rsplit("@", 1)[-1]
+        if not parsed.scheme or not host:
+            return self.direct_pool
+        if urllib.request.proxy_bypass_environment(host, proxies):
+            return self.direct_pool
+
+        proxy_url = proxies.get(parsed.scheme) or proxies.get("all")
+        if proxy_url is None:
+            return self.direct_pool
+        proxy_url = _normalize_proxy_url(proxy_url)
+
+        with self.lock:
+            proxy_pool = self.proxy_pools.get(proxy_url)
+            if proxy_pool is None:
+                proxy_pool = _create_proxy_manager(
+                    proxy_url,
+                    maxsize=self.connection_pool_max_size,
+                    num_pools=self.max_connection_pool_count,
+                )
+                self.proxy_pools[proxy_url] = proxy_pool
+            return proxy_pool
+
+
 class PoolDirector:
     def __init__(self, connection_pool_max_size: int, max_connection_pool_count: int) -> None:
         self.connection_pool_max_size = connection_pool_max_size
@@ -272,18 +347,17 @@ class PoolDirector:
         self.creation_pid = None
         self.lock = threading.Lock()
 
-    def get_http_pool(self) -> urllib3.PoolManager:
+    def get_http_pool(self) -> HttpPool:
         # ssl is not fork safe https://docs.python.org/2/library/ssl.html#multi-processing
         # urllib3 may not be fork safe https://github.com/urllib3/urllib3/issues/1179
         # both are supposedly threadsafe though, so we shouldn't need a thread-local pool
         with self.lock:
             if self.pool_manager is None or self.creation_pid != os.getpid():
                 self.creation_pid = os.getpid()
-                self.pool_manager = urllib3.PoolManager(
-                    maxsize=self.connection_pool_max_size, num_pools=self.max_connection_pool_count
+                self.pool_manager = ProxyAwarePoolManager(
+                    connection_pool_max_size=self.connection_pool_max_size,
+                    max_connection_pool_count=self.max_connection_pool_count,
                 )
-                # for debugging with mitmproxy
-                # self.http = urllib3.ProxyManager('http://localhost:8080/', ssl_context=context)
             return self.pool_manager
 
     # we don't want to serialize locks or other unpicklable objects
@@ -323,7 +397,7 @@ class Config:
         read_timeout: int | None,
         output_az_paths: bool,
         use_azure_storage_account_key_fallback: bool,
-        get_http_pool: Callable[[], urllib3.PoolManager] | None,
+        get_http_pool: Callable[[], HttpPool] | None,
         use_streaming_read: bool,
         use_blind_writes: bool,
         default_buffer_size: int,
@@ -360,7 +434,7 @@ class Config:
                 )
         self._get_http_pool = get_http_pool
 
-    def get_http_pool(self) -> urllib3.PoolManager:
+    def get_http_pool(self) -> HttpPool:
         if self._get_http_pool is None:
             return global_pool_director.get_http_pool()
         else:

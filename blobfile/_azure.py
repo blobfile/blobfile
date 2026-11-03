@@ -41,6 +41,11 @@ SHARED_KEY = "shared_key"
 OAUTH_TOKEN = "oauth_token"
 ANONYMOUS = "anonymous"
 
+# Match the raw authority before URL parsing can strip or reinterpret characters.
+# A single DNS label also permits secondary endpoints such as "account-secondary".
+_ACCOUNT_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+_BLOB_ORIGIN = re.compile(rf"https://({_ACCOUNT_LABEL.pattern})\.blob\.core\.windows\.net(?:/|\Z)")
+
 # it looks like azure signed urls cannot exceed the lifetime of the token used
 # to create them, so don't keep the key around too long
 SAS_TOKEN_EXPIRATION_SECONDS = 60 * 60
@@ -149,7 +154,21 @@ def load_subscription_ids() -> list[str]:
     return [sub["id"] for sub in subscriptions]
 
 
+def _validate_account(account: str) -> str:
+    if not _ACCOUNT_LABEL.fullmatch(account):
+        raise Error(f"Invalid Azure storage account: {account!r}")
+    return account
+
+
+def _account_from_hostname(hostname: str) -> str:
+    account, _, suffix = hostname.partition(".")
+    if suffix != "blob.core.windows.net":
+        raise Error(f"Invalid Azure Blob hostname: {hostname!r}")
+    return _validate_account(account)
+
+
 def build_url(account: str, template: str, **data: str) -> str:
+    _validate_account(account)
     return common.build_url(f"https://{account}.blob.core.windows.net", template, **data)
 
 
@@ -190,6 +209,8 @@ def _create_access_token_request(
 
 
 def create_api_request(req: Request, auth: tuple[str, str]) -> Request:
+    if not _BLOB_ORIGIN.match(req.url) and not req.url.startswith("https://management.azure.com/"):
+        raise Error("Invalid Azure API request origin")
     if req.headers is None:
         headers = {}
     else:
@@ -308,7 +329,7 @@ def split_az_path(path: str) -> tuple[str, str, str]:
     parts = path[len("az://") :].split("/")
     if len(parts) < 2:
         raise Error(f"Invalid path: '{path}'")
-    account = parts[0]
+    account = _validate_account(parts[0])
     container = parts[1]
     if container == "":
         raise Error(f"Invalid path: '{path}'")
@@ -320,12 +341,11 @@ def split_https_path(path: str) -> tuple[str, str, str]:
     parts = path[len("https://") :].split("/")
     if len(parts) < 2:
         raise Error(f"Invalid path: '{path}'")
-    hostname = parts[0]
+    account = _account_from_hostname(parts[0])
     container = parts[1]
-    if not hostname.endswith(".blob.core.windows.net") or container == "":
+    if container == "":
         raise Error(f"Invalid path: '{path}'")
     obj = "/".join(parts[2:])
-    account = hostname.split(".")[0]
     return account, container, obj
 
 
@@ -799,7 +819,7 @@ def _get_sas_token(conf: Config, key: Any) -> tuple[Any, float]:
         start = (now + datetime.timedelta(hours=-1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         expiry = (now + datetime.timedelta(days=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
         req = Request(
-            url=f"https://{account}.blob.core.windows.net/",
+            url=build_url(account, "/"),
             method="POST",
             params=dict(restype="service", comp="userdelegationkey"),
             data={"KeyInfo": {"Start": start, "Expiry": expiry}},
@@ -828,12 +848,7 @@ def _get_sas_token(conf: Config, key: Any) -> tuple[Any, float]:
 
 
 def execute_api_request(conf: Config, req: Request) -> "urllib3.BaseHTTPResponse":
-    u = urllib.parse.urlparse(req.url)
-    account = u.netloc.split(".")[0]
-    path_parts = u.path.split("/")
-    if len(path_parts) < 2:
-        raise Error("missing container from path")
-    container = u.path.split("/")[1]
+    account, container, _ = split_path(req.url)
 
     def build_req() -> Request:
         return create_api_request(

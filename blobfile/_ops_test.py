@@ -270,6 +270,23 @@ def test_rejects_provider_like_local_paths():
         bf.BlobFile("unknown://bucket/obj", "rb")
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        r"az://tenant.attacker.invalid\suffix/container/object",
+        r"https://tenant\suffix.blob.core.windows.net/container/object",
+        "az://tenant@other/container/object",
+        "https://tenant.extra.blob.core.windows.net/container/object",
+        "https://ten\tant.blob.core.windows.net/container/object",
+    ],
+)
+def test_azure_rejects_untrusted_authority(path):
+    with unittest.mock.patch.object(azure.access_token_manager, "get_token") as get_token:
+        with pytest.raises(bf.Error):
+            bf.stat(path)
+    get_token.assert_not_called()
+
+
 def test_dirname():
     b = bf.create_context(output_az_paths=False)
     testcases = [
@@ -1303,19 +1320,18 @@ def test_create_local_intermediate_dirs():
                     f.write(contents)
 
 
+@pytest.mark.parametrize("mode, contents", [("wb", b"meow"), ("w", "meow")])
 @pytest.mark.parametrize("partial_writes_on_exc", [True, False])
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize("ctx", _ALL_PATH_CONTEXTS)
-def test_partial_writes_on_exc(partial_writes_on_exc, streaming, ctx):
+def test_partial_writes_on_exc(partial_writes_on_exc, streaming, ctx, mode, contents):
     with ctx() as path:
-        try:
+        with pytest.raises(InterruptedError, match="interrupted while writing"):
             with bf.BlobFile(
-                path, "wb", streaming=streaming, partial_writes_on_exc=partial_writes_on_exc
+                path, mode, streaming=streaming, partial_writes_on_exc=partial_writes_on_exc
             ) as w:
-                w.write(b"meow")
+                w.write(contents)
                 raise InterruptedError("interrupted while writing")
-        except InterruptedError:
-            pass
 
         # Local paths are special in that they are created even if the write is exceptional.
         is_local_path = ctx == _get_temp_local_path

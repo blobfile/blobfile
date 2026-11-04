@@ -1,8 +1,8 @@
 # blobfile
 
-This is a library that provides a Python-like interface for reading local and remote files (only from blob storage), with an API similar to `open()` as well as some of the `os.path` and `shutil` functions.  `blobfile` supports local paths, Google Cloud Storage paths (`gs://<bucket>`), and Azure Blob Storage paths (`az://<account>/<container>` or `https://<account>.blob.core.windows.net/<container>/`).
+This is a library that provides a Python-like interface for reading local and remote files (only from blob storage), with an API similar to `open()` as well as some of the `os.path` and `shutil` functions.  `blobfile` supports local paths, Amazon S3 paths (`s3://<bucket>/<key>`), Google Cloud Storage paths (`gs://<bucket>`), and Azure Blob Storage paths (`az://<account>/<container>` or `https://<account>.blob.core.windows.net/<container>/`).
 
-The main function is `BlobFile`, which lets you open local and remote files that act more or less like local ones.  There are also a few additional functions such as `basename`, `dirname`, and `join`, which mostly do the same thing as their `os.path` namesakes, only they also support GCS paths and ABS paths.
+The main function is `BlobFile`, which lets you open local and remote files that act more or less like local ones.  There are also a few additional functions such as `basename`, `dirname`, and `join`, which mostly do the same thing as their `os.path` namesakes, only they also support cloud storage paths.
 
 This library is inspired by TensorFlow's [`gfile`](https://www.tensorflow.org/api_docs/python/tf/io/gfile/GFile) but does not have exactly the same interface.
 
@@ -11,6 +11,8 @@ This library is inspired by TensorFlow's [`gfile`](https://www.tensorflow.org/ap
 ```sh
 pip install blobfile
 ```
+
+For Amazon S3 support, install the AWS SDK extra with `pip install 'blobfile[s3]'`.
 
 ## Usage
 
@@ -92,6 +94,10 @@ There are a few bonus functions:
 
 ## Authentication
 
+### Amazon S3
+
+S3 uses the AWS SDK credential chain, including environment variables, shared profiles, and IAM roles. Set `AWS_PROFILE` to select a named profile.
+
 ### Google Cloud Storage
 
 The following methods will be tried in order:
@@ -115,7 +121,7 @@ If access using credentials fails, anonymous access will be tried.  `blobfile` s
 
 ## Paths
 
-For Google Cloud Storage and Azure Blobs, directories don't really exist.  These storage systems store the files in a single flat list.  The "/" separators are just part of the filenames and there is no need to call the equivalent of `os.mkdir` on one of these systems.
+For Amazon S3, Google Cloud Storage, and Azure Blobs, directories don't really exist.  These storage systems store the files in a single flat list.  The "/" separators are just part of the filenames and there is no need to call the equivalent of `os.mkdir` on one of these systems.
 
 <!-- As a result, directories can be either "implicit" or "explicit".
 
@@ -123,6 +129,10 @@ For Google Cloud Storage and Azure Blobs, directories don't really exist.  These
 * An "explicit" directory would be if the file "a/" exists.  All other files with the prefix "a/" could be deleted, and the directory "a" would still exist because of this dummy file. -->
 
 To make local behavior consistent with the remote storage systems, missing local directories will be created automatically when opening a file in write mode.
+
+### Amazon S3
+
+Use `s3://<bucket>/<key>` for objects in general-purpose buckets. Streaming writes use 8 MiB parts by default. Set `s3_write_chunk_size` between 5 MiB and 5 GiB when a file needs larger parts. An upload can contain up to 10,000 parts. S3 manages object modification times, so `set_mtime` is unsupported. Version-conditional opens and copies are also unsupported. S3 downloads support `copy(..., parallel=True)`. Local-to-S3 copies upload parts sequentially. The AWS SDK handles S3 connections and retries, using the configured connect and read timeouts.
 
 ### Local
 

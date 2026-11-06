@@ -454,6 +454,9 @@ def _read_with_deadline(
     timeout = deadline - time.time()
     if timeout <= 0:
         raise Timeout("Did not read enough bytes before deadline expired")
+    if nbytes_to_read == 0:
+        return b""
+
     sock.settimeout(timeout)
     try:
         # the peek is done with the hopes that this will get any buffered data
